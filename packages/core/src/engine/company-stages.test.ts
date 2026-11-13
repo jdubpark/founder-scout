@@ -322,25 +322,31 @@ describe("company pipeline stages", () => {
     expect(missingAssessment?.brief.moat).toBeNull();
   });
 
-  it("does not store a company tagline whose words are missing from its cited page", async () => {
+  it.each([
+    { name: "keeps a tagline whose words are on the company's own site", own: true, found: true, kept: true },
+    { name: "drops a tagline whose words are not on the page it cites", own: true, found: false, kept: false },
+    { name: "drops a tagline read on someone else's site, even when the words are there", own: false, found: true, kept: false },
+  ])("$name", async ({ own, found, kept }) => {
     const world = createSimWorld({ seed: 741, founders: 1, days: 1 });
-    const founder = makeFounder(world.founders()[0]!, "fnd_bad_tagline", { status: "surfaced", simId: null });
+    const founder = makeFounder(world.founders()[0]!, "fnd_tagline", { status: "surfaced", simId: null });
+    const site = new URL(founder.company.url!);
+    const cited = own ? `https://www.${site.hostname.replace(/^www\./, "")}/` : "https://example.test/about-them";
     const wrap: (delegate: ExecuteJob) => ExecuteJob = (delegate) => async <J extends ModelJobId>(jobId: J, input: JobInput<J>, context: JobContext, options: Parameters<ExecuteJob>[3]): Promise<JobExecution<J>> => {
       const execution = await delegate(jobId, input, context, options);
       if (jobId !== "company.product" || !execution.output) return execution;
       const output = execution.output as JobOutput<"company.product">;
-      return { ...execution, output: { ...output, profile: { ...output.profile, taglineText: "A line not on this page.", taglineUrl: "https://example.test/" } } as JobOutput<J> };
+      return { ...execution, output: { ...output, profile: { ...output.profile, taglineText: "The line the site leads with.", taglineUrl: cited } } as JobOutput<J> };
     };
     const h = harness({
       jobs: ["company.product"],
       founders: [founder],
       world,
       wrapExecuteJob: wrap,
-      quotes: { check: async () => ({ status: "not_found", detail: "not on page" }) },
+      quotes: { check: async () => (found ? { status: "found", detail: "on page" } : { status: "not_found", detail: "not on page" }) },
     });
     await run(h, "live");
     const company = h.store.listCompanies({ swarmId: SWARM_ID })[0];
-    expect(company?.tagline).toBeNull();
+    expect(company?.tagline ?? null).toEqual(kept ? { text: "The line the site leads with.", url: cited } : null);
   });
 
   it("creates founder company records, researches and assesses them with company evidence", async () => {

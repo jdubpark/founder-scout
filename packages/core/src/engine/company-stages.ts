@@ -307,10 +307,23 @@ function mergeProfile(runtime: EngineRuntime, company: Company, profile: import(
   });
 }
 
+/** true when the address is on the company's own site: its host, or a subdomain of it. */
+function onCompanySite(url: string | null, domain: string | null): boolean {
+  if (!url?.trim() || !domain?.trim()) return false;
+  try {
+    const host = new URL(url.trim()).hostname.toLowerCase().replace(/^www\./, "");
+    const own = domain.trim().toLowerCase().replace(/^www\./, "");
+    return host === own || host.endsWith(`.${own}`);
+  } catch {
+    return false;
+  }
+}
+
 async function checkedCompanyProfile(
   runtime: EngineRuntime,
   profile: import("@agentswarm/shared").CompanyProfileUpdate,
   jobId: ResearchJob,
+  domain: string | null,
 ): Promise<import("@agentswarm/shared").CompanyProfileUpdate> {
   const scoped = jobId === "company.product" ? profile : { ...profile, missionText: null, missionUrl: null, taglineText: null, taglineUrl: null };
   if (runtime.run.sources === "sim") return scoped;
@@ -322,9 +335,11 @@ async function checkedCompanyProfile(
       return false;
     }
   };
+  // A tagline is the line the company's own site leads with. The words being on some page is
+  // not enough: a rival's slogan, or an article about the company, is on a page too.
   const [missionFound, taglineFound] = await Promise.all([
     check(scoped.missionText, scoped.missionUrl),
-    check(scoped.taglineText, scoped.taglineUrl),
+    onCompanySite(scoped.taglineUrl, domain) ? check(scoped.taglineText, scoped.taglineUrl) : Promise.resolve(false),
   ]);
   return {
     ...scoped,
@@ -435,7 +450,7 @@ export async function runCompanyResearch(runtime: EngineRuntime, companyCandidat
     for (const { jobId, result } of successful) {
       const output = result!.output!;
       addCompanyEvidence(runtime, lead.id, company.id, result!.task.id, output.evidence);
-      current = mergeProfile(runtime, current, await checkedCompanyProfile(runtime, output.profile, jobId));
+      current = mergeProfile(runtime, current, await checkedCompanyProfile(runtime, output.profile, jobId, current.domain));
       addResearchTeam(runtime, company.id, output.team, founders);
     }
     if (runtime.run.sources === "live" && runtime.deps.people) {
