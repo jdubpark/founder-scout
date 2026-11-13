@@ -5,16 +5,17 @@ import {
   type Evidence, type Feedback, type Founder, type NetworkContact, type OutreachAction, type Run,
   type Swarm, type SwarmConfig, type TaskRun, type Pools, type NavigateTurn,
 } from "@agentswarm/shared";
-import type { EvalService, ProviderRegistry, RunController, SourceRegistry, Store } from "../contracts";
+import type { Dialler, EvalService, ProviderRegistry, RunController, SourceRegistry, ServiceDeps, Store } from "../contracts";
 import { openStore } from "../db";
 import { ServiceError } from "../contracts";
+import { createSimDialler, createSimWorld } from "../sim";
 import { createApp, createSwarmService } from "./index";
 
 const fixedAt = new Date("2026-11-12T18:00:00.000Z");
 const stamp = fixedAt.toISOString();
 const cron = { isValid: (value: string) => value === "0 6 * * *", next: () => "2026-11-13T06:00:00.000Z" };
 
-function harness(defaultPools?: () => Promise<Pools>, existingSwarm = false) {
+function harness(defaultPools?: () => Promise<Pools>, existingSwarm = false, dialler?: ServiceDeps["dialler"]) {
   const store = openStore(":memory:");
   const refused = new Set<string>();
   let sourceConfigured = true;
@@ -74,7 +75,7 @@ function harness(defaultPools?: () => Promise<Pools>, existingSwarm = false) {
     store.insertSwarm(swarm);
     store.insertAgent({ id: "agt_legacy_scout", swarmId: swarm.id, jobId: "scout.github", classId: "scout", name: "GitHub", status: "active", beat: null, state: {}, createdAt: stamp });
   }
-  const service = createSwarmService({ store, runs, evals, providers, liveSources, ...(defaultPools ? { defaultPools } : {}), cron, now: () => clock });
+  const service = createSwarmService({ store, runs, evals, providers, liveSources, ...(dialler ? { dialler } : {}), ...(defaultPools ? { defaultPools } : {}), cron, now: () => clock });
   return {
     store, service, refused,
     setNow: (at: Date) => { clock = at; },
@@ -148,7 +149,7 @@ function expectServiceError(promise: Promise<unknown>, status: number, field?: s
 }
 
 const opened: ReturnType<typeof harness>[] = [];
-function createHarness(defaultPools?: () => Promise<Pools>, existingSwarm = false) { const item = harness(defaultPools, existingSwarm); opened.push(item); return item; }
+function createHarness(defaultPools?: () => Promise<Pools>, existingSwarm = false, dialler?: ServiceDeps["dialler"]) { const item = harness(defaultPools, existingSwarm, dialler); opened.push(item); return item; }
 afterEach(() => { for (const item of opened.splice(0)) item.service.close(); });
 
 describe("createSwarmService", () => {
@@ -822,6 +823,78 @@ describe("createSwarmService", () => {
     // The action here is an email, so the stored notes must not be called a call transcript.
     expect(evidence).toMatchObject({ kind: "call_transcript", source: "call", verification: "unverified", title: `Conversation with ${founder.name}`, claim: "Notes a partner wrote after this conversation.", excerpt: "Founder described the prototype." });
     expect(completed.transcriptEvidenceId).toBe(evidence?.id);
+  });
+
+  it("refuses unsafe call placements and never stores the full number", async () => {
+    const consent = { how: "They agreed by email to an AI call.", recording: false };
+    const validInput = { to: "+14155550123", timezone: "America/Chicago", consent };
+    const dialler: Dialler = {
+      vendor: "Test dialler",
+      status: async () => ({ configured: true, detail: "Ready" }),
+      place: async () => ({ callId: "call-1" }),
+      fetch: async () => ({ state: "queued", transcript: null, durationSec: null, costUsd: null, detail: null }),
+    };
+    const refusals = [
+      { name: "not approved", status: 409, action: { status: "proposed" as const } },
+      { name: "not a call", status: 409, action: { kind: "email_founder" as const } },
+      { name: "already placed", status: 409, alreadyPlaced: true },
+      { name: "no consent text", status: 400, input: { ...validInput, consent: { ...consent, how: "" } } },
+      { name: "bad number", status: 400, input: { ...validInput, to: "4155550123" } },
+      { name: "outside hours", status: 400, input: { ...validInput, timezone: "Pacific/Kiritimati" } },
+      { name: "daily ceiling", status: 409, ceiling: true },
+      { name: "emergency stop", status: 409, emergency: true },
+      { name: "no calling service", status: 503, noService: true },
+    ];
+    for (const refusal of refusals) {
+      const { service, store } = createHarness(undefined, false, refusal.noService ? undefined : { sim: dialler, live: dialler });
+      const api = service.as("Partner");
+      const swarm = await api.createSwarm({ name: "Call limits", thesis });
+      const founder = founderRecord(swarm.id); store.insertFounder(founder);
+      const action: OutreachAction = {
+        id: newId("out"), swarmId: swarm.id, founderId: founder.id,
+        kind: "call_founder", target: { name: founder.name, role: null, relationship: null, channelHint: null },
+        rationale: "Approved call", draft: { subject: null, body: null, agenda: ["Discuss the product"], questions: ["What shipped?"], disclosure: "This is an AI assistant calling for the fund." },
+        consentBasis: "They agreed to a call", status: "approved", decidedBy: "Partner", decidedAt: stamp, decisionNote: null,
+        resultSummary: null, transcriptEvidenceId: null, createdByTaskId: null, createdAt: stamp, updatedAt: stamp,
+        ...refusal.action,
+      };
+      store.insertOutreach(action);
+      if (refusal.alreadyPlaced) store.updateOutreach(action.id, { call: { vendor: "Test dialler", callId: "prior", placedBy: "Partner", placedAt: stamp, consent: { how: consent.how, recording: false, recordedBy: "Partner", at: stamp }, numberTail: "23", state: "completed", endedAt: stamp, durationSec: 20, costUsd: 0, detail: null } });
+      if (refusal.ceiling) {
+        for (let i = 0; i < 5; i += 1) store.insertOutreach({ ...action, id: newId("out"), call: { vendor: "Test dialler", callId: `prior-${i}`, placedBy: "Partner", placedAt: stamp, consent: { how: consent.how, recording: false, recordedBy: "Partner", at: stamp }, numberTail: "23", state: "completed", endedAt: stamp, durationSec: 20, costUsd: 0, detail: null } });
+      }
+      if (refusal.emergency) store.saveSettings({ ...store.getSettings(), killSwitch: true });
+      await expectServiceError(api.placeCall(action.id, refusal.input ?? validInput), refusal.status);
+      expect(store.getOutreach(action.id)?.call?.callId).toBe(refusal.alreadyPlaced ? "prior" : undefined);
+    }
+
+    const { service, store } = createHarness(undefined, false, { sim: dialler, live: dialler });
+    const api = service.as("Partner");
+    const swarm = await api.createSwarm({ name: "No phone persistence", thesis });
+    const founder = founderRecord(swarm.id); store.insertFounder(founder);
+    const action: OutreachAction = { id: newId("out"), swarmId: swarm.id, founderId: founder.id, kind: "call_founder", target: { name: founder.name, role: null, relationship: null, channelHint: null }, rationale: "Approved", draft: { subject: null, body: null, agenda: ["Discuss product"], questions: ["What shipped?"], disclosure: "AI assistant calling for the fund." }, consentBasis: "Agreed", status: "approved", decidedBy: "Partner", decidedAt: stamp, decisionNote: null, resultSummary: null, transcriptEvidenceId: null, createdByTaskId: null, createdAt: stamp, updatedAt: stamp };
+    store.insertOutreach(action);
+    const placed = await api.placeCall(action.id, validInput);
+    const persisted = JSON.stringify({ action: placed, audit: store.recentAudit(10) });
+    expect(placed).toMatchObject({ status: "dispatched", call: { numberTail: "23", placedBy: "Partner" } });
+    expect(persisted).not.toContain(validInput.to);
+  });
+
+  it("places and syncs a simulated call into ordinary call transcript evidence", async () => {
+    const world = createSimWorld({ founders: 1 });
+    const { service, store } = createHarness(undefined, false, { sim: createSimDialler(world), live: null });
+    const api = service.as("Partner");
+    const swarm = await api.createSwarm({ name: "Simulated calls", thesis });
+    const founder = { ...founderRecord(swarm.id), simId: world.founders()[0]!.simId }; store.insertFounder(founder);
+    const action: OutreachAction = { id: newId("out"), swarmId: swarm.id, founderId: founder.id, kind: "call_founder", target: { name: founder.name, role: null, relationship: null, channelHint: null }, rationale: "Approved", draft: { subject: null, body: null, agenda: ["Discuss product"], questions: ["What shipped?"], disclosure: "AI assistant calling for the fund." }, consentBasis: "Agreed", status: "approved", decidedBy: "Partner", decidedAt: stamp, decisionNote: null, resultSummary: null, transcriptEvidenceId: null, createdByTaskId: null, createdAt: stamp, updatedAt: stamp };
+    store.insertOutreach(action);
+    const placed = await api.placeCall(action.id, { to: "+14155550123", timezone: "America/Chicago", consent: { how: "They agreed by email to an AI call.", recording: true } });
+    expect(placed.status).toBe("dispatched");
+    const [synced] = await api.syncCalls(swarm.id);
+    expect(synced).toMatchObject({ status: "completed", call: { state: "completed", vendor: "Simulated" } });
+    const evidence = store.listEvidence(founder.id).find((item) => item.id === synced?.transcriptEvidenceId);
+    expect(evidence).toMatchObject({ kind: "call_transcript", source: "call", verification: "unverified", claim: "Notes a partner wrote after this conversation.", sim: { truth: "supported" }, excerpt: expect.any(String) });
+    expect(evidence?.excerpt).not.toContain("1984");
   });
 
   it("keeps personal attributes out of what a person types in", async () => {

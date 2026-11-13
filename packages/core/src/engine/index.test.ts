@@ -32,7 +32,7 @@ import {
 } from "@agentswarm/shared";
 import { createExecuteJob, createJobRegistry } from "../jobs";
 import { openStore } from "../db";
-import { createSimRepoFinder, createSimSources, createSimWorld } from "../sim";
+import { createSimDialler, createSimRepoFinder, createSimSources, createSimWorld } from "../sim";
 import { ProviderError } from "../contracts";
 import type { EngineDeps, ExecuteJob, JobContext, PeopleLookup, PersonKey, PersonRecord, ProviderRegistry, QuoteChecker, RepoFinder, SimFounder, SimWorld, SourceRegistry } from "../contracts";
 import { createRunController } from "./index";
@@ -1037,8 +1037,10 @@ describe("run engine", () => {
     expect(harness.providerCallCount()).toBe(0);
   });
 
-  it("completes an approved simulated call first, then debriefs, verifies, and reassesses it on the next run", async () => {
+  it("never places an approved call during a simulated run, even when a dialler is available", async () => {
     const world = createSimWorld({ seed: 802, founders: 2, days: 3 });
+    const dialler = createSimDialler(world);
+    expect((await dialler.status()).configured).toBe(true);
     const harness = makeHarness({
       simWorld: world,
       agentJobs: ["call.debrief", "verify.claims", "assess.judgments"],
@@ -1057,33 +1059,11 @@ describe("run engine", () => {
 
     const firstStarted = await harness.controller.start({ swarmId: SWARM_ID, trigger: "manual", brain: "sim", sources: "sim" });
     const firstRun = await harness.controller.wait(firstStarted.id);
-    const completedAction = harness.store.getOutreach("out_simulated_approved_call");
-    const transcript = harness.store.listEvidence(founder.id).find((evidence) => evidence.id === completedAction?.transcriptEvidenceId);
 
     expect(firstRun.status).toBe("succeeded");
-    expect(completedAction?.status).toBe("completed");
-    expect(transcript).toMatchObject({ source: "call", verification: "unverified" });
+    expect(harness.store.getOutreach("out_simulated_approved_call")?.status).toBe("approved");
+    expect(harness.store.listEvidence(founder.id).filter((evidence) => evidence.source === "call")).toEqual([]);
     expect(harness.store.listTasks({ runId: firstRun.id }).some((task) => task.jobId === "call.debrief")).toBe(false);
-    expect(harness.providerCallCount()).toBe(0);
-
-    const secondStarted = await harness.controller.start({ swarmId: SWARM_ID, trigger: "manual", brain: "sim", sources: "sim" });
-    const secondRun = await harness.controller.wait(secondStarted.id);
-    const secondTasks = harness.store.listTasks({ runId: secondRun.id });
-    const supportedCallEvidence = harness.store.listEvidence(founder.id).filter((evidence) =>
-      evidence.source === "call" && evidence.verification === "supported" && evidence.id !== transcript?.id,
-    );
-
-    expect(secondRun.status).toBe("succeeded");
-    expect(secondRun.stats.evidence).toBeGreaterThan(0);
-    expect(secondRun.stats.assessed).toBe(1);
-    expect(harness.store.getOutreach("out_simulated_approved_call")?.status).toBe("completed");
-    expect(transcript && harness.store.listEvidence(founder.id).find((evidence) => evidence.id === transcript.id)?.verification).toBe("supported");
-    expect(supportedCallEvidence.length).toBeGreaterThan(0);
-    expect(supportedCallEvidence.every((evidence) => secondTasks.some((task) =>
-      task.id === evidence.collectedByTaskId && task.stage === "debrief" && task.founderId === founder.id,
-    ))).toBe(true);
-    expect(harness.store.latestAssessment(founder.id)?.runId).toBe(secondRun.id);
-    expect(harness.store.getFounder(founder.id)?.status).toBe("meeting");
     expect(harness.providerCallCount()).toBe(0);
   });
 

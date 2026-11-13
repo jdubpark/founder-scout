@@ -629,6 +629,12 @@ export function createDemoClient(snapshot: DemoSnapshot, getActor: () => string)
       }
       throw new ApiError(404, "That outreach item does not exist.");
     },
+    async placeCall() {
+      throw new ApiError(400, READ_ONLY);
+    },
+    async syncCalls() {
+      return [];
+    },
 
     async listRuns(swarmId, limit = 30) {
       return clone((state.runs[swarmId] ?? []).slice(0, limit));

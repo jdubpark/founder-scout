@@ -70,6 +70,19 @@ describe("startScheduler", () => {
     expect(vi.getTimerCount()).toBe(0);
   });
 
+  it("syncs dispatched calls on a scheduler tick", async () => {
+    const getSettings = vi.fn(async () => ({ settings: { schedule: schedule({ enabled: false }) } }) as SettingsDTO);
+    const listSwarms = vi.fn(async () => [{ id: "swarm-1", status: "active" }]);
+    const listOutreach = vi.fn(async () => [{ id: "out-1", status: "dispatched" }]);
+    const syncCalls = vi.fn(async () => []);
+    const service = { as: vi.fn(() => ({ getSettings, listSwarms, listOutreach, syncCalls })) } as unknown as SwarmService;
+    const scheduler = startScheduler({ service, cron: makeCron(), pollMs: 300_000 });
+    await flushPromises();
+    expect(listOutreach).toHaveBeenCalledWith({ swarmId: "swarm-1", status: "dispatched" });
+    expect(syncCalls).toHaveBeenCalledWith("swarm-1");
+    scheduler.stop();
+  });
+
   it("coaches each scheduled run only after it finishes, without waiting for coaching before later ticks", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-01-01T00:00:00.000Z"));

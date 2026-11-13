@@ -124,6 +124,8 @@ export function createHttpClient(options: { baseUrl?: string; getActor: () => st
     listOutreach: (query: OutreachQuery) => get("/api/outreach", { ...query }),
     decideOutreach: (id, input) => call("POST", `/api/outreach/${encodeURIComponent(id)}/decision`, input),
     completeOutreach: (id, input) => call("POST", `/api/outreach/${encodeURIComponent(id)}/complete`, input),
+    placeCall: (id, input) => call("POST", `/api/outreach/${encodeURIComponent(id)}/call`, input),
+    syncCalls: (swarmId) => call("POST", `/api/swarms/${encodeURIComponent(swarmId)}/calls/sync`),
 
     listRuns: (swarmId, limit) => get("/api/runs", { swarmId, limit }),
     getRun: (id) => get(`/api/runs/${encodeURIComponent(id)}`),

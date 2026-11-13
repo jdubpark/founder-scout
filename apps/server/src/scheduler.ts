@@ -63,6 +63,16 @@ export function startScheduler(options: SchedulerOptions): SchedulerHandle {
     }
   };
 
+  const syncDispatchedCalls = async (): Promise<void> => {
+    if (typeof settings.listSwarms !== "function" || typeof settings.listOutreach !== "function" || typeof settings.syncCalls !== "function") return;
+    for (const swarm of await settings.listSwarms()) {
+      if (stopped) return;
+      const dispatched = await settings.listOutreach({ swarmId: swarm.id, status: "dispatched" });
+      if (dispatched.length === 0) continue;
+      await settings.syncCalls(swarm.id);
+    }
+  };
+
   const clearScheduleTimer = (): void => {
     if (scheduleTimer !== undefined) clearTimeout(scheduleTimer);
     scheduleTimer = undefined;
@@ -138,6 +148,8 @@ export function startScheduler(options: SchedulerOptions): SchedulerHandle {
     if (stopped) return;
     try {
       const response = await settings.getSettings();
+      if (stopped) return;
+      await syncDispatchedCalls();
       if (stopped) return;
       const schedule = response.settings.schedule;
       const key = JSON.stringify([schedule.enabled, schedule.cron, schedule.timezone]);

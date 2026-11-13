@@ -395,6 +395,13 @@ export interface SimWorld {
   strongEarlyFounders(day: number): SimFounder[];
 }
 
+export interface Dialler {
+  readonly vendor: string;
+  status(): Promise<{ configured: boolean; detail: string }>;
+  place(request: { to: string; opening: string; instructions: string; questions: string[]; maxMinutes: number; record: boolean; reference: string }, signal?: AbortSignal): Promise<{ callId: string }>;
+  fetch(callId: string, signal?: AbortSignal): Promise<{ state: "queued" | "in_progress" | "completed" | "failed" | "no_answer" | "declined"; transcript: string | null; durationSec: number | null; costUsd: number | null; detail: string | null }>;
+}
+
 /* ================================================================== */
 /* Jobs                                                                 */
 /* ================================================================== */
@@ -961,6 +968,7 @@ export interface ServiceDeps {
   providers: ProviderRegistry;
   /** Live source adapters, for the settings page's status list. */
   liveSources: SourceRegistry;
+  dialler?: { sim: Dialler; live: Dialler | null };
   /** The hunt's search engines in each mode, for the Hunt page. */
   web?: { sim: WebAccess; live: WebAccess };
   /** Reviewed playbooks shown in the steering preview and used by the job registry. */

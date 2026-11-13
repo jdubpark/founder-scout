@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, type FormEvent } from "react";
 import { Link } from "react-router-dom";
 import { Check, Info, Lock, X } from "lucide-react";
 import type { OutreachDraft, OutreachRow } from "@agentswarm/shared";
@@ -9,7 +9,7 @@ import { Caution, Status } from "../../components/ui/marks";
 import { useToast } from "../../components/ui/overlay";
 import { ScoreDial } from "../../components/ScoreDial";
 import { ago, dateTime } from "../../lib/format";
-import { useDecideOutreach } from "../../lib/queries";
+import { useDecideOutreach, usePlaceCall } from "../../lib/queries";
 import { CompleteForm } from "./CompleteForm";
 import { isCall, KIND_VIEW, STATUS_VIEW } from "./groups";
 
@@ -54,7 +54,9 @@ export function OutreachItem({ row }: { row: OutreachRow }) {
         <CallPlan draft={row.draft} />
       )}
 
-      {isCall(row.kind) ? <Caution>AI calling is not enabled.</Caution> : null}
+      {isCall(row.kind) && row.status === "dispatched" && row.call ? (
+        <p className="m-0 border-t border-rule pt-3 text-base text-ink-2">Call {row.call.state}{row.call.detail ? `: ${row.call.detail}` : ""}</p>
+      ) : null}
 
       <Disclosure text={row.draft.disclosure} />
 
@@ -209,6 +211,8 @@ function DecisionBar({ row, draft }: { row: OutreachRow; draft: OutreachDraft })
 
 function ApprovedBar({ row }: { row: OutreachRow }) {
   const [completing, setCompleting] = useState(false);
+  const hasCallService = row.callingService?.configured === true;
+  const callItem = isCall(row.kind);
   return (
     <div className="flex flex-col gap-3 border-t border-rule pt-4">
       <div className="flex flex-wrap items-center justify-between gap-3">
@@ -217,12 +221,9 @@ function ApprovedBar({ row }: { row: OutreachRow }) {
             {row.decidedBy ?? "Partner"}, {ago(row.decidedAt)}
           </span>
         </Status>
-        {!completing ? (
-          <Button variant="secondary" onClick={() => setCompleting(true)}>
-            Mark as done
-          </Button>
-        ) : null}
+        {!completing ? <Button variant="secondary" onClick={() => setCompleting(true)}>{callItem ? "I made this call" : "Mark as done"}</Button> : null}
       </div>
+      {callItem && !row.call && (hasCallService ? <CallForm row={row} /> : <Caution>Calling service not connected.</Caution>)}
       {completing ? (
         <CompleteForm id={row.id} onDone={() => setCompleting(false)} onCancel={() => setCompleting(false)} />
       ) : null}
@@ -230,8 +231,38 @@ function ApprovedBar({ row }: { row: OutreachRow }) {
   );
 }
 
+function CallForm({ row }: { row: OutreachRow }) {
+  const place = usePlaceCall();
+  const toast = useToast();
+  const [to, setTo] = useState("");
+  const [timezone, setTimezone] = useState("");
+  const [how, setHow] = useState("");
+  const [recording, setRecording] = useState(false);
+  const submit = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    place.mutate({ id: row.id, input: { to, timezone, consent: { how, recording } } }, {
+      onSuccess: () => toast.done("Call placed", row.founderName),
+      onError: (error) => toast.problem("Call was not placed", error.message),
+    });
+  };
+  return (
+    <form onSubmit={submit} className="flex flex-col gap-3">
+      <div className="grid gap-3 md:grid-cols-2">
+        <label className="flex flex-col gap-1 text-base font-bold text-ink">Number<Input value={to} onChange={(event) => setTo(event.target.value)} autoComplete="tel" required /></label>
+        <label className="flex flex-col gap-1 text-base font-bold text-ink">Time zone<Input value={timezone} onChange={(event) => setTimezone(event.target.value)} placeholder="America/Chicago" required /></label>
+      </div>
+      <label className="flex flex-col gap-1 text-base font-bold text-ink">Consent<Input value={how} onChange={(event) => setHow(event.target.value)} placeholder="How and when they agreed to an AI call" required /></label>
+      <label className="flex items-center gap-2 text-base text-ink"><input type="checkbox" checked={recording} onChange={(event) => setRecording(event.target.checked)} />Recording agreed</label>
+      <div><Button type="submit" variant="primary" busy={place.isPending} busyLabel="Calling" disabled={place.isPending}>Place call</Button></div>
+    </form>
+  );
+}
+
 /** The result of an item that is no longer waiting: the outcome, or the reason it was rejected. */
 function Outcome({ row }: { row: OutreachRow }) {
+  if (row.call && row.status === "failed") {
+    return <p className="m-0 border-t border-rule pt-3 text-base text-ink-2">Call {row.call.state}: {row.call.detail ?? "Call failed."}</p>;
+  }
   const text = row.resultSummary ?? row.decisionNote;
   if (!text) return null;
   return <p className="m-0 border-t border-rule pt-3 text-base text-ink-2">{text}</p>;

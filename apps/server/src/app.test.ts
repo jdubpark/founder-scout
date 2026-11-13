@@ -156,6 +156,12 @@ const routeCases: RouteCase[] = [
     args: ["out-1", { summary: "Had a useful call" }],
     body: { summary: "Had a useful call" },
   },
+  {
+    method: "POST", url: "/api/outreach/out-1/call", apiMethod: "placeCall",
+    args: ["out-1", { to: "+14155550123", timezone: "America/Los_Angeles", consent: { how: "They agreed by email to an AI call.", recording: true } }],
+    body: { to: "+14155550123", timezone: "America/Los_Angeles", consent: { how: "They agreed by email to an AI call.", recording: true } },
+  },
+  { method: "POST", url: "/api/swarms/sw-1/calls/sync", apiMethod: "syncCalls", args: ["sw-1"] },
   { method: "GET", url: "/api/runs?swarmId=sw-1&limit=8", apiMethod: "listRuns", args: ["sw-1", 8] },
   { method: "GET", url: "/api/runs/run-1", apiMethod: "getRun", args: ["run-1"] },
   { method: "GET", url: "/api/tasks/task-1", apiMethod: "getTask", args: ["task-1"] },

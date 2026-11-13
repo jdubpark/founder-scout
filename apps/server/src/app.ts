@@ -258,6 +258,10 @@ const outreachDecisionSchema = z
 const outreachCompleteSchema = z
   .object({ summary: requiredText, transcript: z.string().nullable().optional() })
   .strict();
+const placeCallSchema = z.object({
+  to: z.string(), timezone: requiredText,
+  consent: z.object({ how: z.string(), recording: z.boolean() }).strict(),
+}).strict();
 const runsQuerySchema = z.object({ swarmId: requiredText, limit: queryInteger.optional() }).strict();
 const startRunSchema = z
   .object({
@@ -425,6 +429,8 @@ export function buildServer(options: {
   get("/api/outreach", outreachQuerySchema, (api, input) => api.listOutreach(input));
   post("/api/outreach/:id/decision", outreachDecisionSchema, (api, input, params) => api.decideOutreach(params.id!, input));
   post("/api/outreach/:id/complete", outreachCompleteSchema, (api, input, params) => api.completeOutreach(params.id!, input));
+  post("/api/outreach/:id/call", placeCallSchema, (api, input, params) => api.placeCall(params.id!, input));
+  post("/api/swarms/:id/calls/sync", emptySchema, (api, _input, params) => api.syncCalls(params.id!));
 
   get("/api/runs", runsQuerySchema, (api, input) => api.listRuns(input.swarmId, input.limit));
   get("/api/runs/:id", emptySchema, (api, _input, params) => api.getRun(params.id!));

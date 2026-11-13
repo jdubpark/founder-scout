@@ -340,42 +340,7 @@ async function runDebrief(runtime: EngineRuntime, assessmentCandidates: Set<stri
         runtime.persist();
         continue;
       }
-      if (action.transcriptEvidenceId) continue;
-      const transcript = runtime.deps.simWorld.transcript(founder.simId, action.kind, action.target.name);
-      if (!transcript.trim()) continue;
-      const excerpt = transcript.trim().slice(0, 1200);
-      const hash = hashEvidence("call", null, excerpt);
-      const transcriptEvidence: Evidence = {
-        id: stableId("evd", `${runtime.run.id}:${action.id}:${hash}`),
-        founderId: founder.id,
-        kind: "call_transcript",
-        source: "call",
-        url: null,
-        title: `Conversation with ${action.target.name}`,
-        excerpt,
-        claim: "Transcript of this conversation.",
-        publishedAt: null,
-        capturedAt: runtime.now().toISOString(),
-        collectedByTaskId: null,
-        hash,
-        verification: "unverified",
-        verificationNote: null,
-        // Marked as simulated so it can never be mistaken for a real conversation.
-        sim: { signals: [], truth: "supported" },
-      };
-      const inserted = runtime.deps.store.insertEvidence(transcriptEvidence);
-      if (inserted) runtime.addStats({ evidence: 1 });
-      const stored = inserted
-        ? transcriptEvidence
-        : runtime.deps.store.listEvidence(founder.id).find((evidence) => evidence.hash === hash);
-      if (!stored) continue;
-      runtime.deps.store.updateOutreach(action.id, {
-        status: "completed",
-        resultSummary: "Simulated call completed.",
-        transcriptEvidenceId: stored.id,
-        updatedAt: runtime.now().toISOString(),
-      });
-      runtime.persist();
+      // Approved calls wait for a person's explicit service action, even in simulation.
     }
   }
 

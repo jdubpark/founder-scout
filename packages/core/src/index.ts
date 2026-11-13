@@ -3,7 +3,7 @@
 export * from "./contracts";
 
 export { openStore, normalizeLink, normalizeName } from "./db";
-export { createSimWorld, createSimSources, createSimRepoFinder, createRng, hashSeed } from "./sim";
+export { createSimWorld, createSimSources, createSimRepoFinder, createSimDialler, createRng, hashSeed } from "./sim";
 export { createJobRegistry, createExecuteJob, normalizeOutput, findSensitive, redactSensitive } from "./jobs";
 export {
   createProviderRegistry,
@@ -16,6 +16,7 @@ export {
 } from "./providers";
 export {
   createLiveSources,
+  createLiveDialler,
   createLiveRepoFinder,
   parseRepoUrl,
   parseGitHubLogin,

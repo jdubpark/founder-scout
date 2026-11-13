@@ -16,6 +16,8 @@ import { createWebReader } from "./web";
 import { createGitHubSearchEngine, createHnSearchEngine, createHuggingFaceSearchEngine, createModelSearchEngine } from "./search";
 import { createLiveTranscriber } from "./transcribe";
 import { createMediaFetcher } from "./media";
+import type { Dialler } from "../contracts";
+import { createGitHubSearchEngine, createHnSearchEngine, createHuggingFaceSearchEngine } from "./search";
 
 export { createArxivAdapter } from "./arxiv";
 export { createGitHubAdapter } from "./github";
@@ -33,6 +35,11 @@ export { looksLikeFounder, parseConnectionsCsv, type ParsedContact } from "./con
 export { sanitizeCheckout, type SanitizeResult } from "./sanitize";
 export { parseRepoUrl, parseGitHubLogin, type RepoFinderOptions } from "./repo-finder";
 export { SourceRateLimitError } from "./http";
+
+/** The vendor-neutral slot is intentionally unconfigured until a reviewed adapter is selected. */
+export function createLiveDialler(_env: NodeJS.ProcessEnv = process.env): Dialler | null {
+  return null;
+}
 export {
   collectLaunchPosts,
   directoryOutcome,

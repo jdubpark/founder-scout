@@ -532,6 +532,20 @@ export interface OutreachDraft {
   disclosure: string;
 }
 
+export interface OutreachCall {
+  vendor: string;
+  callId: string;
+  placedBy: string;
+  placedAt: string;
+  consent: { how: string; recording: boolean; recordedBy: string; at: string };
+  numberTail: string;
+  state: "queued" | "in_progress" | "completed" | "failed" | "no_answer" | "declined";
+  endedAt: string | null;
+  durationSec: number | null;
+  costUsd: number | null;
+  detail: string | null;
+}
+
 export interface OutreachAction {
   id: string;
   swarmId: string;
@@ -548,6 +562,7 @@ export interface OutreachAction {
   decisionNote: string | null;
   resultSummary: string | null;
   transcriptEvidenceId: string | null;
+  call?: OutreachCall | null;
   createdByTaskId: string | null;
   createdAt: string;
   updatedAt: string;

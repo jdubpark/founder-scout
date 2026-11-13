@@ -19,6 +19,8 @@ import { ServiceError } from "../contracts";
 import { openStore } from "../db";
 import { createSimRepoFinder, createSimSources, createSimWorld } from "../sim";
 import { createLivePeopleLookup, createLiveRepoFinder, createLiveSources, createQuoteChecker, createLiveWebAccess, createModelSearchEngine, createSimWebAccess, createLiveTranscriber, createMediaFetcher, looksLikeFounder, parseConnectionsCsv } from "../sources";
+import { createSimDialler, createSimRepoFinder, createSimSources, createSimWorld } from "../sim";
+import { createLiveDialler, createLivePeopleLookup, createLiveRepoFinder, createLiveSources, createQuoteChecker, createLiveWebAccess, createSimWebAccess, looksLikeFounder, parseConnectionsCsv } from "../sources";
 import { createProviderRegistry } from "../providers";
 import { createJobRegistry, createExecuteJob, findSensitive, loadSkillLibrary, redactSensitive } from "../jobs";
 import { createRunController } from "../engine";
@@ -29,6 +31,7 @@ import { getHuntSeat as readHuntSeat, runHuntWave as startHuntWave, takeHuntTurn
 import { assumptionsFor } from "./assumptions";
 import { previewConfig } from "./preview";
 import { createHuntTrial } from "./hunt-trial";
+import { createCallService } from "./calls";
 
 const iso = (date: Date): string => date.toISOString();
 const messageOf = (error: unknown): string => error instanceof Error ? error.message : String(error);
@@ -142,6 +145,7 @@ export function createSwarmService(deps: ServiceDeps): SwarmService {
     audit,
   };
   const seatDeps = { store, runs: deps.runs, ...(deps.web ? { web: deps.web } : {}), now, audit };
+  const callService = createCallService({ store, dialler: deps.dialler, now, audit });
   const getSwarm = (id: string): Swarm => {
     const found = store.getSwarm(id);
     if (!found) fail(404, "Swarm not found. Choose a swarm that exists.");
@@ -931,11 +935,13 @@ export function createSwarmService(deps: ServiceDeps): SwarmService {
         getSwarm(query.swarmId);
         if (query.status !== undefined && query.status !== "all" && !["proposed", "approved", "rejected", "dispatched", "completed", "failed", "cancelled"].includes(query.status)) fail(400, "Choose a valid outreach status.", { status: "Choose a valid outreach status." });
         const actions = store.listOutreach({ swarmId: query.swarmId, statuses: query.status && query.status !== "all" ? [query.status] : undefined });
-        return actions.sort((a, b) => b.createdAt.localeCompare(a.createdAt)).flatMap((action): OutreachRow[] => {
+        const rows = actions.sort((a, b) => b.createdAt.localeCompare(a.createdAt)).flatMap((action) => {
           const founder = store.getFounder(action.founderId);
           if (!founder) return [];
           return [{ ...action, founderName: founder.name, founderHeadline: founder.headline, composite: store.latestAssessment(founder.id)?.composite ?? null }];
         });
+        const callingService = await callService.status();
+        return rows.map((row) => ({ ...row, callingService }));
       },
       async decideOutreach(id, input) {
         const action = store.getOutreach(id);
@@ -953,6 +959,7 @@ export function createSwarmService(deps: ServiceDeps): SwarmService {
         const action = store.getOutreach(id);
         if (!action) fail(404, "Outreach action not found. Choose an action that exists.");
         if (action.status !== "approved" && action.status !== "dispatched") fail(409, "Only approved or dispatched outreach can be completed.");
+        if (action.status === "dispatched" && action.call) fail(409, "An AI call is in progress. Sync its result before completing it.");
         // Notes from a conversation often carry personal details. They are taken out before anything is stored.
         const summary = redactSensitive(trimmed(input.summary));
         if (!summary) fail(400, "Write a short summary of the outreach.", { summary: "Write a short summary of the outreach." });
@@ -966,6 +973,8 @@ export function createSwarmService(deps: ServiceDeps): SwarmService {
         const updated = store.updateOutreach(id, { status: "completed", resultSummary: summary, transcriptEvidenceId: evidenceId, updatedAt: iso(now()) });
         audit(actor, "outreach.complete", id, { founderId: action.founderId, transcriptStored: Boolean(transcript) }); return updated;
       },
+      async placeCall(id, input) { return callService.placeCall(actor, id, input); },
+      async syncCalls(swarmId) { getSwarm(swarmId); return callService.syncCalls(swarmId); },
       async listRuns(swarmId, limit = 100) {
         getSwarm(swarmId);
         if (!Number.isFinite(limit) || limit < 0) fail(400, "Enter a non-negative run limit.", { limit: "Enter a non-negative run limit." });
@@ -1320,5 +1329,6 @@ export function createApp(options: AppOptions): App {
     logger: options.logger,
   }, { pastJudge: options.evalJudge ?? null });
   const service = createSwarmService({ store, runs, evals, providers, liveSources, web, defaultPools, skillLibrary, cron: options.cron, now: options.now, logger: options.logger });
+  const service = createSwarmService({ store, runs, evals, providers, liveSources, dialler: { sim: createSimDialler(world), live: createLiveDialler(options.env) }, web, defaultPools, cron: options.cron, now: options.now, logger: options.logger });
   return { service, store, providers, close: () => store.close() };
 }

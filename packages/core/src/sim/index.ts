@@ -27,6 +27,7 @@ import type {
   SourceRegistry,
 } from "../contracts";
 import { createSimWeb } from "./web";
+export { createSimDialler } from "./dialler";
 
 const DEFAULT_SEED = 7;
 const DEFAULT_FOUNDERS = 600;

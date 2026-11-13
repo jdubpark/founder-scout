@@ -22,6 +22,7 @@ import type {
   OutreachCompleteInput,
   OutreachDecisionInput,
   OutreachQuery,
+  PlaceCallInput,
   PromoteVariantInput,
   RunEvalRoundInput,
   SetPoolInput,
@@ -440,6 +441,18 @@ export function useCompleteOutreach() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (args: { id: string; input: OutreachCompleteInput }) => client.completeOutreach(args.id, args.input),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ["outreach"] });
+      void qc.invalidateQueries({ queryKey: ["founder"] });
+    },
+  });
+}
+
+export function usePlaceCall() {
+  const { client } = useApi();
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (args: { id: string; input: PlaceCallInput }) => client.placeCall(args.id, args.input),
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ["outreach"] });
       void qc.invalidateQueries({ queryKey: ["founder"] });

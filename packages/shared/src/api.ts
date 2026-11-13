@@ -432,6 +432,7 @@ export interface OutreachRow extends OutreachAction {
   founderName: string;
   founderHeadline: string | null;
   composite: number | null;
+  callingService?: CallingServiceStatus;
 }
 
 export interface OutreachQuery {
@@ -450,6 +451,18 @@ export interface OutreachCompleteInput {
   summary: string;
   /** Pasted transcript or notes. Stored as evidence and debriefed on the next run. */
   transcript?: string | null;
+}
+
+export interface PlaceCallInput {
+  to: string;
+  timezone: string;
+  consent: { how: string; recording: boolean };
+}
+
+export interface CallingServiceStatus {
+  vendor: string | null;
+  configured: boolean;
+  detail: string;
 }
 
 /* -------------------------------- Runs ----------------------------- */
@@ -776,6 +789,10 @@ export interface ApiClient {
   decideOutreach(id: string, input: OutreachDecisionInput): Promise<OutreachAction>;
   /** POST /api/outreach/:id/complete */
   completeOutreach(id: string, input: OutreachCompleteInput): Promise<OutreachAction>;
+  /** POST /api/outreach/:id/call */
+  placeCall(id: string, input: PlaceCallInput): Promise<OutreachAction>;
+  /** POST /api/swarms/:id/calls/sync */
+  syncCalls(swarmId: string): Promise<OutreachAction[]>;
 
   /** GET /api/runs?swarmId=&limit= */
   listRuns(swarmId: string, limit?: number): Promise<Run[]>;
