@@ -1,6 +1,12 @@
 import {
   buildEffectiveSteering,
   coerceParam,
+  effectiveParam,
+  isReasonFor,
+  PARAM_DEFS,
+  resolveSteering,
+  suggestSteering,
+  summarizeCalls,
   newId,
   normalizeScope,
   scopeLabel,
@@ -9,6 +15,9 @@ import {
   swarmIdentity,
   type AgentIdentity,
   type ApiClient,
+  type CallExample,
+  type Feedback,
+  type SteeringSuggestion,
   type DemoSnapshot,
   type Directive,
   type DirectiveRow,
@@ -111,6 +120,49 @@ export function createDemoClient(snapshot: DemoSnapshot, getActor: () => string)
     return state.founders[swarmId] ?? [];
   }
 
+  /** Every call recorded in the demo, across the dossiers the snapshot holds. */
+  function allFeedback(swarmId: string): Feedback[] {
+    const ids = new Set(founderRows(swarmId).map((r) => r.id));
+    return Object.values(state.founderDetails)
+      .filter((d) => ids.has(d.founder.id))
+      .flatMap((d) => d.feedback);
+  }
+
+  function callExamples(swarmId: string): CallExample[] {
+    return allFeedback(swarmId).map((f) => {
+      const founder = state.founderDetails[f.founderId]?.founder;
+      const about = founder
+        ? [founder.company.name, founder.company.oneLiner ?? founder.headline].filter(Boolean).join(": ")
+        : "A candidate";
+      return { verdict: f.verdict, about, reasonTags: f.reasonTags, note: f.note, at: f.createdAt };
+    });
+  }
+
+  function suggestions(swarmId: string): SteeringSuggestion[] {
+    const t = tree(swarmId);
+    const resolved = resolveSteering(state.directives, swarmIdentity(swarmId));
+    const current: Record<string, number> = {};
+    for (const def of PARAM_DEFS) {
+      const value = effectiveParam(def.key, resolved, t.config).value;
+      if (typeof value === "number") current[def.key] = value;
+    }
+    return suggestSteering(allFeedback(swarmId), {
+      swarmId,
+      current,
+      dismissed: state.settings.settings.dismissedSuggestions,
+    });
+  }
+
+  function callsSummary(swarmId: string) {
+    const rows = founderRows(swarmId).filter((r) => r.decision === "surface" || r.status === "surfaced");
+    const called = rows.filter((r) => r.feedback !== null);
+    return summarizeCalls(allFeedback(swarmId), {
+      called: called.length,
+      yes: called.filter((r) => r.feedback === "yes").length,
+      waiting: rows.filter((r) => r.feedback === null && r.status === "surfaced").length,
+    });
+  }
+
   const client: ApiClient = {
     async getSettings() {
       return clone(state.settings);
@@ -145,7 +197,12 @@ export function createDemoClient(snapshot: DemoSnapshot, getActor: () => string)
       const o = state.overview[swarmId];
       if (!o) throw new ApiError(404, "That swarm does not exist.");
       const pending = (state.outreach[swarmId] ?? []).filter((x) => x.status === "proposed").length;
-      return clone({ ...o, today: { ...o.today, pendingApprovals: pending } });
+      return clone({
+        ...o,
+        today: { ...o.today, pendingApprovals: pending },
+        topFounders: founderRows(swarmId).filter((r) => r.status === "surfaced").slice(0, 12),
+        calls: callsSummary(swarmId),
+      });
     },
     async getTree(swarmId) {
       return clone(tree(swarmId));
@@ -260,7 +317,16 @@ export function createDemoClient(snapshot: DemoSnapshot, getActor: () => string)
         config: t.config,
         names: names(),
         label,
+        calls: callExamples(query.swarmId),
       });
+    },
+    async listSuggestions(swarmId) {
+      return suggestions(swarmId);
+    },
+    async dismissSuggestion(swarmId, key) {
+      const settings = state.settings.settings;
+      if (!settings.dismissedSuggestions.includes(key)) settings.dismissedSuggestions.push(key);
+      return suggestions(swarmId);
     },
 
     async listFounders(query) {
@@ -301,19 +367,26 @@ export function createDemoClient(snapshot: DemoSnapshot, getActor: () => string)
       return clone(detail);
     },
     async addFeedback(founderId, input) {
-      const detail = state.founderDetails[founderId];
-      const feedback = {
+      const tags = (input.reasonTags ?? []).filter((t) => isReasonFor(input.verdict, t));
+      const feedback: Feedback = {
         id: newId("fbk"),
         founderId,
         author: getActor(),
         verdict: input.verdict,
-        note: input.note ?? null,
+        reasonTags: tags,
+        note: input.note?.trim() || null,
         createdAt: now(),
       };
+      const detail = state.founderDetails[founderId];
       detail?.feedback.unshift(feedback);
+      // A no takes the founder off the list. A yes keeps them surfaced; outreach is drafted on the next run.
+      if (detail && input.verdict === "no") detail.founder.status = "passed";
       for (const rows of Object.values(state.founders)) {
         const row = rows.find((r) => r.id === founderId);
-        if (row) row.feedback = input.verdict;
+        if (!row) continue;
+        row.feedback = input.verdict;
+        row.feedbackReasons = tags;
+        if (input.verdict === "no") row.status = "passed";
       }
       return clone(feedback);
     },

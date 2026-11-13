@@ -318,10 +318,10 @@ export class SqliteStore implements Store {
       SELECT fb.record FROM feedback fb JOIN founders f ON f.id = fb.founder_id
       WHERE f.swarm_id = ? ORDER BY fb.created_at DESC, fb.rowid DESC
     `).all(query.swarmId) as RecordRow[];
-    const latestFeedback = new Map<string, FeedbackVerdict>();
+    const latestFeedback = new Map<string, Feedback>();
     for (const row of feedbackRows) {
       const feedback = JSON.parse(row.record) as Feedback;
-      if (!latestFeedback.has(feedback.founderId)) latestFeedback.set(feedback.founderId, feedback.verdict);
+      if (!latestFeedback.has(feedback.founderId)) latestFeedback.set(feedback.founderId, feedback);
     }
     const evidenceRows = this.db.prepare(`
       SELECT founder_id, COUNT(*) AS count FROM evidence
@@ -346,7 +346,8 @@ export class SqliteStore implements Store {
         sources: founder.sources,
         evidenceCount: evidenceCounts.get(founder.id) ?? 0,
         flagCount: assessment?.flags.filter((flag) => flag.severity === "warning" || flag.severity === "critical").length ?? 0,
-        feedback: latestFeedback.get(founder.id) ?? null,
+        feedback: latestFeedback.get(founder.id)?.verdict ?? null,
+        feedbackReasons: latestFeedback.get(founder.id)?.reasonTags ?? [],
         firstSeenAt: founder.firstSeenAt,
         updatedAt: founder.updatedAt,
       };

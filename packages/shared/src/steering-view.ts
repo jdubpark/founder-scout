@@ -4,6 +4,7 @@
  */
 
 import type { EffectiveSteeringDTO } from "./api";
+import { CLASSES_SHOWN_CALLS, renderCallsBlock, type CallExample } from "./feedback";
 import { PARAM_DEFS, paramAppliesTo, type ParamDef } from "./params";
 import { getJob, type JobKind } from "./registry";
 import {
@@ -42,6 +43,8 @@ export function buildEffectiveSteering(args: {
   names: ScopeNames;
   /** Human label for what is being resolved, for example "GitHub scout 1". */
   label: string;
+  /** Recent partner calls for this swarm. Shown only to the classes that receive them. */
+  calls?: readonly CallExample[];
   now?: Date;
 }): EffectiveSteeringDTO {
   const { directives, identity, config, names, label } = args;
@@ -63,6 +66,10 @@ export function buildEffectiveSteering(args: {
     label,
     resolved,
     block: renderSteeringBlock(resolved, names),
+    callsBlock:
+      identity.classId && CLASSES_SHOWN_CALLS.includes(identity.classId)
+        ? renderCallsBlock(args.calls ?? [])
+        : "",
     params,
     route: identity.jobId && jobIsModelBacked ? effectiveRoute(identity.jobId, resolved, config) : null,
     guidance: resolved.guidance.map((g) => ({

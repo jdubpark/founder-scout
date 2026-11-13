@@ -35,6 +35,7 @@ export const keys = {
   tree: (swarmId: string) => ["tree", swarmId] as const,
   directives: (filter: DirectiveFilter) => ["directives", filter] as const,
   effective: (query: EffectiveSteeringQuery) => ["effective", query] as const,
+  suggestions: (swarmId: string) => ["suggestions", swarmId] as const,
   founders: (query: FounderQuery) => ["founders", query] as const,
   founder: (id: string) => ["founder", id] as const,
   outreach: (query: OutreachQuery) => ["outreach", query] as const,
@@ -47,7 +48,7 @@ export const keys = {
 
 /** After steering changes, everything that shows steering or its effects is stale. */
 function steeringChanged(qc: QueryClient) {
-  for (const root of ["directives", "effective", "tree", "overview"]) {
+  for (const root of ["directives", "effective", "tree", "overview", "suggestions"]) {
     void qc.invalidateQueries({ queryKey: [root] });
   }
 }
@@ -101,6 +102,16 @@ export function useEffectiveSteering(query: EffectiveSteeringQuery | null) {
     queryKey: keys.effective(query ?? { swarmId: "" }),
     queryFn: () => client.getEffectiveSteering(query as EffectiveSteeringQuery),
     enabled: Boolean(query?.swarmId),
+  });
+}
+
+/** Steering proposed from patterns in the partners' yes and no calls. */
+export function useSuggestions(swarmId: string | null) {
+  const { client } = useApi();
+  return useQuery({
+    queryKey: keys.suggestions(swarmId ?? ""),
+    queryFn: () => client.listSuggestions(swarmId as string),
+    enabled: Boolean(swarmId),
   });
 }
 
@@ -249,6 +260,16 @@ export function useUpdateDirective() {
   });
 }
 
+export function useDismissSuggestion() {
+  const { client } = useApi();
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (args: { swarmId: string; key: string }) => client.dismissSuggestion(args.swarmId, args.key),
+    onSuccess: (data, args) => qc.setQueryData(keys.suggestions(args.swarmId), data),
+  });
+}
+
+/** Records a partner's yes or no on a candidate, with reasons. */
 export function useAddFeedback() {
   const { client } = useApi();
   const qc = useQueryClient();
@@ -258,6 +279,8 @@ export function useAddFeedback() {
       void qc.invalidateQueries({ queryKey: keys.founder(args.founderId) });
       void qc.invalidateQueries({ queryKey: ["founders"] });
       void qc.invalidateQueries({ queryKey: ["overview"] });
+      void qc.invalidateQueries({ queryKey: ["suggestions"] });
+      void qc.invalidateQueries({ queryKey: ["effective"] });
     },
   });
 }

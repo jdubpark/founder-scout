@@ -310,6 +310,14 @@ const evidenceFor = (founderId: string, seed: Seed): Evidence[] => {
   }));
 };
 
+/** Calls a partner has already made in the sample, by position in SEEDS. */
+const CALLS: Record<number, { verdict: "yes" | "no"; reasonTags: string[]; note: string | null }> = {
+  1: { verdict: "yes", reasonTags: ["builder", "speed"], note: "I know their old team lead." },
+  3: { verdict: "no", reasonTags: ["too_early"], note: null },
+  4: { verdict: "no", reasonTags: ["weak_insight"], note: null },
+  5: { verdict: "yes", reasonTags: ["builder"], note: "Thin so far, but the code is the real thing." },
+};
+
 const founders: Founder[] = [];
 const rows: FounderRow[] = [];
 const details: Record<string, FounderDetailDTO> = {};
@@ -419,7 +427,8 @@ SEEDS.forEach((seed, index) => {
     sources: seed.sources,
     evidenceCount: supported.length,
     flagCount: score.flags.filter((f) => f.severity !== "info").length,
-    feedback: index === 1 ? "meet" : null,
+    feedback: CALLS[index]?.verdict ?? null,
+    feedbackReasons: CALLS[index]?.reasonTags ?? [],
     firstSeenAt: founder.firstSeenAt,
     updatedAt: founder.updatedAt,
   });
@@ -453,10 +462,19 @@ SEEDS.forEach((seed, index) => {
         discoveredAt: founder.firstSeenAt,
       })),
       outreach: [],
-      feedback:
-        index === 1
-          ? [{ id: stableId("fbk", id), founderId: id, author: "Partner", verdict: "meet", note: "I know their old team lead. Worth a call.", createdAt: iso(4 * 60) }]
-          : [],
+      feedback: CALLS[index]
+        ? [
+            {
+              id: stableId("fbk", id),
+              founderId: id,
+              author: "Partner",
+              verdict: CALLS[index]!.verdict,
+              reasonTags: CALLS[index]!.reasonTags,
+              note: CALLS[index]!.note,
+              createdAt: iso(4 * 60 + index),
+            },
+          ]
+        : [],
       tasks: [],
     };
   }
@@ -685,6 +703,7 @@ export const SAMPLE_SNAPSHOT: DemoSnapshot = {
         surfaced: [24, 31, 7, 0][i]!,
       })),
       spendByClass: AGENT_CLASSES.map((c) => ({ classId: c.id, label: c.label, costUsd: classCost(c.id) })),
+      calls: { yes: 0, no: 0, waiting: 0, hitRate: null, topReasons: [] },
       evalTrend: [
         { variant: "baseline", test: 0.52 },
         { variant: "v1", test: 0.58 },

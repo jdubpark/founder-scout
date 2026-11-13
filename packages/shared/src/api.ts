@@ -33,6 +33,7 @@ import type {
 import type { ClassId, ClassMeta, JobId, JobMeta, ModelRoute, ProviderId, SourceId } from "./registry";
 import type { ParamValue } from "./params";
 import type { Decision } from "./scoring";
+import type { CallsSummary, SteeringSuggestion } from "./feedback";
 import type {
   Directive,
   DirectiveKind,
@@ -206,6 +207,11 @@ export interface EffectiveSteeringDTO {
   resolved: ResolvedSteering;
   /** The exact guidance text the agent receives. Empty when there is none. */
   block: string;
+  /**
+   * The recent partner calls this agent is shown as examples, as the exact
+   * text placed after the guidance. Empty for agents that are not shown calls.
+   */
+  callsBlock: string;
   /** Every parameter relevant to this scope with its value and where it came from. */
   params: Array<EffectiveParam & { label: string; scopeLabel: string | null }>;
   /** The model route in force, when the scope is one job or agent. */
@@ -236,8 +242,10 @@ export interface FounderRow {
   sources: SourceId[];
   evidenceCount: number;
   flagCount: number;
-  /** The most recent partner reaction. */
+  /** The partner's most recent call on this founder, if any. */
   feedback: FeedbackVerdict | null;
+  /** The reasons given with that call. */
+  feedbackReasons: string[];
   firstSeenAt: string;
   updatedAt: string;
 }
@@ -276,6 +284,8 @@ export interface FounderDetailDTO {
 
 export interface FeedbackInput {
   verdict: FeedbackVerdict;
+  /** Ids from FEEDBACK_REASONS for this verdict. */
+  reasonTags?: string[];
   note?: string | null;
 }
 
@@ -379,6 +389,8 @@ export interface OverviewDTO {
   spendByClass: Array<{ classId: ClassId; label: string; costUsd: number }>;
   /** Headline eval score per round for the main flow, oldest first. */
   evalTrend: Array<{ variant: string; test: number }>;
+  /** Partner yes and no calls: counts, how many surfaced founders still wait, and the common reasons. */
+  calls: CallsSummary;
   recentAudit: AuditEntry[];
 }
 
@@ -482,6 +494,10 @@ export interface ApiClient {
   updateDirective(id: string, patch: UpdateDirectiveInput): Promise<Directive>;
   /** GET /api/steering/effective */
   getEffectiveSteering(query: EffectiveSteeringQuery): Promise<EffectiveSteeringDTO>;
+  /** GET /api/swarms/:id/suggestions  (steering proposed from patterns in the partners' calls) */
+  listSuggestions(swarmId: string): Promise<SteeringSuggestion[]>;
+  /** POST /api/swarms/:id/suggestions/dismiss  (body: { key }) */
+  dismissSuggestion(swarmId: string, key: string): Promise<SteeringSuggestion[]>;
 
   /** GET /api/founders */
   listFounders(query: FounderQuery): Promise<FounderListDTO>;

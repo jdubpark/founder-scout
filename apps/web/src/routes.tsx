@@ -13,6 +13,7 @@ const Improve = lazy(() => import("./pages/Improve"));
 const Activity = lazy(() => import("./pages/Activity"));
 const RunDetail = lazy(() => import("./pages/RunDetail"));
 const Settings = lazy(() => import("./pages/Settings"));
+const Kit = lazy(() => import("./pages/Kit"));
 
 const page = (node: ReactNode) => <Suspense fallback={<SkeletonRows rows={6} />}>{node}</Suspense>;
 
@@ -32,6 +33,8 @@ export const routes: RouteObject[] = [
       { path: "activity", element: page(<Activity />) },
       { path: "activity/:runId", element: page(<RunDetail />) },
       { path: "settings", element: page(<Settings />) },
+      // Not in the menu: a gallery of the shared visuals on live data.
+      { path: "kit", element: page(<Kit />) },
       {
         path: "*",
         element: <EmptyState title="There is no page at this address">Choose a page from the menu.</EmptyState>,

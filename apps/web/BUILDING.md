@@ -6,8 +6,21 @@ visual direction in `apps/web/.impeccable/surfaces/apps-web-index-html.md`.
 ## Who reads these pages
 
 A venture partner who is not an engineer. They think in founders, theses and meetings.
-Write every label, hint and message in their words. A technical operator uses the same
-pages, so nothing is hidden, but nothing assumes knowledge of models, prompts or tokens.
+A technical operator uses the same pages, so nothing is hidden, but nothing assumes
+knowledge of models, prompts or tokens.
+
+## The owner's direction (this overrides anything below that conflicts)
+
+1. **As little text as possible. Diagrams and icons in its place.** Before writing a sentence,
+   ask whether a diagram, an icon with a one-to-three-word label, a number, or a state mark
+   says it. Explanations go in a hover hint (`Hint`), not on the page. No page descriptions,
+   no instructional paragraphs, no helper sentences under every control.
+2. **Friendly and usable.** Big obvious targets for the main actions, one glance to see what
+   needs a decision, nothing that needs reading a manual.
+3. **Every candidate gets a Yes or a No, with a reason.** Use the `YesNo` component wherever a
+   founder appears with enough context to judge. Those calls feed back into the swarm.
+4. **The swarm must be visible and steerable.** Use the `SwarmMap` component to show it.
+5. Do not spend time on phone layouts or phone screenshots. Desktop only.
 
 ## Where things are
 
@@ -21,15 +34,28 @@ pages, so nothing is hidden, but nothing assumes knowledge of models, prompts or
 | Formatting | `src/lib/format.ts` (`score100`, `percent`, `usd`, `ago`, `dateShort`, `plural`, ...) |
 | Status words and marks | `STATUS_VIEW`, `DECISION_LABEL`, `getStage` in `src/lib/stages.ts` |
 | Rubric, jobs, classes, parameters | `@agentswarm/shared` (`DIMENSIONS`, `JOBS`, `AGENT_CLASSES`, `PARAM_DEFS`, `getParamDef`, `getModel`, `paramsFor`, `scopeMatches`, ...) |
-| Components | `src/components/ui/*` and `src/components/SurfacedAnnouncement.tsx` |
+| Components | `src/components/ui/*` and the shared visuals in `src/components/` (below) |
+| Partner calls | `FEEDBACK_REASONS`, `reasonLabel` from `@agentswarm/shared`; `useAddFeedback`, `useSuggestions`, `useDismissSuggestion` |
 | Icons | `lucide-react`, 16px, one stroke weight. Never emoji or Unicode symbols. |
 
 The kit: `Button`, `IconButton`, `Field`, `Input`, `Textarea`, `Select`, `Switch`, `Segmented`,
 `Panel`, `PageHeader`, `EmptyState`, `ErrorNote`, `Skeleton`, `SkeletonRows`, `Fact`, `Meter`,
 `Table`, `TableScroll`, `Th`, `Tr`, `Td`, `Tabs`, `TabList`, `Tab`, `TabPanel`, `Sheet`, `Hint`,
 `StateMark`, `Status`, `HealthStatus`, `Chip`, `Caution`, `ScopeLabel`, `KindChip`.
-Do not edit the kit. Put components that only your pages need in your own `src/features/<area>/` folder.
-If the kit is missing something every page needs, say so in your report.
+Shared visuals in `src/components/` (use these instead of drawing your own):
+
+| Component | Shows |
+| --- | --- |
+| `SwarmMap` | The swarm as a flow: sources, the seven classes, each agent as a node with its state, and the volume passing between stages. Click a node to select it. |
+| `YesNo` | The partner's call on a founder: Yes, No, tap-able reasons, optional note. Saves itself. |
+| `RubricRadar` | A founder's ten rubric answers as a radar, with confidence. |
+| `ScoreDial` | One 0 to 100 score as a small arc with the figure inside. |
+| `FunnelDiagram` | Counts narrowing through stages. |
+| `SurfacedAnnouncement` | The ranked surfaced list on the overview. |
+| `icons.tsx` | `ClassIcon`, `SourceIcon`, `EvidenceIcon`, `DecisionIcon`, `KindIcon`: one icon per class of agent, source, evidence kind, decision and steering kind. Use them wherever those things are named. |
+
+Do not edit the kit or the shared visuals. Put components that only your pages need in your own
+`src/features/<area>/` folder. If something every page needs is missing, say so in your report.
 
 ## Tokens (Tailwind utilities). Nothing else exists.
 
@@ -49,18 +75,25 @@ and set axis and legend text to `var(--color-ink-3)` at 12px.
 
 ## Rules
 
-1. Regions, not cards. A `Panel` is a ruled region on the paper. Use `boxed` only for a separate object such as a draft to approve. Never nest boxes.
-2. No row of big-number tiles, no small label above a heading, no coloured stripe down the side of anything, no gradients, no decorative sparklines or progress rings.
-3. State is a mark plus a word (`Status`, `HealthStatus`), never colour alone.
-4. Put each claim beside its proof on the same screen. Never send the reader to another tab for the evidence behind a number.
-5. A panel's `aside` says what needs a person there, or a count, or holds the panel's one action.
-6. One `primary` button per view at most.
-7. Every view handles loading (`SkeletonRows`), empty (`EmptyState` that says what will appear and how to make it appear), failure (`ErrorNote` with what to do), and long text (truncate or wrap, never clip).
-8. Scores are shown on a 0 to 100 scale with `score100`. Cost goes through `usd`, which prints "not priced" when the cost is unknown: never show $0.00 for an unknown cost.
-9. Say what is simulated, estimated or unverified, with `Caution`.
-10. Copy: plain sentences, active voice, buttons name what happens ("Approve and queue", "Save rule"). Errors say what went wrong and what to do. No em dashes, no exclamation marks, no jargon.
+1. Show, then tell. Lead each region with its diagram, icons or figures. Text is a short label,
+   not a sentence. If a region needs explaining, put the explanation in a `Hint`.
+2. Regions, not boxes inside boxes. A `Panel` is a ruled region on the paper. Use `boxed` only
+   for a separate object such as a draft to approve. Never nest boxes.
+3. Icons always travel with a short label or an accessible name. One icon means one thing
+   everywhere. Never emoji or Unicode symbols: use `lucide-react` or the shared icon components.
+4. State is a mark plus a word (`Status`, `HealthStatus`), never colour alone.
+5. Put each claim beside its proof on the same screen.
+6. One `primary` button per view at most. Yes and No are the exception: they are always visible.
+7. Every view handles loading (`SkeletonRows`), empty (`EmptyState`: a few words and one action),
+   failure (`ErrorNote`), and long text (truncate with a `title`, never clip).
+8. Scores are 0 to 100 through `score100`. Cost goes through `usd`, which prints "not priced"
+   when unknown: never show $0.00 for an unknown cost.
+9. Say what is simulated, estimated or unverified, with `Caution`. This is the one place text is required.
+10. Copy that does appear: a few plain words, active voice, buttons name what happens
+    ("Approve", "Save"). No em dashes, no exclamation marks, no jargon.
 11. Prefer inline editing and side-by-side detail. Use `Sheet` only to read one long record. No modal dialogs.
-12. Works at 390px wide: grids collapse to one column, tables scroll inside `TableScroll`, the page itself never scrolls sideways. Everything is reachable by keyboard and inputs are labelled through `Field`.
+12. Colour has one meaning each (see Tokens). No gradients, no decorative shadows, no coloured side stripes.
+13. Everything is reachable by keyboard and inputs are labelled through `Field`.
 
 ## Running and looking
 
@@ -75,12 +108,12 @@ Look at what you built, in your own browser session so you do not collide with o
 agent-browser --session <your-name> set viewport 1440 900
 agent-browser --session <your-name> open "http://localhost:5317/<page>?demo"
 agent-browser --session <your-name> screenshot --full /tmp/<your-name>-desktop.png
-agent-browser --session <your-name> set viewport 390 844   # then reload and screenshot again
 agent-browser --session <your-name> errors                 # console errors
 agent-browser --session <your-name> close
 ```
 
-Read the screenshots, fix what you see in one batch, look once more. Two rounds at most.
+Desktop only. Read the screenshot, fix what you see in one batch, look once more. Two rounds at most.
+When you look, count the sentences on the page. If there are more than a handful, replace them.
 
 Check types with `pnpm --filter @agentswarm/web typecheck`. Other workers are writing other pages
 at the same time, so report only errors in your own files.

@@ -51,8 +51,14 @@ function evidence(id: string, founderId: string, hash: string, verification: Evi
   };
 }
 
-function feedback(id: string, founderId: string, verdict: Feedback["verdict"], createdAt: string): Feedback {
-  return { id, founderId, author: "Partner", verdict, note: null, createdAt };
+function feedback(
+  id: string,
+  founderId: string,
+  verdict: Feedback["verdict"],
+  createdAt: string,
+  reasonTags: string[] = [],
+): Feedback {
+  return { id, founderId, author: "Partner", verdict, reasonTags, note: null, createdAt };
 }
 
 function run(id: string, swarmId: string, status: Run["status"], startedAt: string): Run {
@@ -141,8 +147,8 @@ describe("SQLite store", () => {
       { code: "integrity_critical", severity: "critical", message: "Review" },
     ] }));
     store.insertAssessment(assessment("asm_d", "fnd_d", { composite: 0.99, cracked: 0.99, fit: 0.99, decision: "surface" }));
-    store.insertFeedback(feedback("fbk_old", "fnd_a", "down", "2026-01-01T00:00:00.000Z"));
-    store.insertFeedback(feedback("fbk_new", "fnd_a", "up", "2026-01-03T00:00:00.000Z"));
+    store.insertFeedback(feedback("fbk_old", "fnd_a", "no", "2026-01-01T00:00:00.000Z", ["too_early"]));
+    store.insertFeedback(feedback("fbk_new", "fnd_a", "yes", "2026-01-03T00:00:00.000Z", ["builder", "speed"]));
     store.insertEvidence(evidence("evd_a1", "fnd_a", "a1", "supported"));
     store.insertEvidence(evidence("evd_a2", "fnd_a", "a2", "unverified"));
     store.insertEvidence(evidence("evd_a3", "fnd_a", "a3", "unsupported"));
@@ -157,7 +163,8 @@ describe("SQLite store", () => {
     expect(page.rows.map((row) => row.id)).toEqual(["fnd_a"]);
     expect(page.total).toBe(2);
     const ada = store.founderRows({ swarmId: "swm_1", q: "acme", status: "all", limit: 500 }).rows.find((row) => row.id === "fnd_a");
-    expect(ada).toMatchObject({ evidenceCount: 2, flagCount: 1, feedback: "up" });
+    // The most recent call wins, and its reasons come with it.
+    expect(ada).toMatchObject({ evidenceCount: 2, flagCount: 1, feedback: "yes", feedbackReasons: ["builder", "speed"] });
     expect(store.founderRows({ swarmId: "swm_1", status: "archived" }).rows.map((row) => row.id)).toEqual(["fnd_d"]);
     store.close();
   });

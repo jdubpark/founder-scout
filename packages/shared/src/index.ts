@@ -8,4 +8,5 @@ export * from "./domain";
 export * from "./jobio";
 export * from "./api";
 export * from "./steering-view";
+export * from "./feedback";
 export * from "./ids";

@@ -453,6 +453,29 @@ export interface RunController {
   recover(): Promise<number>;
 }
 
+export interface Logger {
+  info(message: string, detail?: Record<string, unknown>): void;
+  warn(message: string, detail?: Record<string, unknown>): void;
+  error(message: string, detail?: Record<string, unknown>): void;
+}
+
+/** What the engine is built from. Implemented by `createRunController` in src/engine. */
+export interface EngineDeps {
+  store: Store;
+  jobs: JobRegistry;
+  executeJob: ExecuteJob;
+  /** Source adapters for each source mode. */
+  sources: { sim: SourceRegistry; live: SourceRegistry };
+  repos: { sim: RepoFinder; live: RepoFinder };
+  simWorld: SimWorld;
+  /** How the fund is named in outreach drafts and disclosures. */
+  fundName: string;
+  now?: () => Date;
+  /** Injected so tests do not wait on retry backoff. */
+  sleep?: (ms: number) => Promise<void>;
+  logger?: Logger;
+}
+
 /* ================================================================== */
 /* Evals                                                                */
 /* ================================================================== */
@@ -466,6 +489,18 @@ export interface EvalService {
   variantConfig(id: string, input: PromoteVariantInput): Promise<SwarmConfig>;
 }
 
+/** What the eval subsystem is built from. Implemented by `createEvalService` in src/eval. */
+export interface EvalDeps {
+  /** Needed by flows built from partner calls. Flows on synthetic data work without it. */
+  store: Store | null;
+  jobs: JobRegistry;
+  executeJob: ExecuteJob;
+  /** Directory that holds one sub-directory per eval flow. Created when missing. */
+  flowsDir: string;
+  now?: () => Date;
+  logger?: Logger;
+}
+
 /* ================================================================== */
 /* Service                                                              */
 /* ================================================================== */
@@ -477,10 +512,68 @@ export interface EvalService {
 export interface SwarmService {
   as(actor: string): ApiClient;
   readonly runs: RunController;
+  readonly evals: EvalService;
   /** Start a scheduled run for every active swarm that is not already running. */
   runScheduled(): Promise<Run[]>;
   /** Create the first swarm with sensible defaults if the store is empty. */
   ensureSeeded(): Promise<void>;
+  close(): void;
+}
+
+/** A failure the API should report to the caller, with an HTTP status. */
+export class ServiceError extends Error {
+  readonly status: number;
+  readonly fields: Record<string, string>;
+
+  constructor(status: number, message: string, fields: Record<string, string> = {}) {
+    super(message);
+    this.name = "ServiceError";
+    this.status = status;
+    this.fields = fields;
+  }
+}
+
+/** Cron parsing lives in the server, which owns the scheduler. */
+export interface CronHelper {
+  isValid(expression: string): boolean;
+  /** ISO time of the next firing after `from`, or null when the expression is invalid. */
+  next(expression: string, timezone: string, from: Date): string | null;
+}
+
+/** What the service is built from. Implemented by `createSwarmService` in src/service. */
+export interface ServiceDeps {
+  store: Store;
+  runs: RunController;
+  evals: EvalService;
+  providers: ProviderRegistry;
+  /** Live source adapters, for the settings page's status list. */
+  liveSources: SourceRegistry;
+  cron: CronHelper;
+  now?: () => Date;
+  logger?: Logger;
+}
+
+/** Everything needed to assemble a working system. Implemented by `createApp` in src/service. */
+export interface AppOptions {
+  /** SQLite file path, or ":memory:". */
+  dbPath: string;
+  /** Scratch directory for repository checkouts. */
+  dataDir: string;
+  /** Directory for eval flows. */
+  flowsDir: string;
+  cron: CronHelper;
+  env?: NodeJS.ProcessEnv;
+  /** Seed of the simulated world that simulated runs draw from. */
+  simSeed?: number;
+  fundName?: string;
+  now?: () => Date;
+  logger?: Logger;
+}
+
+export interface App {
+  service: SwarmService;
+  store: Store;
+  providers: ProviderRegistry;
   close(): void;
 }
 

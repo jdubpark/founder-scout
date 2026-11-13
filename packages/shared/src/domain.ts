@@ -86,13 +86,13 @@ export type FounderStatus =
   | "screened_out"
   /** Passed the screen and is waiting for a deep dive. */
   | "queued"
-  /** Above the bar: put in front of the partners. */
+  /** Above the bar: put in front of the partners for a yes or a no. */
   | "surfaced"
   /** Looks strong on thin evidence: more evidence is being gathered. */
   | "needs_evidence"
   /** Not there yet: re-checked on a schedule. */
   | "watch"
-  /** Below the watch bar after a deep dive. */
+  /** Below the watch bar after a deep dive, or a partner said no. */
   | "passed"
   /** An approved outreach action has been sent. */
   | "contacted"
@@ -258,14 +258,21 @@ export interface Memo {
   nextStep: string;
 }
 
-export type FeedbackVerdict = "up" | "down" | "meet" | "pass" | "invested";
+export type FeedbackVerdict = "yes" | "no";
 
-/** A partner's reaction. This is the label the improvement loop learns from. */
+/**
+ * A partner's call on a candidate: yes or no, and why. A founder can be
+ * called more than once; the most recent call is the one in force. These are
+ * the labels the improvement loop learns from.
+ */
 export interface Feedback {
   id: string;
   founderId: string;
   author: string;
   verdict: FeedbackVerdict;
+  /** Ids of the quick reasons that were tapped (see FEEDBACK_REASONS). */
+  reasonTags: string[];
+  /** Anything the partner typed. */
   note: string | null;
   createdAt: string;
 }
@@ -341,8 +348,14 @@ export type RunStatus =
   /** Stopped starting new work because the spend cap was reached. */
   | "budget_stopped";
 
+/**
+ * The order a run works through. "Follow up" comes first because it turns the
+ * results of outreach approved since the last run into evidence, which the
+ * later stages then use.
+ */
 export const STAGES = [
   { id: "plan", label: "Plan" },
+  { id: "debrief", label: "Follow up" },
   { id: "scout", label: "Scout" },
   { id: "resolve", label: "Match" },
   { id: "screen", label: "Screen" },
@@ -351,7 +364,6 @@ export const STAGES = [
   { id: "assess", label: "Assess" },
   { id: "memo", label: "Memo" },
   { id: "outreach", label: "Outreach plan" },
-  { id: "debrief", label: "Debrief" },
   { id: "digest", label: "Digest" },
 ] as const;
 
@@ -487,6 +499,8 @@ export interface Settings {
   schedule: ScheduleSettings;
   /** Name recorded as the author of steering and approvals. */
   operatorName: string;
+  /** Suggested-steering keys a partner has dismissed, so they are not offered again. */
+  dismissedSuggestions: string[];
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -499,6 +513,7 @@ export const DEFAULT_SETTINGS: Settings = {
     sources: "sim",
   },
   operatorName: "Partner",
+  dismissedSuggestions: [],
 };
 
 export interface AuditEntry {

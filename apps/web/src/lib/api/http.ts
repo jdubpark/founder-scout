@@ -97,6 +97,9 @@ export function createHttpClient(options: { baseUrl?: string; getActor: () => st
     createDirective: (input) => call("POST", "/api/directives", input),
     updateDirective: (id, patch) => call("PATCH", `/api/directives/${encodeURIComponent(id)}`, patch),
     getEffectiveSteering: (query: EffectiveSteeringQuery) => get("/api/steering/effective", { ...query }),
+    listSuggestions: (swarmId) => get(`/api/swarms/${encodeURIComponent(swarmId)}/suggestions`),
+    dismissSuggestion: (swarmId, key) =>
+      call("POST", `/api/swarms/${encodeURIComponent(swarmId)}/suggestions/dismiss`, { key }),
 
     listFounders: (query: FounderQuery) => get("/api/founders", { ...query }),
     getFounder: (id) => get(`/api/founders/${encodeURIComponent(id)}`),
