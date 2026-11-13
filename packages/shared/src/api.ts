@@ -40,7 +40,8 @@ import type {
 import type { ContaminationReport } from "./past";
 import type { MemberStats, PoolMember } from "./pools";
 import type { AssumptionsDTO } from "./assumptions";
-import type { HuntCall, HuntNote, LatestStage, StageRead, Trail, TrailStats, TrailStatus } from "./hunt";
+import type { HuntCall, HuntNote, LatestStage, NavigateTurn, SeatHolder, StageRead, Trail, TrailStats, TrailStatus, WaveDigest } from "./hunt";
+import type { NavigateInput } from "./jobio";
 import type { ClassId, ClassMeta, JobId, JobMeta, ModelRoute, ProviderId, SourceId } from "./registry";
 import type { ParamValue } from "./params";
 import type { Decision } from "./scoring";
@@ -803,6 +804,12 @@ export interface ApiClient {
 
   /** GET /api/swarms/:id/hunt */
   getHunt(swarmId: string): Promise<HuntDTO>;
+  /** GET /api/swarms/:id/hunt/seat */
+  getHuntSeat(swarmId: string): Promise<HuntSeatDTO>;
+  /** POST /api/swarms/:id/hunt/seat/turn */
+  takeHuntTurn(swarmId: string, turn: NavigateTurn): Promise<HuntTurnResult>;
+  /** POST /api/swarms/:id/hunt/seat/wave */
+  runHuntWave(swarmId: string, input?: { waves?: number }): Promise<HuntWaveResult>;
   /** POST /api/swarms/:id/hunt/trails  A person opens a trail. It needs a name and somewhere to start. */
   addHuntTrail(swarmId: string, input: AddTrailInput): Promise<HuntDTO>;
   /** PATCH /api/swarms/:id/hunt/trails/:trailId */
@@ -814,6 +821,31 @@ export interface ApiClient {
 }
 
 /* ------------------------------ The hunt --------------------------- */
+
+export interface HuntSeatDTO {
+  swarmId: string;
+  configuredHolder: SeatHolder;
+  holder: SeatHolder;
+  seatAt: string | null;
+  activeRun: { id: string; status: Run["status"]; stage: StageId | null } | null;
+  view: NavigateInput;
+}
+
+export interface HuntTurnResult {
+  opened: string[];
+  extended: string[];
+  closed: string[];
+  focused: Array<{ trailId: string; weight: number }>;
+  noted: string[];
+  refused: string[];
+  view: NavigateInput;
+}
+
+export interface HuntWaveResult {
+  run: { id: string; status: Run["status"]; costUsd: number };
+  lastWave: WaveDigest | null;
+  view: NavigateInput;
+}
 
 /** A trail with what is waiting on it and how much of the next wave code would give it. */
 export interface HuntTrailView extends Trail {

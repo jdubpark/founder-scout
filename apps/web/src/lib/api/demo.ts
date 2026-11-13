@@ -28,6 +28,8 @@ import {
   type Feedback,
   isCompanyReasonFor,
   type HuntDTO,
+  type HuntSeatDTO,
+  type NavigateInput,
   type SteeringSuggestion,
   type DemoSnapshot,
   type Directive,
@@ -685,6 +687,30 @@ export function createDemoClient(snapshot: DemoSnapshot, getActor: () => string)
     async getHunt(swarmId) {
       requireSwarm(swarmId);
       return clone(state.hunts?.[swarmId] ?? emptyHunt(swarmId));
+    },
+    async getHuntSeat(swarmId): Promise<HuntSeatDTO> {
+      requireSwarm(swarmId);
+      const hunt = state.hunts?.[swarmId] ?? emptyHunt(swarmId);
+      const swarm = snapshot.swarms.find((item) => item.id === swarmId)!;
+      const trails = [...hunt.trails.filter((trail) => trail.status === "open" || trail.status === "paused"),
+        ...hunt.trails.filter((trail) => trail.status === "closed").sort((a, b) => (b.closedAt ?? "").localeCompare(a.closedAt ?? "")).slice(0, 5)];
+      const turnsLeft = Math.max(0, hunt.limits.turns - hunt.turn);
+      const view: NavigateInput = {
+        thesis: swarm.thesis,
+        brief: { latestStage: hunt.limits.latestStage, engines: hunt.engines.filter((engine) => engine.configured).map(({ id, label, searches }) => ({ id, label, searches })), waveSize: hunt.limits.waveSize, maxOpenTrails: 8 },
+        turn: hunt.turn + 1,
+        trails: trails.map((trail) => ({ id: trail.id, name: trail.name, intent: trail.intent, status: trail.status, openedBy: trail.openedBy, weight: trail.weight, pinned: trail.pinned, searches: trail.stats.searches, pages: trail.stats.pages, leads: trail.stats.leads, kept: trail.stats.kept, tooLate: trail.stats.tooLate, blocked: trail.stats.blocked, queued: trail.queued, costUsd: trail.stats.costUsd })),
+        notes: hunt.notes.slice(0, 12).map(({ by, text }) => ({ by, text })),
+        lastWave: null,
+        budget: { turnsLeft, callsLeft: turnsLeft * hunt.limits.waveSize },
+      };
+      return { swarmId, configuredHolder: "built_in", holder: "built_in", seatAt: null, activeRun: null, view };
+    },
+    async takeHuntTurn() {
+      throw new ApiError(400, READ_ONLY);
+    },
+    async runHuntWave() {
+      throw new ApiError(400, READ_ONLY);
     },
     async addHuntTrail(swarmId, input) {
       const hunt = mutableHunt(swarmId);

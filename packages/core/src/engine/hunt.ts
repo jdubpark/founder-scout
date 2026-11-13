@@ -56,6 +56,33 @@ export interface NotebookWriter {
   asker: string;
 }
 
+/** Build the only view given to a navigator, whether it is built in or connected from outside. */
+export function buildNavigateInput(input: {
+  thesis: NavigateInput["thesis"];
+  latestStage: NavigateInput["brief"]["latestStage"];
+  engines: NavigateInput["brief"]["engines"];
+  waveSize: number;
+  turn: number;
+  trails: readonly Trail[];
+  queued: readonly FrontierItem[];
+  notes: readonly HuntNote[];
+  lastWave: WaveDigest | null;
+  turnsLeft: number;
+  callsLeft: number;
+}): NavigateInput {
+  const visibleTrails = [...input.trails.filter((trail) => trail.status === "open" || trail.status === "paused"),
+    ...input.trails.filter((trail) => trail.status === "closed").sort((a, b) => (b.closedAt ?? "").localeCompare(a.closedAt ?? "")).slice(0, 5)];
+  return {
+    thesis: input.thesis,
+    brief: { latestStage: input.latestStage, engines: [...input.engines], waveSize: input.waveSize, maxOpenTrails: 8 },
+    turn: input.turn,
+    trails: visibleTrails.map((trail) => trailDigest(trail, input.queued.filter((item) => item.trailId === trail.id && item.state === "queued").length)),
+    notes: input.notes.map(({ by, text }) => ({ by, text })),
+    lastWave: input.lastWave,
+    budget: { turnsLeft: Math.max(0, input.turnsLeft), callsLeft: Math.max(0, input.callsLeft) },
+  };
+}
+
 function makeNote(writer: NotebookWriter, hunt: Hunt, by: HuntNote["by"], text: string, turn: number): void {
   const safe = redactSensitive(text).replace(/\s+/g, " ").trim().slice(0, 240);
   if (!safe) return;
@@ -461,20 +488,20 @@ export async function runHunt(runtime: EngineRuntime, simIdsByLead: Map<string, 
     const frontier = runtime.deps.store.listFrontier(hunt.id);
     trails = runtime.deps.store.listTrails(hunt.id);
     const notes = runtime.deps.store.listHuntNotes(hunt.id, 12);
-    const input: NavigateInput = {
+    const input = buildNavigateInput({
       thesis: runtime.swarm.thesis,
-      brief: { latestStage, engines: usable.map((engine) => ({ id: engine.id, label: engine.label, searches: engine.searches })), waveSize, maxOpenTrails: 8 },
+      latestStage,
+      engines: usable.map((engine) => ({ id: engine.id, label: engine.label, searches: engine.searches })),
+      waveSize,
       turn: hunt.turn + 1,
-      trails: [...trails.filter((trail) => trail.status === "open" || trail.status === "paused"), ...trails.filter((trail) => trail.status === "closed").sort((a, b) => (b.closedAt ?? "").localeCompare(a.closedAt ?? "")).slice(0, 5)]
-        .map((trail) => trailDigest(trail, frontier.filter((item) => item.trailId === trail.id && item.state === "queued").length)),
-      notes: notes.map(({ by, text }) => ({ by, text })),
+      trails,
+      queued: frontier,
+      notes,
       lastWave,
-      budget: {
-        turnsLeft: Math.max(0, rounds - turnIndex),
-        // Waves left times their size, or what the money left would buy at what a runner call has cost.
-        callsLeft: Math.max(0, Math.min((rounds - turnIndex) * waveSize, Math.floor(Math.max(0, maxSpend - ownSpend) / typical("runner")))),
-      },
-    };
+      turnsLeft: rounds - turnIndex,
+      // Waves left times their size, or what the money left would buy at what a runner call has cost.
+      callsLeft: Math.min((rounds - turnIndex) * waveSize, Math.floor(Math.max(0, maxSpend - ownSpend) / typical("runner"))),
+    });
     const navResult = await withinBudget("navigator", (allowance) =>
       runtime.runJob({ agent: navigator, stage: "hunt", jobId: "hunt.navigate", input, maxBudgetUsd: allowance }));
     if (navResult === "spent" || !navResult) break;

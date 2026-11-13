@@ -3,7 +3,7 @@ import {
   BASE_CONFIG, DEFAULT_SETTINGS, JOBS, PROVIDERS, ZERO_STATS, newId, stableId, runnerPools,
   type Agent, type Assessment, type Company, type CompanyAssessment, type CompanyMember, type EvalFlowDTO,
   type Evidence, type Feedback, type Founder, type NetworkContact, type OutreachAction, type Run,
-  type Swarm, type SwarmConfig, type TaskRun, type Pools,
+  type Swarm, type SwarmConfig, type TaskRun, type Pools, type NavigateTurn,
 } from "@agentswarm/shared";
 import type { EvalService, ProviderRegistry, RunController, SourceRegistry, Store } from "../contracts";
 import { openStore } from "../db";
@@ -173,6 +173,39 @@ describe("createSwarmService", () => {
     await api.createDirective({ scope: { agentId: runner.id }, kind: "param", key: "hunt.wave_size", value: 18 });
 
     expect((await api.getHunt(swarm.id)).limits.waveSize).toBe(18);
+  });
+
+  it("keeps outside turns in the navigator seat and applies only checked requests", async () => {
+    const { service, store } = createHarness();
+    await service.ensureSeeded();
+    const api = service.as("Seat agent");
+    const swarm = (await api.listSwarms())[0]!;
+    await api.addHuntTrail(swarm.id, { name: "Pinned path", pages: ["https://founders-example.com/start"] });
+    const hunt = store.getHunt(swarm.id)!;
+    const pinned = store.listTrails(hunt.id)[0]!;
+    store.saveTrail({ ...pinned, pinned: true });
+    const turn: NavigateTurn = {
+      open: [{ name: "New direction", intent: "Find early technical teams", searches: [], pages: ["http://127.0.0.1/private", "https://teams-example.com/launch"] }],
+      extend: [], close: [{ trailId: pinned.id, why: "Close this trail" }], focus: [], notes: ["Keep looking for first product launches."], done: false,
+    };
+
+    await expect(api.takeHuntTurn(swarm.id, turn)).rejects.toMatchObject({ status: 409, message: expect.stringContaining("Set hunt.navigator to outside") });
+    await expect(api.runHuntWave(swarm.id)).rejects.toMatchObject({ status: 409 });
+    await api.createDirective({ scope: { swarmId: swarm.id }, kind: "param", key: "hunt.navigator", value: "outside" });
+
+    const result = await api.takeHuntTurn(swarm.id, turn);
+    expect(result.opened).toEqual(["New direction"]);
+    expect(result.closed).toEqual([]);
+    expect(result.noted).toEqual(["Keep looking for first product launches."]);
+    expect(result.refused.join(" ")).toMatch(/pinned by a person/);
+    expect(result.refused.join(" ")).toMatch(/address/i);
+    expect(store.getHunt(swarm.id)?.seatAt).toBe(stamp);
+    const opened = store.listTrails(hunt.id).find((trail) => trail.name === "New direction")!;
+    expect(store.listFrontier(hunt.id).filter((item) => item.trailId === opened.id).map((item) => item.target)).toEqual(["https://teams-example.com/launch"]);
+    const viewText = JSON.stringify(result.view);
+    expect(viewText).not.toContain("Ari Founder");
+    expect(viewText).not.toContain("founders-example.com/start");
+    expect(viewText).not.toContain("teams-example.com/launch");
   });
 
   it("assembles the app from its options and closes the shared store", async () => {

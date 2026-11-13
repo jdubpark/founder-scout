@@ -2,17 +2,19 @@ import { Button } from "../components/ui/Button";
 import { EmptyState, ErrorNote, PageHeader, Panel, SkeletonRows } from "../components/ui/layout";
 import { Status } from "../components/ui/marks";
 import { useToast } from "../components/ui/overlay";
-import { useOverview, useHunt, useStartRun } from "../lib/queries";
+import { useOverview, useHunt, useHuntSeat, useStartRun } from "../lib/queries";
 import { useSwarm } from "../lib/swarm";
 import { HuntFlow } from "../features/hunt/HuntFlow";
 import { TrailTable } from "../features/hunt/TrailTable";
 import { Notebook } from "../features/hunt/Notebook";
 import { Finds } from "../features/hunt/Finds";
 import { Waves } from "../features/hunt/Waves";
+import { HuntSeat } from "../features/hunt/HuntSeat";
 
 export default function HuntPage() {
   const { swarm, swarmId } = useSwarm();
   const hunt = useHunt(swarmId);
+  const seat = useHuntSeat(swarmId);
   const overview = useOverview(swarmId);
   const start = useStartRun();
   const toast = useToast();
@@ -45,6 +47,7 @@ export default function HuntPage() {
     <>
       {header}
       <div className="flex flex-col gap-6">
+        {seat.data ? <Panel title="Navigator"><HuntSeat swarmId={swarm.id} holder={seat.data.holder} seatAt={seat.data.seatAt} /></Panel> : null}
         <Panel title="Flow">
           <HuntFlow hunt={hunt.data} />
         </Panel>

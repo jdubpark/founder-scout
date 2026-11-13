@@ -24,6 +24,7 @@ import { createRunController } from "../engine";
 import { createEvalService } from "../eval";
 import { poolsView, rebalancePools, setPool } from "./pools";
 import { addHuntNote, addHuntTrail, huntView, removeHuntNote, updateHuntTrail } from "./hunt";
+import { getHuntSeat as readHuntSeat, runHuntWave as startHuntWave, takeHuntTurn as applyHuntTurn } from "./seat";
 import { assumptionsFor } from "./assumptions";
 import { previewConfig } from "./preview";
 
@@ -123,6 +124,7 @@ export function createSwarmService(deps: ServiceDeps): SwarmService {
     ...(deps.web ? { web: deps.web } : {}),
     audit,
   };
+  const seatDeps = { store, runs: deps.runs, ...(deps.web ? { web: deps.web } : {}), now, audit };
   const getSwarm = (id: string): Swarm => {
     const found = store.getSwarm(id);
     if (!found) fail(404, "Swarm not found. Choose a swarm that exists.");
@@ -998,6 +1000,15 @@ export function createSwarmService(deps: ServiceDeps): SwarmService {
 
       async getHunt(swarmId) {
         return huntView(huntDeps, swarmId);
+      },
+      async getHuntSeat(swarmId) {
+        return readHuntSeat(seatDeps, swarmId);
+      },
+      async takeHuntTurn(swarmId, turn) {
+        return applyHuntTurn(seatDeps, actor, swarmId, turn);
+      },
+      async runHuntWave(swarmId, input) {
+        return startHuntWave(seatDeps, actor, swarmId, input);
       },
       async addHuntTrail(swarmId, input: AddTrailInput) {
         return addHuntTrail(huntDeps, actor, swarmId, input);

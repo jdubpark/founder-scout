@@ -59,6 +59,7 @@ export const keys = {
   assumptions: (swarmId: string) => ["assumptions", swarmId] as const,
   pools: (swarmId: string) => ["pools", swarmId] as const,
   hunt: (swarmId: string) => ["hunt", swarmId] as const,
+  huntSeat: (swarmId: string) => ["huntSeat", swarmId] as const,
 };
 
 /** After steering changes, everything that shows steering or its effects is stale. */
@@ -66,6 +67,7 @@ function steeringChanged(qc: QueryClient) {
   for (const root of ["directives", "effective", "tree", "overview", "suggestions"]) {
     void qc.invalidateQueries({ queryKey: [root] });
   }
+  void qc.invalidateQueries({ queryKey: ["huntSeat"] });
 }
 
 function runsChanged(qc: QueryClient) {
@@ -257,6 +259,16 @@ export function useHunt(swarmId: string | null) {
     queryFn: () => client.getHunt(swarmId as string),
     enabled: Boolean(swarmId),
     refetchInterval: (query) => (query.state.data?.active ? ACTIVE_REFRESH : IDLE_REFRESH),
+  });
+}
+
+export function useHuntSeat(swarmId: string | null) {
+  const { client } = useApi();
+  return useQuery({
+    queryKey: keys.huntSeat(swarmId ?? ""),
+    queryFn: () => client.getHuntSeat(swarmId as string),
+    enabled: Boolean(swarmId),
+    refetchInterval: (query) => (query.state.data?.activeRun ? ACTIVE_REFRESH : IDLE_REFRESH),
   });
 }
 

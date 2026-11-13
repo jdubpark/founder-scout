@@ -33,6 +33,7 @@ import {
 } from "@agentswarm/shared";
 import { resolveConfig } from "./config";
 import { createCronHelper } from "./cron";
+import { serveMcp } from "./mcp";
 
 export type OutputWriter = (line: string) => void;
 type DoctorRunner = (options: { live: boolean; env?: NodeJS.ProcessEnv }) => Promise<DoctorRow[]>;
@@ -44,7 +45,8 @@ type DirectoryFetcher = typeof fetchYcDirectory;
 const DEFAULT_MIN_TEAM = 100;
 
 const CLI_HELP = [
-  "Usage: swarm <run|doctor|eval|past|demo-snapshot|seed> [options]",
+  "Usage: swarm <run|doctor|eval|past|demo-snapshot|seed|mcp> [options]",
+  "  swarm mcp [--url http://127.0.0.1:4317] [--swarm <id>]",
   "  swarm eval rounds [--flow <id>] [--rounds <n>] [--budget <usd>]",
   "  swarm past collect --from <date> --to <date> [--yc] [--min-team <n>] [--unicorns] [--labels <file.csv>] [--controls <n>]",
   "  swarm past show",
@@ -565,6 +567,11 @@ export async function runCliCommand(
       return 0;
     }
     if (!command) throw new Error(CLI_HELP);
+    if (command === "mcp") {
+      const { values } = parseArgs({ args: argv.slice(1), options: { url: { type: "string" }, swarm: { type: "string" } }, strict: true });
+      await serveMcp({ url: values.url, swarmId: values.swarm });
+      return 0;
+    }
     if (command === "seed") {
       if (argv.length > 1) throw new Error("seed takes no options.");
       await seedCommand(service, write);
@@ -670,7 +677,9 @@ export async function runCliCommand(
     }
     throw new Error(`Unknown command: ${command}`);
   } catch (error) {
-    write(`Error: ${error instanceof Error ? error.message : String(error)}`);
+    const message = `Error: ${error instanceof Error ? error.message : String(error)}`;
+    if (argv[0] === "mcp") process.stderr.write(`${message}\n`);
+    else write(message);
     return 1;
   }
 }

@@ -5,7 +5,7 @@ import fastifyStatic from "@fastify/static";
 import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest } from "fastify";
 import { z } from "zod";
 import { ServiceError, type SwarmService } from "@agentswarm/core";
-import { ACTOR_HEADER, AGENT_CLASSES, JOBS } from "@agentswarm/shared";
+import { ACTOR_HEADER, AGENT_CLASSES, JOBS, NavigateOutputSchema } from "@agentswarm/shared";
 import type { AddTrailInput, ApiClient, ClassId, CompanySort, CompanyStatus, DirectiveFilter, JobId, SetPoolInput, UpdateTrailInput } from "@agentswarm/shared";
 
 const actorHeader = ACTOR_HEADER.toLowerCase();
@@ -123,6 +123,7 @@ const updateHuntTrailSchema: z.ZodType<UpdateTrailInput> = z
   })
   .strict();
 const addHuntNoteSchema = z.object({ text: requiredText.max(240) }).strict();
+const huntWaveSchema = z.object({ waves: z.number().int().min(1).max(3).optional() }).strict();
 
 const scopeSchema = z
   .object({
@@ -444,6 +445,9 @@ export function buildServer(options: {
   put("/api/swarms/:id/pools/:jobId", setPoolSchema, (api, input, params) => api.setPool(params.id!, params.jobId as JobId, input as SetPoolInput));
 
   get("/api/swarms/:id/hunt", emptySchema, (api, _input, params) => api.getHunt(params.id!));
+  get("/api/swarms/:id/hunt/seat", emptySchema, (api, _input, params) => api.getHuntSeat(params.id!));
+  post("/api/swarms/:id/hunt/seat/turn", NavigateOutputSchema, (api, input, params) => api.takeHuntTurn(params.id!, input));
+  post("/api/swarms/:id/hunt/seat/wave", huntWaveSchema, (api, input, params) => api.runHuntWave(params.id!, input));
   post("/api/swarms/:id/hunt/trails", addHuntTrailSchema, (api, input, params) => api.addHuntTrail(params.id!, input));
   patch("/api/swarms/:id/hunt/trails/:trailId", updateHuntTrailSchema, (api, input, params) => api.updateHuntTrail(params.id!, params.trailId!, input));
   post("/api/swarms/:id/hunt/notes", addHuntNoteSchema, (api, input, params) => api.addHuntNote(params.id!, input));

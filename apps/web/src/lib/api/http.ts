@@ -144,6 +144,9 @@ export function createHttpClient(options: { baseUrl?: string; getActor: () => st
     rebalancePools: (swarmId, input) => call("POST", `/api/swarms/${encodeURIComponent(swarmId)}/pools/rebalance`, input ?? {}),
 
     getHunt: (swarmId) => get(`/api/swarms/${encodeURIComponent(swarmId)}/hunt`),
+    getHuntSeat: (swarmId) => get(`/api/swarms/${encodeURIComponent(swarmId)}/hunt/seat`),
+    takeHuntTurn: (swarmId, turn) => call("POST", `/api/swarms/${encodeURIComponent(swarmId)}/hunt/seat/turn`, turn),
+    runHuntWave: (swarmId, input = {}) => call("POST", `/api/swarms/${encodeURIComponent(swarmId)}/hunt/seat/wave`, input),
     addHuntTrail: (swarmId, input: AddTrailInput) =>
       call("POST", `/api/swarms/${encodeURIComponent(swarmId)}/hunt/trails`, input),
     updateHuntTrail: (swarmId, trailId, input: UpdateTrailInput) =>
