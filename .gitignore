@@ -1,0 +1,14 @@
+node_modules/
+dist/
+data/
+.env
+.env.local
+*.log
+.DS_Store
+coverage/
+apps/web/dist/
+apps/web/dist-demo/
+evals/flows/**/traces/
+evals/flows/**/report.html
+evals/flows/**/trajectory/
+.vite/

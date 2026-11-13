@@ -1,0 +1,23 @@
+{
+  "name": "agentswarm",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@9.15.0",
+  "engines": {
+    "node": ">=22.13"
+  },
+  "scripts": {
+    "dev": "pnpm --parallel --filter @agentswarm/server --filter @agentswarm/web dev",
+    "start": "pnpm --filter @agentswarm/web build && pnpm --filter @agentswarm/server start",
+    "swarm": "pnpm --filter @agentswarm/server exec tsx src/cli.ts",
+    "test": "vitest run",
+    "typecheck": "pnpm -r typecheck",
+    "check": "pnpm typecheck && pnpm test"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.6",
+    "tsx": "^4.23.15",
+    "typescript": "^7.0.2",
+    "vitest": "^5.1.0"
+  }
+}

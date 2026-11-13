@@ -1,0 +1,20 @@
+{
+  "name": "@agentswarm/server",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch --env-file-if-exists=../../.env src/main.ts",
+    "start": "tsx --env-file-if-exists=../../.env src/main.ts",
+    "typecheck": "tsc -p tsconfig.json"
+  },
+  "dependencies": {
+    "@agentswarm/core": "workspace:^",
+    "@agentswarm/shared": "workspace:^",
+    "@fastify/cors": "^11.4.2",
+    "@fastify/static": "^10.1.10",
+    "croner": "^11.0.0",
+    "fastify": "^5.12.8",
+    "zod": "^4.6.7"
+  }
+}
