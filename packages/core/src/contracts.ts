@@ -59,6 +59,10 @@ import type {
   ProviderId,
   ProviderStatus,
   RawItem,
+  Recording,
+  RecordingKind,
+  RecordingStatus,
+  RecordingTranscript,
   RepoContributor,
   RepoRef,
   ResolvedSteering,
@@ -242,6 +246,17 @@ export interface PageRead {
  */
 export interface WebReader {
   read(url: string, options?: { simDay?: number | null; signal?: AbortSignal }): Promise<PageRead>;
+}
+
+export interface Transcriber {
+  status(): Promise<{ configured: boolean; detail: string }>;
+  transcribe(filePath: string, options?: { signal?: AbortSignal }): Promise<{
+    text: string;
+    segments: Array<{ startSec: number; endSec: number; text: string }>;
+    durationSec: number;
+    model: string;
+    costUsd: number | null;
+  }>;
 }
 
 export interface SearchHit {
@@ -530,6 +545,11 @@ export interface Store {
   findFounderByLinks(swarmId: string, links: ProfileLinks): Founder | null;
   /** Founders in this swarm whose normalised name equals the argument. */
   findFoundersByName(swarmId: string, normalizedName: string): Founder[];
+  insertRecording(recording: Recording): void;
+  getRecording(id: string): Recording | null;
+  updateRecording(id: string, patch: Partial<Pick<Recording, "status" | "detail" | "durationSec" | "transcript" | "updatedAt">>): Recording;
+  listRecordingsByFounder(founderId: string): Recording[];
+  listRecordingsByStatus(swarmId: string, status: RecordingStatus): Recording[];
   listFounders(filter: {
     swarmId: string;
     statuses?: FounderStatus[];
@@ -775,6 +795,9 @@ export interface EngineDeps {
   quotes?: QuoteChecker | null;
   /** Vendor lookups for live runs. null when no vendor is connected. */
   people?: PeopleLookup | null;
+  transcriber?: { sim: Transcriber; live: Transcriber | null };
+  media?: { fetch(sourceUrl: string, dataDir: string, options?: { signal?: AbortSignal }): Promise<{ path: string; detail: string } | { refused: string }> };
+  dataDir?: string;
   /** Source adapters for each source mode. */
   sources: { sim: SourceRegistry; live: SourceRegistry };
   repos: { sim: RepoFinder; live: RepoFinder };

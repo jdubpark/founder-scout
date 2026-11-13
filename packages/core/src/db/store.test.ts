@@ -791,7 +791,7 @@ describe("SQLite store", () => {
     expect(store.listHuntCalls("hnt_legacy")).toEqual([]);
     store.close();
     const migrated = new Database(path, { readonly: true });
-    expect(migrated.pragma("user_version", { simple: true })).toBe(4);
+    expect(migrated.pragma("user_version", { simple: true })).toBe(5);
     migrated.close();
   });
 
@@ -808,6 +808,9 @@ describe("SQLite store", () => {
       DROP TABLE hunt_frontier;
       DROP TABLE hunt_trails;
       DROP TABLE hunts;
+      DROP INDEX recordings_by_status;
+      DROP INDEX recordings_by_founder;
+      DROP TABLE recordings;
     `);
     prior.pragma("user_version = 3");
     prior.close();
@@ -847,7 +850,7 @@ describe("SQLite store", () => {
     expect(reopened.getConfig("cfg_base")).toEqual(config);
     reopened.close();
     const db = new Database(path, { readonly: true });
-    expect(db.pragma("user_version", { simple: true })).toBe(4);
+    expect(db.pragma("user_version", { simple: true })).toBe(5);
     db.close();
   });
 });

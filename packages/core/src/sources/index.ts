@@ -14,6 +14,9 @@ import { createPdlVendor, createRecordAllowance, type RecordAllowance } from "./
 import { createLiveRepoFinder as buildRepoFinder, type RepoFinderOptions } from "./repo-finder";
 import { createWebReader } from "./web";
 import { createGitHubSearchEngine, createHnSearchEngine, createHuggingFaceSearchEngine, createModelSearchEngine } from "./search";
+import { createLiveTranscriber } from "./transcribe";
+import { createMediaFetcher } from "./media";
+import { createGitHubSearchEngine, createHnSearchEngine, createHuggingFaceSearchEngine } from "./search";
 
 export { createArxivAdapter } from "./arxiv";
 export { createGitHubAdapter } from "./github";
@@ -21,6 +24,8 @@ export { createHackerNewsAdapter } from "./hackernews";
 export { createPeopleDataAdapter, type ProfileDataVendor } from "./people_data";
 export { createPdlVendor, createRecordAllowance, type PdlOptions, type RecordAllowance } from "./pdl";
 export { createQuoteChecker } from "./quote-check";
+export { createLiveTranscriber, createCommandTranscriber, createHttpTranscriber } from "./transcribe";
+export { createMediaFetcher } from "./media";
 export { createWebReader, type WebReaderOptions } from "./web";
 export { createGitHubSearchEngine, createHnSearchEngine, createHuggingFaceSearchEngine, type SearchOptions } from "./search";
 export { createModelSearchEngine } from "./search";

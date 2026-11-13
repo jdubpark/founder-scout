@@ -316,6 +316,7 @@ function inputFor(id: ModelJobId): AnyInput {
   if (id.startsWith("scout.")) {
     return { items: [rawItem], beat: "Rust infrastructure", thesis } as ScoutInput;
   }
+  if (id === "media.read") return { founder, title: "Founder talk", kind: "talk", stretch: [{ startSec: 5, endSec: 9, text: "We built a cache that cut build times." }] } as AnyInput;
   if (id === "screen.fit") return { founder, thesis } as ScreenInput;
   if (id.startsWith("investigate.")) {
     return { founder, thesis, known: [], depth: "standard", repo: id === "investigate.code" ? repo : null, gaps: [] } as InvestigateInput;

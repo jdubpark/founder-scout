@@ -129,6 +129,29 @@ export interface Founder {
   simId: string | null;
 }
 
+export type RecordingKind = "talk" | "interview" | "call";
+export type RecordingStatus = "queued" | "transcribing" | "ready" | "failed" | "refused";
+export interface RecordingTranscript {
+  text: string;
+  segments: Array<{ startSec: number; endSec: number; text: string }>;
+  model: string;
+}
+export interface Recording {
+  id: string;
+  swarmId: string;
+  founderId: string;
+  kind: RecordingKind;
+  title: string;
+  sourceUrl: string | null;
+  addedBy: "person" | "researcher";
+  status: RecordingStatus;
+  detail: string;
+  durationSec: number | null;
+  transcript: RecordingTranscript | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
 /** A single sighting of a person by a scout, before or after matching. */
 export interface Lead {
   id: string;

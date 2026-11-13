@@ -99,6 +99,7 @@ export const JOB_INPUT_POOLS: InputPools = {
   "investigate.code": INVESTIGATE,
   "investigate.company": INVESTIGATE,
   "investigate.media": INVESTIGATE,
+  "media.read": { founder: "founder", title: "sources", kind: "sources", stretch: "sources" },
   "investigate.redflags": INVESTIGATE,
   "company.product": COMPANY_RESEARCH,
   "company.traction": COMPANY_RESEARCH,

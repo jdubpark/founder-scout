@@ -246,6 +246,7 @@ export const DEFAULT_ROUTES: Record<JobId, ModelRoute> = {
   "investigate.code": { provider: "codex-cli", model: "gpt-6-astra", effort: "medium" },
   "investigate.company": { provider: "claude-cli", model: "claude-sonnet-5-5", effort: "medium" },
   "investigate.media": { provider: "claude-cli", model: "claude-sonnet-5-5", effort: "medium" },
+  "media.read": { provider: "claude-cli", model: "claude-sonnet-5-5", effort: "medium" },
   "investigate.redflags": { provider: "claude-cli", model: "claude-sonnet-5-5", effort: "medium" },
   "company.product": { provider: "claude-cli", model: "claude-sonnet-5-5", effort: "medium" },
   "company.traction": { provider: "claude-cli", model: "claude-sonnet-5-5", effort: "medium" },

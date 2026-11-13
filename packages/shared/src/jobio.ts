@@ -216,6 +216,21 @@ export interface InvestigateInput {
   gaps: GapQuestion[];
 }
 
+export interface MediaReadInput {
+  founder: FounderBrief;
+  title: string;
+  kind: "talk" | "interview" | "call";
+  stretch: Array<{ startSec: number; endSec: number; text: string }>;
+}
+export const MediaEvidenceDraftSchema = z.object({
+  kind: z.enum(["talk", "interview", "call_transcript"]),
+  startSec: z.number(),
+  excerpt: z.string(),
+  claim: z.string(),
+});
+export const MediaReadOutputSchema = z.object({ evidence: z.array(MediaEvidenceDraftSchema), summary: z.string() });
+export type MediaReadOutput = z.infer<typeof MediaReadOutputSchema>;
+
 export const EvidenceDraftSchema = z.object({
   kind: z.enum(EVIDENCE_KINDS),
   url: nullableString,
@@ -622,6 +637,7 @@ export interface JobIO {
   "investigate.code": { input: InvestigateInput; output: InvestigateOutput };
   "investigate.company": { input: InvestigateInput; output: InvestigateOutput };
   "investigate.media": { input: InvestigateInput; output: InvestigateOutput };
+  "media.read": { input: MediaReadInput; output: MediaReadOutput };
   "investigate.redflags": { input: InvestigateInput; output: InvestigateOutput };
   "company.product": { input: CompanyResearchInput; output: CompanyResearchOutput };
   "company.traction": { input: CompanyResearchInput; output: CompanyResearchOutput };
@@ -653,6 +669,7 @@ export const MODEL_JOB_IDS = [
   "investigate.code",
   "investigate.company",
   "investigate.media",
+  "media.read",
   "investigate.redflags",
   "company.product",
   "company.traction",
@@ -680,6 +697,7 @@ export const JOB_OUTPUT_SCHEMAS = {
   "investigate.code": InvestigateOutputSchema,
   "investigate.company": InvestigateOutputSchema,
   "investigate.media": InvestigateOutputSchema,
+  "media.read": MediaReadOutputSchema,
   "investigate.redflags": InvestigateOutputSchema,
   "company.product": CompanyResearchOutputSchema,
   "company.traction": CompanyResearchOutputSchema,

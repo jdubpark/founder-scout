@@ -66,6 +66,7 @@ const JOB_SHORT: Record<JobId, string> = {
   "investigate.code": "Code",
   "investigate.company": "Role",
   "investigate.media": "Talks",
+  "media.read": "Recording reader",
   "investigate.redflags": "Risks",
   "company.product": "Product",
   "company.traction": "Traction",

@@ -29,6 +29,8 @@ import {
   type OutreachAction,
   type OutreachStatus,
   type ProfileLinks,
+  type Recording,
+  type RecordingStatus,
   type QuoteStatus,
   type Run,
   type Settings,
@@ -441,6 +443,37 @@ export class SqliteStore implements Store {
       saveFounderLinks(this.db, updated);
       return updated;
     });
+  }
+
+  insertRecording(recording: Recording): void {
+    this.db.prepare(`INSERT INTO recordings (id, swarm_id, founder_id, status, created_at, updated_at, record)
+      VALUES (?, ?, ?, ?, ?, ?, ?)`).run(recording.id, recording.swarmId, recording.founderId,
+      recording.status, recording.createdAt, recording.updatedAt, serialize(recording));
+  }
+
+  getRecording(id: string): Recording | null {
+    return parse(this.db.prepare("SELECT record FROM recordings WHERE id = ?").get(id) as RecordRow | undefined);
+  }
+
+  updateRecording(id: string, patch: Partial<Pick<Recording, "status" | "detail" | "durationSec" | "transcript" | "updatedAt">>): Recording {
+    return this.transaction(() => {
+      const current = this.getRecording(id);
+      if (!current) throw missing("Recording", id);
+      const updated = { ...current, ...patch };
+      this.db.prepare("UPDATE recordings SET status = ?, updated_at = ?, record = ? WHERE id = ?")
+        .run(updated.status, updated.updatedAt, serialize(updated), id);
+      return updated;
+    });
+  }
+
+  listRecordingsByFounder(founderId: string): Recording[] {
+    return rowRecords(this.db.prepare("SELECT record FROM recordings WHERE founder_id = ? ORDER BY created_at, id")
+      .all(founderId) as RecordRow[]);
+  }
+
+  listRecordingsByStatus(swarmId: string, status: RecordingStatus): Recording[] {
+    return rowRecords(this.db.prepare("SELECT record FROM recordings WHERE swarm_id = ? AND status = ? ORDER BY created_at, id")
+      .all(swarmId, status) as RecordRow[]);
   }
 
   findFounderByLinks(swarmId: string, links: ProfileLinks): Founder | null {

@@ -8,6 +8,7 @@ import {
   groundJudgments,
   latestCalls,
   numberParam,
+  onPage,
   reasonLabel,
   scoreFounder,
   stableId,
@@ -29,11 +30,13 @@ import type {
   InvestigateInput,
   JobId,
   Lead,
+  MediaReadInput,
   ModelJobId,
   ProfileLinks,
   ProfileUpdate,
   RawItem,
   RepoRef,
+  Recording,
   ScoutInput,
   ScreenInput,
   SourceId,
@@ -942,6 +945,87 @@ async function runInvestigate(runtime: EngineRuntime, assessmentCandidates: Set<
   });
 }
 
+async function runMedia(runtime: EngineRuntime, assessmentCandidates: Set<string>): Promise<void> {
+  if (!booleanParam("media.enabled", runtime.resolve(null, "media.enabled"), runtime.config)) return;
+  const transcriber = runtime.brain === "sim" ? runtime.deps.transcriber?.sim : runtime.deps.transcriber?.live;
+  if (!transcriber) return;
+  const maxSeconds = numberParam("media.max_minutes_per_run", runtime.resolve(null, "media.max_minutes_per_run"), runtime.config) * 60;
+  let usedSeconds = 0;
+  const readAgent = runtime.agents.find((agent) => agent.jobId === "media.read");
+  if (!readAgent || readAgent.status === "paused") return;
+  const queued = runtime.deps.store.listRecordingsByStatus(runtime.swarm.id, "queued");
+  for (const recording of queued) {
+    if (runtime.stopped() || usedSeconds >= maxSeconds) break;
+    runtime.deps.store.updateRecording(recording.id, { status: "transcribing", detail: "", updatedAt: runtime.now().toISOString() });
+    let filePath: string | null = null;
+    try {
+      const founder = runtime.deps.store.getFounder(recording.founderId);
+      if (!founder || founder.swarmId !== runtime.swarm.id) throw new Error("The recording founder is unavailable.");
+      let transcript: { text: string; segments: Array<{ startSec: number; endSec: number; text: string }>; durationSec: number; model: string; costUsd: number | null };
+      if (runtime.brain === "sim" && founder.simId) {
+        const text = runtime.deps.simWorld.transcript(founder.simId, "call_founder", founder.name);
+        transcript = { text, segments: [{ startSec: 0, endSec: 180, text }], durationSec: 180, model: "simulated", costUsd: null };
+      } else {
+        if (!recording.sourceUrl || !runtime.deps.media) throw new Error("This recording has no fetchable file address.");
+        const fetched = await runtime.deps.media.fetch(recording.sourceUrl, runtime.deps.dataDir ?? "data", { signal: runtime.signal });
+        if ("refused" in fetched) {
+          runtime.deps.store.updateRecording(recording.id, { status: "refused", detail: fetched.refused.slice(0, 240), updatedAt: runtime.now().toISOString() });
+          continue;
+        }
+        filePath = fetched.path;
+        transcript = await transcriber.transcribe(filePath, { signal: runtime.signal });
+      }
+      if (usedSeconds + transcript.durationSec > maxSeconds) {
+        runtime.deps.store.updateRecording(recording.id, { status: "queued", detail: "", updatedAt: runtime.now().toISOString() });
+        break;
+      }
+      usedSeconds += transcript.durationSec;
+      runtime.deps.store.updateRecording(recording.id, {
+        status: "transcribing", detail: "", durationSec: transcript.durationSec,
+        transcript: { text: transcript.text, segments: transcript.segments, model: transcript.model }, updatedAt: runtime.now().toISOString(),
+      });
+      const spans: Array<Array<{ startSec: number; endSec: number; text: string }>> = [];
+      let span: Array<{ startSec: number; endSec: number; text: string }> = [];
+      let spanLength = 0;
+      for (const segment of transcript.segments) {
+        if (span.length && spanLength + segment.text.length > 4000) { spans.push(span); span = []; spanLength = 0; }
+        span.push(segment);
+        spanLength += segment.text.length;
+      }
+      if (span.length) spans.push(span);
+      for (let index = 0; index < spans.length; index++) {
+        if (runtime.stopped()) break;
+        const stretch = spans[index]!;
+        const input: MediaReadInput = { founder: founderBrief(runtime, founder), title: recording.title, kind: recording.kind, stretch };
+        const task = await runtime.runJob({ agent: readAgent, stage: "investigate", jobId: "media.read", input, founderId: founder.id, routeKey: `${recording.id}:${index}` });
+        if (!task?.output) continue;
+        const fullText = stretch.map((segment) => segment.text).join(" ");
+        const drafts = task.output.evidence.filter((item) => onPage(fullText, item.excerpt));
+        const evidenceDrafts: EvidenceDraft[] = drafts.map((item) => ({
+          kind: item.kind,
+          url: `${recording.sourceUrl ?? `recording:${recording.id}`}#t=${Math.floor(stretch.find((segment) => onPage(segment.text, item.excerpt))?.startSec ?? stretch[0]?.startSec ?? 0)}`,
+          title: recording.title,
+          excerpt: item.excerpt,
+          claim: item.claim,
+          publishedAt: null,
+        }));
+        addEvidence(runtime, founder.id, task.task.id, "web", evidenceDrafts);
+        for (const draft of evidenceDrafts) {
+          const hash = hashEvidence("web", draft.url, draft.excerpt);
+          const item = runtime.deps.store.listEvidence(founder.id).find((evidence) => evidence.hash === hash);
+          if (item) runtime.deps.store.setQuote(item.id, "found");
+        }
+      }
+      if (runtime.stopped()) break;
+      runtime.deps.store.updateRecording(recording.id, { status: "ready", detail: "", updatedAt: runtime.now().toISOString() });
+      assessmentCandidates.add(founder.id);
+    } catch (error) {
+      const detail = (error instanceof Error ? error.message : String(error)).replace(/\s+/gu, " ").slice(0, 240) || "Transcription failed.";
+      runtime.deps.store.updateRecording(recording.id, { status: "failed", detail, updatedAt: runtime.now().toISOString() });
+    }
+  }
+}
+
 async function runVerify(runtime: EngineRuntime, assessmentCandidates: Set<string>): Promise<void> {
   runtime.setStage("verify");
   const agent = runtime.agents.find((candidate) => candidate.jobId === "verify.claims");
@@ -954,12 +1038,12 @@ async function runVerify(runtime: EngineRuntime, assessmentCandidates: Set<strin
   await forEachConcurrent(founders, runtime.concurrency, runtime.stopped, async (founder) => {
     if (runtime.stopped()) return;
     let evidence = runtime.deps.store.listEvidence(founder.id, { verifications: ["unverified"] })
-      .filter((item) => item.kind !== "call_transcript");
+      .filter((item) => item.kind !== "call_transcript" || item.url?.includes("#t=") === true);
     if (evidence.length === 0) return;
 
     if (runtime.deps.quotes && runtime.run.sources === "live" && quoteCheckEnabled) {
       const eligible = evidence.filter((item) => {
-        if (item.source !== "web" || item.kind === "code_review" || !item.url) return false;
+        if (item.source !== "web" || item.kind === "code_review" || !item.url || item.url.includes("#t=")) return false;
         try {
           const protocol = new URL(item.url).protocol;
           return protocol === "http:" || protocol === "https:";
@@ -1185,6 +1269,8 @@ export async function runPipelineStages(runtime: EngineRuntime): Promise<void> {
   await runScreen(runtime);
   if (runtime.stopped()) return;
   await runInvestigate(runtime, assessmentCandidates);
+  if (runtime.stopped()) return;
+  await runMedia(runtime, assessmentCandidates);
   if (runtime.stopped()) return;
   // Companies: match them to founders, then research the ones worth a look. Their evidence is
   // filed under a founder, so the fact-check below covers it with everything else.

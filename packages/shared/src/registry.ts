@@ -299,6 +299,15 @@ export const JOBS = [
       "Finds talks, podcasts and interviews and reads the transcripts for clarity of thought and depth of insight.",
   },
   {
+    id: "media.read",
+    classId: "investigator",
+    label: "Recording reader",
+    kind: "structured",
+    source: null,
+    enabled: true,
+    description: "Reads a short transcript stretch and extracts exact, sourced evidence.",
+  },
+  {
     id: "investigate.redflags",
     classId: "investigator",
     label: "Risk checker",

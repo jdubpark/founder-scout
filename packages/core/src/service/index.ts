@@ -19,6 +19,7 @@ import { ServiceError } from "../contracts";
 import { openStore } from "../db";
 import { createSimRepoFinder, createSimSources, createSimWorld } from "../sim";
 import { createLivePeopleLookup, createLiveRepoFinder, createLiveSources, createQuoteChecker, createLiveWebAccess, createModelSearchEngine, createSimWebAccess, looksLikeFounder, parseConnectionsCsv } from "../sources";
+import { createLivePeopleLookup, createLiveRepoFinder, createLiveSources, createQuoteChecker, createLiveWebAccess, createSimWebAccess, createLiveTranscriber, createMediaFetcher, looksLikeFounder, parseConnectionsCsv } from "../sources";
 import { createProviderRegistry } from "../providers";
 import { createJobRegistry, createExecuteJob, findSensitive, loadSkillLibrary, redactSensitive } from "../jobs";
 import { createRunController } from "../engine";
@@ -1305,7 +1306,8 @@ export function createApp(options: AppOptions): App {
   const skillLibrary = loadSkillLibrary(join(dirname(fileURLToPath(import.meta.url)), "../../../../skills"));
   const jobs = createJobRegistry(skillLibrary);
   const executeJob = createExecuteJob({ jobs, providers });
-  const runs = createRunController({ store, jobs, executeJob, quotes: createQuoteChecker(), people: createLivePeopleLookup(options.env ?? process.env), sources: { sim: simSources, live: liveSources }, repos: { sim: simRepos, live: liveRepos }, web, defaultPools, simWorld: world, fundName: options.fundName ?? "the fund", now: options.now, logger: options.logger });
+  const env = options.env ?? process.env;
+  const runs = createRunController({ store, jobs, executeJob, quotes: createQuoteChecker(), people: createLivePeopleLookup(env), transcriber: { sim: { async status() { return { configured: true, detail: "Simulated transcription is ready." }; }, async transcribe() { throw new Error("Simulated transcription requires a simulated recording."); } }, live: createLiveTranscriber(env) }, media: createMediaFetcher({ env }), dataDir: options.dataDir, sources: { sim: simSources, live: liveSources }, repos: { sim: simRepos, live: liveRepos }, web, defaultPools, simWorld: world, fundName: options.fundName ?? "the fund", now: options.now, logger: options.logger });
   const evals = createEvalService({
     store,
     jobs,

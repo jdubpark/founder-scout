@@ -23,6 +23,7 @@ import {
   type JobOutput,
   type OutreachAction,
   type Run,
+  type Recording,
   type Swarm,
   type SwarmConfig,
   type TaskRun,
@@ -33,7 +34,7 @@ import { createExecuteJob, createJobRegistry } from "../jobs";
 import { openStore } from "../db";
 import { createSimRepoFinder, createSimSources, createSimWorld } from "../sim";
 import { ProviderError } from "../contracts";
-import type { ExecuteJob, JobContext, PeopleLookup, PersonKey, PersonRecord, ProviderRegistry, QuoteChecker, RepoFinder, SimFounder, SimWorld, SourceRegistry } from "../contracts";
+import type { EngineDeps, ExecuteJob, JobContext, PeopleLookup, PersonKey, PersonRecord, ProviderRegistry, QuoteChecker, RepoFinder, SimFounder, SimWorld, SourceRegistry } from "../contracts";
 import { createRunController } from "./index";
 
 const NOW = new Date("2026-11-12T18:00:00.000Z");
@@ -241,6 +242,7 @@ interface HarnessOptions {
   people?: PeopleLookup;
   providerError?: () => never;
   wrapExecuteJob?: (delegate: ExecuteJob) => ExecuteJob;
+  transcriber?: EngineDeps["transcriber"];
 }
 
 function makeHarness(options: HarnessOptions = {}) {
@@ -282,6 +284,7 @@ function makeHarness(options: HarnessOptions = {}) {
     simWorld: world,
     quotes: options.quotes,
     people: options.people,
+    transcriber: options.transcriber,
     fundName: "Northstar Ventures",
     now: () => new Date(NOW),
     sleep: async () => undefined,
@@ -475,6 +478,46 @@ async function runThreeDays() {
 }
 
 describe("run engine", () => {
+  it("transcribes queued simulated recordings and keeps only transcript quotes", async () => {
+    const world = createSimWorld({ seed: 713, founders: 2, days: 2 });
+    const founder = makeFounder(world.founders()[0]!, "fnd_media_stage");
+    const recording: Recording = {
+      id: "rec_media_stage", swarmId: SWARM_ID, founderId: founder.id, kind: "talk", title: "Founder talk",
+      sourceUrl: null, addedBy: "person", status: "queued", detail: "", durationSec: null, transcript: null,
+      createdAt: NOW.toISOString(), updatedAt: NOW.toISOString(),
+    };
+    const harness = makeHarness({
+      simWorld: world,
+      agentJobs: ["media.read"],
+      transcriber: {
+        sim: { async status() { return { configured: true, detail: "sim" }; }, async transcribe() { throw new Error("stage should use SimWorld"); } },
+        live: null,
+      },
+      wrapExecuteJob: (delegate) => async (jobId, input, context, options) => {
+        const result = await delegate(jobId, input, context, options);
+        if (jobId === "media.read") {
+          const output = result.output as JobOutput<"media.read">;
+          result.output = { ...output, evidence: [...output.evidence, { kind: "talk", startSec: 4, excerpt: "Words that are not in the recording.", claim: "A fabricated claim." }] } as JobOutput<typeof jobId>;
+        }
+        return result;
+      },
+    });
+    harness.store.insertFounder(founder);
+    harness.store.insertRecording(recording);
+
+    const started = await harness.controller.start({ swarmId: SWARM_ID, trigger: "manual", brain: "sim", sources: "live" });
+    const run = await harness.controller.wait(started.id);
+    const storedRecording = harness.store.getRecording(recording.id)!;
+    const evidence = harness.store.listEvidence(founder.id);
+
+    expect(run.status).toBe("succeeded");
+    expect(storedRecording.status).toBe("ready");
+    expect(storedRecording.transcript?.text).toBeTruthy();
+    expect(evidence.length).toBeGreaterThan(0);
+    expect(evidence.every((item) => storedRecording.transcript!.text.includes(item.excerpt))).toBe(true);
+    expect(evidence.every((item) => item.quote === "found" && item.url?.includes("#t="))).toBe(true);
+  });
+
   it("routes simulated investigation tasks to stable pool members unless a person pins the model", async () => {
     const world = createSimWorld({ seed: 7031, founders: 12, days: 2 });
     const members = [

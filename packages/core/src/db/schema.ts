@@ -142,6 +142,16 @@ const migrations: readonly Migration[] = [
       CREATE INDEX leads_by_swarm_discovered ON leads(swarm_id, discovered_at DESC, id DESC);
     `);
   },
+  (db) => {
+    db.exec(`
+      CREATE TABLE recordings (
+        id TEXT PRIMARY KEY, swarm_id TEXT NOT NULL, founder_id TEXT NOT NULL,
+        status TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, record TEXT NOT NULL
+      );
+      CREATE INDEX recordings_by_founder ON recordings(founder_id, created_at);
+      CREATE INDEX recordings_by_status ON recordings(swarm_id, status, created_at);
+    `);
+  },
 ];
 
 export function migrate(db: Database.Database): void {

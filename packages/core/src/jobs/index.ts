@@ -32,6 +32,8 @@ import type {
   JobInput,
   JobOutput,
   MemoInput,
+  MediaReadInput,
+  MediaReadOutput,
   MemoOutput,
   ModelJobId,
   OutreachPlanInput,
@@ -205,6 +207,7 @@ const PIPELINE_ROLES: Record<ModelJobId, { role: string; contribution: string }>
   "investigate.code": { role: "a read-only code reviewer", contribution: "assess the founder's own technical work from repository files" },
   "investigate.company": { role: "an investigator of the founder's role", contribution: "establish this person's own part in the company: their role, what they built, their insight and their ambition" },
   "investigate.media": { role: "a talks and interviews analyst", contribution: "find public talks and assess what the founder actually explains" },
+  "media.read": { role: "a recording reader", contribution: "extract sourced evidence from exact words in a recording transcript" },
   "investigate.redflags": { role: "a professional risk checker", contribution: "check material public claims against reliable records" },
   "verify.claims": { role: "an independent fact-checker", contribution: "check whether each collected source supports its claim and concerns the right person" },
   "assess.judgments": { role: "a rubric analyst", contribution: "answer the investment rubric from verified evidence" },
@@ -352,6 +355,17 @@ function buildPromptFor(id: ModelJobId, input: AnyInput, ctx: JobContext): { sys
     case "hunt.look":
     case "hunt.sift":
       throw new Error("Hunt jobs must use their registered job definitions.");
+    case "media.read": {
+      const value = input as MediaReadInput;
+      prompt = [
+        "Task: read this recording stretch for statements that show the founder's insight, craft, or ambition. Return only evidence with the speaker's exact words from the transcript. Do not infer missing words. Use one or two short summary lines.",
+        safeTag("founder", renderFounder(value.founder)),
+        safeTag("recording", JSON.stringify({ title: value.title, kind: value.kind })),
+        safeTag("transcript_with_time_marks", value.stretch.map((segment) => `[${segment.startSec}-${segment.endSec}] ${segment.text}`).join("\n")),
+      ].join("\n\n");
+      if (ctx.steeringBlock) prompt += "\n\n" + ctx.steeringBlock;
+      break;
+    }
     case "scout.hackernews":
     case "scout.github":
     case "scout.research":
@@ -501,6 +515,7 @@ function buildPromptFor(id: ModelJobId, input: AnyInput, ctx: JobContext): { sys
 }
 
 function summarizeInputFor(id: ModelJobId, input: AnyInput): string {
+  if (id === "media.read") return "Read a transcript stretch for " + (input as MediaReadInput).founder.name + ".";
   if (id.startsWith("scout.")) {
     const scout = input as ScoutInput;
     return "Review " + scout.items.length + " " + getJob(id).source + " items for founders.";
@@ -526,6 +541,7 @@ function summarizeInputFor(id: ModelJobId, input: AnyInput): string {
 }
 
 function countItemsFor(id: ModelJobId, output: AnyOutput): number {
+  if (id === "media.read") return (output as MediaReadOutput).evidence.length;
   if (id.startsWith("scout.")) return (output as ScoutOutput).leads.length;
   if (id === "screen.fit" || id === "assess.memo") return 1;
   if (id.startsWith("investigate.")) return (output as InvestigateOutput).evidence.length;
@@ -538,6 +554,7 @@ function countItemsFor(id: ModelJobId, output: AnyOutput): number {
 }
 
 function summarizeOutputFor(id: ModelJobId, output: AnyOutput): string {
+  if (id === "media.read") return "Extracted " + countItemsFor(id, output) + " evidence item(s) from the recording.";
   const count = countItemsFor(id, output);
   if (id.startsWith("scout.")) return "Returned " + count + " founder lead(s).";
   if (id === "screen.fit") return "Estimated thesis fit at " + Math.round((output as ScreenOutput).fit * 100) + "%.";
@@ -997,6 +1014,11 @@ function simulateDebrief(input: DebriefInput, ctx: JobContext): DebriefOutput {
 }
 
 function simulateFor(id: ModelJobId, input: AnyInput, ctx: JobContext): AnyOutput {
+  if (id === "media.read") {
+    const media = input as MediaReadInput;
+    const segment = media.stretch.find((part) => part.text.trim());
+    return { evidence: segment ? [{ kind: media.kind === "call" ? "call_transcript" : media.kind, startSec: segment.startSec, excerpt: segment.text.trim(), claim: `${media.founder.name} discusses their work in a recording.` }] : [], summary: segment ? "The recording discusses the founder's work.\nOne transcript passage was reviewed." : "No useful statement appears in this stretch." } as AnyOutput;
+  }
   if (id.startsWith("scout.")) return simulateScout(input as ScoutInput, ctx, id);
   if (id === "screen.fit") return simulateScreen(input as ScreenInput, ctx);
   if (id.startsWith("investigate.")) return simulateInvestigation(id, input as InvestigateInput, ctx);
@@ -1034,6 +1056,16 @@ function sanitizeEvidenceDrafts(items: EvidenceDraft[]): EvidenceDraft[] {
 }
 
 function normalizeFor(id: ModelJobId, input: AnyInput, output: AnyOutput): AnyOutput {
+  if (id === "media.read") {
+    const media = input as MediaReadInput;
+    const raw = output as MediaReadOutput;
+    const fullText = media.stretch.map((item) => item.text).join(" ");
+    return {
+      evidence: raw.evidence.filter((item) => item.excerpt.trim() && fullText.includes(item.excerpt.trim()))
+        .map((item) => ({ ...item, excerpt: item.excerpt.trim().slice(0, 1200), claim: item.claim.trim(), startSec: Math.max(0, item.startSec) })),
+      summary: raw.summary.trim().split(/\n/u).slice(0, 2).join("\n"),
+    } as AnyOutput;
+  }
   if (id.startsWith("scout.")) {
     const inputItems = new Set((input as ScoutInput).items.map((item) => item.ref));
     const leads = (output as ScoutOutput).leads
