@@ -518,6 +518,39 @@ export interface ApiClient {
   promoteEvalVariant(id: string, input: PromoteVariantInput): Promise<SwarmConfig>;
 }
 
+/* -------------------------------- Demo ----------------------------- */
+
+/**
+ * A frozen copy of everything the dashboard reads, produced from a simulated
+ * run. The dashboard's demo build ships one of these instead of calling a
+ * server, so the whole interface can be shared as a single static page.
+ */
+export interface DemoSnapshot {
+  generatedAt: string;
+  /** Shown on every page, for example "Simulated founders. No real people or companies." */
+  note: string;
+  settings: SettingsDTO;
+  swarms: Swarm[];
+  /** Keyed by swarm id. */
+  overview: Record<string, OverviewDTO>;
+  /** Keyed by swarm id. */
+  tree: Record<string, SwarmTreeDTO>;
+  directives: DirectiveRow[];
+  /** Every non-archived founder row per swarm id, unfiltered. */
+  founders: Record<string, FounderRow[]>;
+  /** Keyed by founder id. May cover only the most interesting founders. */
+  founderDetails: Record<string, FounderDetailDTO>;
+  /** Keyed by swarm id. */
+  outreach: Record<string, OutreachRow[]>;
+  /** Keyed by swarm id, newest first. */
+  runs: Record<string, Run[]>;
+  /** Keyed by run id. */
+  runDetails: Record<string, RunDetailDTO>;
+  /** Keyed by task id, with traces. May cover only some tasks. */
+  tasks: Record<string, TaskRun>;
+  evalFlows: EvalFlowDTO[];
+}
+
 /** Error body every non-2xx API response uses. */
 export interface ApiErrorBody {
   error: string;

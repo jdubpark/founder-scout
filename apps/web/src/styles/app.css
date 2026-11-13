@@ -1,0 +1,250 @@
+/*
+ * Layout concept: a committed engraving-green rail, a pale safety-paper ground,
+ * hairline-ruled panels with square corners, and dense tabular figures.
+ * Colour has one meaning each: green operates and selects, gold marks
+ * "surfaced", red is only ever a caution, bistre is the watchlist.
+ */
+@import "tailwindcss";
+@import "@fontsource-variable/libre-franklin/wght.css";
+@import "@fontsource-variable/libre-franklin/wght-italic.css";
+@import "@fontsource/libre-caslon-text/latin-400.css";
+@import "@fontsource/libre-caslon-text/latin-700.css";
+
+@theme {
+  /* Only these tokens exist. The default Tailwind palette, radii and shadows are removed on purpose. */
+  --color-*: initial;
+  --radius-*: initial;
+  --shadow-*: initial;
+  --text-*: initial;
+  --font-*: initial;
+
+  --font-sans: "Libre Franklin Variable", "Franklin Gothic Medium", "Helvetica Neue", Arial, sans-serif;
+  --font-serif: "Libre Caslon Text", "Big Caslon", "Book Antiqua", Palatino, Georgia, serif;
+  --font-mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+
+  /* Paper */
+  --color-ground: oklch(0.966 0.006 148);
+  --color-surface: oklch(0.994 0.002 148);
+  --color-sunk: oklch(0.94 0.009 150);
+  --color-rule: oklch(0.872 0.012 152);
+  --color-rule-strong: oklch(0.70 0.02 154);
+
+  /* Ink */
+  --color-ink: oklch(0.225 0.028 162);
+  --color-ink-2: oklch(0.385 0.026 160);
+  --color-ink-3: oklch(0.468 0.022 158);
+
+  /* Engraving green: the rail, primary actions, selection, the lead data series */
+  --color-green: oklch(0.318 0.066 162);
+  --color-green-deep: oklch(0.262 0.056 164);
+  --color-green-2: oklch(0.405 0.092 160);
+  --color-green-3: oklch(0.56 0.105 158);
+  --color-green-tint: oklch(0.928 0.034 158);
+  --color-on-green: oklch(0.955 0.018 150);
+  --color-on-green-2: oklch(0.80 0.045 154);
+
+  /* Seal gold: reserved for "surfaced" */
+  --color-gold: oklch(0.745 0.128 84);
+  --color-gold-ink: oklch(0.468 0.096 78);
+  --color-gold-tint: oklch(0.945 0.045 90);
+
+  /* Legend red: reserved for cautions (simulated, unverified, flagged, failed) */
+  --color-red: oklch(0.478 0.178 27);
+  --color-red-tint: oklch(0.948 0.03 25);
+
+  /* Bistre: the watchlist and the second data series */
+  --color-bistre: oklch(0.452 0.072 58);
+  --color-bistre-tint: oklch(0.94 0.028 70);
+
+  /* Navy: the third data series only */
+  --color-navy: oklch(0.402 0.086 256);
+
+  --color-white: oklch(1 0 0);
+  --color-transparent: transparent;
+  --color-current: currentColor;
+
+  /* Fixed rem scale, ratio about 1.17 */
+  --text-2xs: 0.6875rem;
+  --text-2xs--line-height: 1rem;
+  --text-xs: 0.75rem;
+  --text-xs--line-height: 1.0625rem;
+  --text-sm: 0.8125rem;
+  --text-sm--line-height: 1.1875rem;
+  --text-base: 0.90625rem;
+  --text-base--line-height: 1.375rem;
+  --text-md: 1rem;
+  --text-md--line-height: 1.5rem;
+  --text-lg: 1.125rem;
+  --text-lg--line-height: 1.5rem;
+  --text-xl: 1.3125rem;
+  --text-xl--line-height: 1.625rem;
+  --text-2xl: 1.5625rem;
+  --text-2xl--line-height: 1.875rem;
+  --text-3xl: 1.875rem;
+  --text-3xl--line-height: 2.125rem;
+
+  --radius-none: 0;
+  --radius-sm: 2px;
+  --radius-full: 9999px;
+
+  /* The only elevation: things that float above the page. Panels use rules, never shadows. */
+  --shadow-overlay: 0 18px 40px -12px oklch(0.2 0.04 162 / 0.34), 0 3px 8px -2px oklch(0.2 0.04 162 / 0.18);
+
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+@layer base {
+  html {
+    height: 100%;
+    font-family: var(--font-sans);
+    font-size: 16px;
+    -webkit-text-size-adjust: 100%;
+    text-rendering: optimizeLegibility;
+    -webkit-font-smoothing: antialiased;
+    font-variant-numeric: lining-nums;
+    scrollbar-color: var(--color-rule-strong) transparent;
+  }
+
+  body {
+    min-height: 100%;
+    margin: 0;
+    background: var(--color-ground);
+    color: var(--color-ink);
+    font-size: var(--text-base);
+    line-height: var(--text-base--line-height);
+    caret-color: var(--color-green-2);
+    accent-color: var(--color-green-2);
+  }
+
+  #root {
+    min-height: 100dvh;
+  }
+
+  ::selection {
+    background: var(--color-green-tint);
+    color: var(--color-ink);
+  }
+
+  :focus-visible {
+    outline: 2px solid var(--color-green-2);
+    outline-offset: 2px;
+  }
+
+  a {
+    color: inherit;
+    text-decoration-thickness: 1px;
+    text-underline-offset: 0.2em;
+  }
+
+  h1,
+  h2,
+  h3,
+  h4 {
+    margin: 0;
+    font-weight: 600;
+    text-wrap: balance;
+  }
+
+  p {
+    margin: 0;
+  }
+
+  button,
+  input,
+  select,
+  textarea {
+    font: inherit;
+    color: inherit;
+  }
+
+  table {
+    border-collapse: collapse;
+    font-variant-numeric: tabular-nums lining-nums;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.001ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.001ms !important;
+    }
+  }
+}
+
+@layer components {
+  /* Small capitals set in the gothic, for table heads and field labels. */
+  .label-caps {
+    font-size: var(--text-2xs);
+    line-height: var(--text-2xs--line-height);
+    font-weight: 600;
+    letter-spacing: 0.07em;
+    text-transform: uppercase;
+    color: var(--color-ink-3);
+  }
+
+  /* Caslon capitals, the voice of names and headings. Never for controls or data. */
+  .name-caps {
+    font-family: var(--font-serif);
+    font-weight: 400;
+    letter-spacing: 0.045em;
+    text-transform: uppercase;
+  }
+
+  .figure {
+    font-variant-numeric: tabular-nums lining-nums;
+    font-feature-settings: "tnum" 1, "lnum" 1;
+  }
+
+  .prose-measure {
+    max-width: 68ch;
+  }
+}
+
+@utility on-rail {
+  /* Focus ring that stays visible on the green rail. */
+  &:focus-visible {
+    outline-color: var(--color-gold);
+  }
+}
+
+@keyframes mark-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.35;
+  }
+}
+
+@keyframes sheet-in {
+  from {
+    transform: translateX(16px);
+    opacity: 0;
+  }
+  to {
+    transform: translateX(0);
+    opacity: 1;
+  }
+}
+
+@keyframes fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes skeleton {
+  0%,
+  100% {
+    opacity: 0.55;
+  }
+  50% {
+    opacity: 1;
+  }
+}

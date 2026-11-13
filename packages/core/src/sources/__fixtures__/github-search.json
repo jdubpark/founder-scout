@@ -1,0 +1,78 @@
+{
+  "total_count": 3509,
+  "incomplete_results": false,
+  "items": [
+    {
+      "full_name": "example-org/craft-anything",
+      "html_url": "https://github.com/example-org/craft-anything",
+      "description": "Craft Anything: understand how any software works, and craft your own.",
+      "stargazers_count": 30232,
+      "forks_count": 6177,
+      "language": "Rust",
+      "created_at": "2026-10-31T14:50:00Z",
+      "pushed_at": "2026-11-12T19:50:17Z",
+      "topics": [],
+      "archived": false,
+      "fork": false,
+      "disabled": false,
+      "private": false,
+      "owner": {
+        "login": "example-org",
+        "html_url": "https://github.com/example-org",
+        "type": "Organization"
+      }
+    },
+    {
+      "full_name": "deepseek-ai/dsh-superagent-prototype",
+      "html_url": "https://github.com/deepseek-ai/dsh-superagent-prototype",
+      "description": "Towards a More Autonomous Agent System",
+      "stargazers_count": 22800,
+      "forks_count": 2774,
+      "language": "TypeScript",
+      "created_at": "2026-10-31T09:32:46Z",
+      "pushed_at": "2026-11-03T09:29:14Z",
+      "topics": [],
+      "archived": false,
+      "fork": false,
+      "disabled": false,
+      "private": false,
+      "owner": {
+        "login": "deepseek-ai",
+        "html_url": "https://github.com/deepseek-ai",
+        "type": "Organization"
+      }
+    },
+    {
+      "full_name": "maker-six/dsh-Go",
+      "html_url": "https://github.com/maker-six/dsh-Go",
+      "description": "dsh-go \u2014 DeepSeek Harness \u88c5\u8fdb\u53e3\u888b\uff1a\u624b\u673a\u672c\u673a\u8fd0\u884c\uff0c\u4e5f\u80fd\u9065\u63a7\u4f60\u7684\u7535\u8111\u3002",
+      "stargazers_count": 21008,
+      "forks_count": 961,
+      "language": "Dart",
+      "created_at": "2026-10-25T08:09:52Z",
+      "pushed_at": "2026-11-13T04:34:27Z",
+      "topics": [
+        "ai-agent",
+        "android",
+        "android-app",
+        "coding-agent",
+        "deepseek",
+        "deepseek-harness",
+        "dsh",
+        "dsh-plugin",
+        "dsh-tui",
+        "flutter",
+        "llm"
+      ],
+      "archived": false,
+      "fork": false,
+      "disabled": false,
+      "private": false,
+      "owner": {
+        "login": "maker-six",
+        "html_url": "https://github.com/maker-six",
+        "type": "User"
+      }
+    }
+  ]
+}

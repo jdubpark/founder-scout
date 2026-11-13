@@ -1,0 +1,51 @@
+{
+  "hits": [
+    {
+      "author": "maker-one",
+      "created_at": "2026-11-13T04:27:40Z",
+      "created_at_i": 1794544060,
+      "num_comments": 0,
+      "objectID": "50478329",
+      "points": 1,
+      "title": "Show HN: I built a numbers game for my kids, with no tracking in the app",
+      "url": "https://example.test/product",
+      "_tags": [
+        "story",
+        "show_hn"
+      ]
+    },
+    {
+      "author": "maker-two",
+      "created_at": "2026-11-13T04:01:34Z",
+      "created_at_i": 1794542494,
+      "num_comments": 0,
+      "objectID": "50478114",
+      "points": 1,
+      "title": "Show HN: Real-time inventory of natural stone slabs in US",
+      "url": "https://example.test/product",
+      "story_text": "We&#x27;re building a real-time inventory of natural stone, quartz, and porcelain slabs in the US.<p>This is for countertop fabricators, who need to know slabs, pricing, sizing etc. and expose this inventory to their customers.<p>We are building this for fabricators, homeowners, suppliers - up and down the supply chain.<p>The idea is to build it into existing agent directories, so fabricators can ask Muse&#x2F;Claude&#x2F;Chat and possibly transact (as pictures of slabs keep getting better) directly as well.<p>If anyone from the industry is interested in chatting (about this or anything related), let me know below!",
+      "_tags": [
+        "story",
+        "show_hn"
+      ]
+    },
+    {
+      "author": "maker-three",
+      "created_at": "2026-11-13T03:47:15Z",
+      "created_at_i": 1794541635,
+      "num_comments": 4,
+      "objectID": "50477993",
+      "points": 4,
+      "title": "Show HN: I built a Rick and Morty explainer video generator",
+      "url": "https://example.test/product",
+      "story_text": "&gt; paste any site or article or a script\n&gt; we turn it into a Rick and Morty sketch with dialogues, scenes, action and Rick and Morty of course\n&gt; click generate to turn the script into a storyboard you can review\n&gt; click generate to get a final video (this part is paid as it uses AI video under the hood)",
+      "_tags": [
+        "story",
+        "show_hn",
+        "front_page"
+      ]
+    }
+  ],
+  "nbHits": 2,
+  "page": 0
+}

@@ -7,4 +7,5 @@ export * from "./scoring";
 export * from "./domain";
 export * from "./jobio";
 export * from "./api";
+export * from "./steering-view";
 export * from "./ids";

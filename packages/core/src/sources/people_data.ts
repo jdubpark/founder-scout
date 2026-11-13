@@ -1,0 +1,42 @@
+/**
+ * Professional-profile data. There is deliberately no LinkedIn adapter: this
+ * system never logs in to or scrapes LinkedIn. Profile data may only come from
+ * a licensed vendor. Until one is connected, this adapter reports itself as
+ * not configured and fetches nothing.
+ *
+ * To add a vendor, implement ProfileDataVendor in one file and pass it to
+ * createPeopleDataAdapter in index.ts.
+ */
+
+import type { SourceAdapter, SourceFetchRequest, SourceFetchResult } from "../contracts";
+
+export const NOT_CONFIGURED_DETAIL =
+  "Not configured. A licensed professional-profile data vendor must be connected. The system never logs in to or scrapes LinkedIn.";
+
+export const NOT_CONFIGURED_ERROR =
+  "Professional-profile data is not configured. A licensed professional-profile data vendor must be connected. The system never logs in to or scrapes LinkedIn.";
+
+/** What a licensed vendor adapter implements. Same contract as a SourceAdapter, without the id. */
+export interface ProfileDataVendor {
+  /** Vendor name, for logs and status. Not a secret. */
+  readonly name: string;
+  /** Cheap readiness check. Must not call the vendor. */
+  status(): Promise<{ configured: boolean; detail: string }>;
+  /** Items newest first, at most req.limit, with a cursor that avoids repeats. */
+  fetch(req: SourceFetchRequest): Promise<SourceFetchResult>;
+}
+
+export function createPeopleDataAdapter(vendor: ProfileDataVendor | null = null): SourceAdapter {
+  return {
+    id: "people_data",
+
+    async status() {
+      return vendor ? vendor.status() : { configured: false, detail: NOT_CONFIGURED_DETAIL };
+    },
+
+    async fetch(req: SourceFetchRequest): Promise<SourceFetchResult> {
+      if (!vendor) throw new Error(NOT_CONFIGURED_ERROR);
+      return vendor.fetch(req);
+    },
+  };
+}

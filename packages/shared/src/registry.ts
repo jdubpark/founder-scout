@@ -399,14 +399,14 @@ export const PROVIDERS = [
     vendor: "deepseek",
     label: "DeepSeek API",
     capabilities: { structured: true, research: false, repoReview: false },
-    note: "OpenAI-compatible endpoint. Set DEEPSEEK_BASE_URL to a US-hosted endpoint for the open weights if required.",
+    note: "OpenAI-compatible endpoint. Point DEEPSEEK_BASE_URL at a US-hosted provider of the open weights when founder data must not leave the US.",
   },
   {
     id: "meta-api",
     vendor: "meta",
-    label: "Meta Llama API",
+    label: "Meta Model API",
     capabilities: { structured: true, research: false, repoReview: false },
-    note: "OpenAI-compatible endpoint, first-party or a hosted provider, set with LLAMA_BASE_URL.",
+    note: "Muse models through an OpenAI-compatible endpoint, first-party or a hosted provider, set with META_BASE_URL.",
   },
 ] as const satisfies ReadonlyArray<{
   id: string;

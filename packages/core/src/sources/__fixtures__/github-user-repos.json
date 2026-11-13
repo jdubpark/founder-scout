@@ -1,0 +1,82 @@
+[
+  {
+    "full_name": "octocat/Spoon-Knife",
+    "html_url": "https://github.com/octocat/Spoon-Knife",
+    "description": "This repo is for demonstration purposes only.",
+    "stargazers_count": 14201,
+    "forks_count": 161235,
+    "language": "HTML",
+    "created_at": "2011-01-27T19:30:43Z",
+    "pushed_at": "2024-08-21T15:25:42Z",
+    "topics": [],
+    "archived": false,
+    "fork": false,
+    "disabled": false,
+    "private": false,
+    "owner": {
+      "login": "octocat",
+      "html_url": "https://github.com/octocat",
+      "type": "User"
+    }
+  },
+  {
+    "full_name": "octocat/Hello-World",
+    "html_url": "https://github.com/octocat/Hello-World",
+    "description": "My first repository on GitHub!",
+    "stargazers_count": 3926,
+    "forks_count": 7506,
+    "language": null,
+    "created_at": "2011-01-26T19:01:12Z",
+    "pushed_at": "2024-08-20T23:54:42Z",
+    "topics": [],
+    "archived": false,
+    "fork": false,
+    "disabled": false,
+    "private": false,
+    "owner": {
+      "login": "octocat",
+      "html_url": "https://github.com/octocat",
+      "type": "User"
+    }
+  },
+  {
+    "full_name": "octocat/linguist",
+    "html_url": "https://github.com/octocat/linguist",
+    "description": "Language Savant. If your repository's language is being reported incorrectly, send us a pull request!",
+    "stargazers_count": 779,
+    "forks_count": 291,
+    "language": "Ruby",
+    "created_at": "2016-08-02T17:35:14Z",
+    "pushed_at": "2024-08-14T07:35:16Z",
+    "topics": [],
+    "archived": false,
+    "fork": true,
+    "disabled": false,
+    "private": false,
+    "owner": {
+      "login": "octocat",
+      "html_url": "https://github.com/octocat",
+      "type": "User"
+    }
+  },
+  {
+    "full_name": "octocat/octocat.github.io",
+    "html_url": "https://github.com/octocat/octocat.github.io",
+    "description": null,
+    "stargazers_count": 1206,
+    "forks_count": 608,
+    "language": "CSS",
+    "created_at": "2014-03-18T20:54:39Z",
+    "pushed_at": "2024-08-11T11:57:01Z",
+    "topics": [],
+    "archived": false,
+    "fork": false,
+    "disabled": false,
+    "private": false,
+    "owner": {
+      "login": "octocat",
+      "html_url": "https://github.com/octocat",
+      "type": "User"
+    }
+  }
+]
