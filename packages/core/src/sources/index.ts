@@ -23,6 +23,26 @@ export { looksLikeFounder, parseConnectionsCsv, type ParsedContact } from "./con
 export { sanitizeCheckout, type SanitizeResult } from "./sanitize";
 export { parseRepoUrl, parseGitHubLogin, type RepoFinderOptions } from "./repo-finder";
 export { SourceRateLimitError } from "./http";
+export {
+  collectLaunchPosts,
+  directoryOutcome,
+  fetchUnicornNames,
+  fetchYcDirectory,
+  firstLaunchEach,
+  labelPastCases,
+  parseLabelsCsv,
+  parseUnicornWikitext,
+  parseYcDirectory,
+  pastCasesFile,
+  readPastCases,
+  summarisePastCases,
+  writePastCases,
+  type CollectLaunchesOptions,
+  type DirectoryEntry,
+  type LabelResult,
+  type LabelSources,
+  type OutcomeLabel,
+} from "./past";
 
 /** Records a day from the vendor when PDL_RECORDS_PER_DAY is not set. Each record costs a credit. */
 export const DEFAULT_PDL_RECORDS_PER_DAY = 50;

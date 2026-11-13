@@ -36,6 +36,9 @@ import type {
   TaskRun,
   Thesis,
 } from "./domain";
+import type { ContaminationReport } from "./past";
+import type { MemberStats, PoolMember } from "./pools";
+import type { AssumptionsDTO } from "./assumptions";
 import type { ClassId, ClassMeta, JobId, JobMeta, ModelRoute, ProviderId, SourceId } from "./registry";
 import type { ParamValue } from "./params";
 import type { Decision } from "./scoring";
@@ -76,7 +79,8 @@ export interface SettingsDTO {
   nextRunAt: string | null;
 }
 
-export type SettingsPatch = Partial<Omit<Settings, "schedule">> & {
+export type SettingsPatch = Partial<Omit<Settings, "schedule" | "autopilot">> & {
+  autopilot?: Partial<Settings["autopilot"]>;
   schedule?: Partial<Settings["schedule"]>;
 };
 
@@ -229,6 +233,8 @@ export interface EffectiveSteeringDTO {
     directiveId: string;
     scopeLabel: string;
   }>;
+  /** Guidance the swarm wrote for itself for this job, from the config in use. Empty for other scopes. */
+  lessons?: string[];
 }
 
 /* ------------------------------ Founders --------------------------- */
@@ -513,6 +519,8 @@ export interface OverviewDTO {
   evalTrend: Array<{ variant: string; test: number }>;
   /** Partner yes and no calls: counts, how many surfaced founders still wait, and the common reasons. */
   calls: CallsSummary;
+  /** What the swarm last did to improve itself, if it has tried. */
+  coach?: CoachReport | null;
   recentAudit: AuditEntry[];
 }
 
@@ -558,6 +566,99 @@ export interface EvalFlowSummary {
   best: number | null;
   rounds: number;
   updatedAt: string | null;
+  /** For a flow built on past cases: what the leak controls did. Absent for other flows. */
+  contamination?: ContaminationReport | null;
+  /** Whether the cases are real. Only a flow on real data may change the swarm by itself. */
+  realData?: boolean;
+}
+
+/** What the swarm did the last time it tried to improve itself. */
+export interface CoachReport {
+  at: string;
+  mode: Settings["autopilot"]["mode"];
+  spentUsd: number;
+  flows: Array<{
+    flowId: string;
+    label: string;
+    /** Rounds run this time. */
+    rounds: number;
+    /** What each kept round changed, in words. */
+    kept: string[];
+    /** The change that was put into use without a person, if any. */
+    applied: string | null;
+    /** Why nothing was run or applied, when that is the case. */
+    note: string | null;
+  }>;
+  /** What the pools of agents did after this run: shares moved, members benched. */
+  pools?: PoolChange[];
+}
+
+/* ----------------------- Pools of agents --------------------------- */
+
+export interface PoolMemberView extends PoolMember {
+  /** The model's display name. */
+  modelLabel: string;
+  stats: MemberStats;
+  /** Supported items for each dollar, or null when the job produces nothing the checks count. */
+  yieldPerUsd: number | null;
+}
+
+export interface PoolView {
+  jobId: JobId;
+  label: string;
+  classId: ClassId;
+  /** Empty when the job is done by its one route. */
+  members: PoolMemberView[];
+  /** The route the job uses when it has no pool. */
+  route: ModelRoute | null;
+}
+
+export interface PoolsDTO {
+  pools: PoolView[];
+  /** Days of tasks the figures cover. */
+  windowDays: number;
+}
+
+export interface SetPoolInput {
+  /** An empty list removes the pool, and the job goes back to its one route. */
+  members: Array<{ id: string; route: ModelRoute; share: number; status?: "active" | "benched" }>;
+}
+
+export interface PoolChange {
+  jobId: JobId;
+  label: string;
+  changes: string[];
+  /** Why nothing moved, when nothing did. */
+  note: string | null;
+}
+
+export interface RebalanceReport {
+  /** true when the new shares were saved. false when this was a look at what would change. */
+  applied: boolean;
+  pools: PoolChange[];
+}
+
+/* ---------------------- What a change would do --------------------- */
+
+export interface DecisionFlip {
+  id: string;
+  name: string;
+  from: string;
+  to: string;
+  scoreFrom: number;
+  scoreTo: number;
+}
+
+/**
+ * What putting a config into use would change today, worked out by re-scoring the rubric
+ * answers already on file. No model is called.
+ */
+export interface PreviewDTO {
+  founders: DecisionFlip[];
+  companies: DecisionFlip[];
+  considered: { founders: number; companies: number };
+  /** Parts of the change that re-scoring cannot show, such as a new line of guidance. */
+  unseen: string[];
 }
 
 export interface EvalFlowDTO extends EvalFlowSummary {
@@ -573,11 +674,19 @@ export interface EvalFlowDTO extends EvalFlowSummary {
   /** The variant whose config the swarm is currently running, if any. */
   promotedVariant: string | null;
   narrative: string;
+  /** false while the flow lacks the cases it needs to measure anything. `dataNote` says what is missing. */
+  ready?: boolean;
+  /** true when measuring this flow calls a model, so a round costs money and takes a budget. */
+  callsModels?: boolean;
+  /** On the answer to a run-rounds request only: what that request spent on model calls, in dollars. */
+  spentUsd?: number;
 }
 
 export interface RunEvalRoundInput {
   rounds?: number;
   brain?: Brain;
+  /** The most this call may spend on model calls, in dollars. A flow that costs nothing ignores it. */
+  budgetUsd?: number;
 }
 
 export interface PromoteVariantInput {
@@ -664,12 +773,27 @@ export interface ApiClient {
 
   /** GET /api/evals */
   listEvalFlows(): Promise<EvalFlowSummary[]>;
-  /** GET /api/evals/:id */
-  getEvalFlow(id: string): Promise<EvalFlowDTO>;
+  /**
+   * GET /api/evals/:id?swarmId=  `promotedVariant` is the variant the named swarm is running.
+   * Without a swarm it is filled only when there is exactly one swarm to mean.
+   */
+  getEvalFlow(id: string, swarmId?: string): Promise<EvalFlowDTO>;
   /** POST /api/evals/:id/rounds */
   runEvalRounds(id: string, input?: RunEvalRoundInput): Promise<EvalFlowDTO>;
   /** POST /api/evals/:id/promote */
   promoteEvalVariant(id: string, input: PromoteVariantInput): Promise<SwarmConfig>;
+  /** POST /api/evals/:id/preview */
+  previewEvalVariant(id: string, input: PromoteVariantInput): Promise<PreviewDTO>;
+
+  /** GET /api/swarms/:id/assumptions */
+  getAssumptions(swarmId: string): Promise<AssumptionsDTO>;
+
+  /** GET /api/swarms/:id/pools */
+  getPools(swarmId: string): Promise<PoolsDTO>;
+  /** PUT /api/swarms/:id/pools/:jobId */
+  setPool(swarmId: string, jobId: JobId, input: SetPoolInput): Promise<PoolsDTO>;
+  /** POST /api/swarms/:id/pools/rebalance  With `apply` false, reports what would change and saves nothing. */
+  rebalancePools(swarmId: string, input?: { apply?: boolean }): Promise<RebalanceReport>;
 }
 
 /* -------------------------------- Demo ----------------------------- */
@@ -707,6 +831,10 @@ export interface DemoSnapshot {
   /** Keyed by task id, with traces. May cover only some tasks. */
   tasks: Record<string, TaskRun>;
   evalFlows: EvalFlowDTO[];
+  /** Present in snapshots made since these pages existed. */
+  assumptions?: AssumptionsDTO;
+  pools?: PoolsDTO;
+  preview?: PreviewDTO;
 }
 
 /** Error body every non-2xx API response uses. */

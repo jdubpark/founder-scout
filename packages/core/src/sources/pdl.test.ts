@@ -180,6 +180,58 @@ describe("People Data Labs adapter", () => {
     expect(allowance.left()).toBe(1);
   });
 
+  it("reserves the last record while parallel enrich calls are in flight", async () => {
+    const allowance = createRecordAllowance(1, () => new Date(FIXED_NOW_MS));
+    let releaseFetch: () => void = () => { throw new Error("fetch gate was not initialized"); };
+    const bothLookupsStarted = new Promise<void>((resolve) => { releaseFetch = resolve; });
+    const recorder = scriptedFetch(async () => {
+      await bothLookupsStarted;
+      return jsonResponse({ status: 200, likelihood: 8, data: person });
+    });
+    const vendor = createPdlVendor({
+      apiKey: "secret-test-key",
+      fetchFn: recorder.fetch,
+      now: () => new Date(FIXED_NOW_MS),
+      allowance,
+    });
+    let lookupsStarted = 0;
+    const startLookup = (name: string) => {
+      lookupsStarted++;
+      if (lookupsStarted === 2) releaseFetch();
+      return vendor.enrich({ name, company: "Acme" });
+    };
+
+    const [first, second] = await Promise.allSettled([
+      startLookup("Jane Doe"),
+      startLookup("John Doe"),
+    ]);
+
+    expect(lookupsStarted).toBe(2);
+    expect(recorder.urls).toHaveLength(1);
+    expect(first.status).toBe("fulfilled");
+    expect(second.status).toBe("rejected");
+    expect(second.status === "rejected" ? second.reason.message : "").toMatch(/allowance of 1 records is used up/);
+    expect(allowance.left()).toBe(0);
+  });
+
+  it("returns reservations when requests fail in each lookup path", async () => {
+    const allowance = createRecordAllowance(1, () => new Date(FIXED_NOW_MS));
+    const recorder = scriptedFetch(() => { throw new Error("offline test failure"); });
+    const vendor = createPdlVendor({
+      apiKey: "secret-test-key",
+      fetchFn: recorder.fetch,
+      now: () => new Date(FIXED_NOW_MS),
+      allowance,
+    });
+
+    await expect(vendor.fetch(request({ limit: 1 }))).rejects.toThrow(/request failed/);
+    expect(allowance.left()).toBe(1);
+    await expect(vendor.enrich({ name: "Jane Doe", company: "Acme" })).rejects.toThrow(/request failed/);
+    expect(allowance.left()).toBe(1);
+    await expect(vendor.team({ name: "Acme", domain: null }, 1)).rejects.toThrow(/request failed/);
+    expect(allowance.left()).toBe(1);
+  });
+
   it("reports local key readiness without making a request", async () => {
     const recorder = scriptedFetch(() => { throw new Error("unexpected request"); });
     const vendor = createPdlVendor({ apiKey: "secret-test-key", fetchFn: recorder.fetch });

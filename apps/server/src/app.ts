@@ -6,7 +6,7 @@ import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest }
 import { z } from "zod";
 import { ServiceError, type SwarmService } from "@agentswarm/core";
 import { ACTOR_HEADER, AGENT_CLASSES, JOBS } from "@agentswarm/shared";
-import type { ApiClient, ClassId, CompanySort, CompanyStatus, DirectiveFilter, JobId } from "@agentswarm/shared";
+import type { ApiClient, ClassId, CompanySort, CompanyStatus, DirectiveFilter, JobId, SetPoolInput } from "@agentswarm/shared";
 
 const actorHeader = ACTOR_HEADER.toLowerCase();
 const allowedOrigins = ["http://localhost:5317", "http://127.0.0.1:5317"] as const;
@@ -56,6 +56,13 @@ const settingsPatchSchema = z
     killSwitch: z.boolean().optional(),
     operatorName: z.string().optional(),
     dismissedSuggestions: z.array(z.string()).optional(),
+    autopilot: z
+      .object({
+        mode: z.enum(["off", "suggest", "apply"]).optional(),
+        budgetUsd: z.number().finite().min(0).max(1000).optional(),
+      })
+      .strict()
+      .optional(),
     schedule: z
       .object({
         enabled: z.boolean().optional(),
@@ -235,9 +242,27 @@ const startRunSchema = z
   })
   .strict();
 const runEvalRoundsSchema = z
-  .object({ rounds: z.number().int().positive().optional(), brain: z.enum(["sim", "live"]).optional() })
+  .object({
+    // Zero rounds measures the baseline and tries no change.
+    rounds: z.number().int().min(0).max(20).optional(),
+    brain: z.enum(["sim", "live"]).optional(),
+    // The most this request may spend on model calls. A flow that costs nothing ignores it.
+    budgetUsd: z.number().finite().min(0).max(1000).optional(),
+  })
   .strict();
 const promoteEvalVariantSchema = z.object({ variant: requiredText, swarmId: requiredText }).strict();
+const poolRouteSchema = z
+  .object({ provider: requiredText, model: requiredText, effort: z.enum(["low", "medium", "high"]).optional() })
+  .strict();
+const setPoolSchema = z
+  .object({
+    members: z
+      .array(z.object({ id: requiredText, route: poolRouteSchema, share: z.number().finite().min(0).max(1), status: z.enum(["active", "benched"]).optional() }).strict())
+      .max(8),
+  })
+  .strict();
+const rebalancePoolsSchema = z.object({ apply: z.boolean().optional() }).strict();
+const evalFlowQuerySchema = z.object({ swarmId: requiredText.optional() }).strict();
 const emptySchema = z.object({}).strict();
 
 type InputPart = "body" | "query";
@@ -287,7 +312,7 @@ export function buildServer(options: {
   });
   app.register(cors, {
     origin: [...allowedOrigins],
-    methods: ["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
+    methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     allowedHeaders: ["content-type", actorHeader],
   });
 
@@ -318,7 +343,7 @@ export function buildServer(options: {
   });
 
   const register = <T>(
-    method: "GET" | "POST" | "PATCH" | "DELETE",
+    method: "GET" | "POST" | "PUT" | "PATCH" | "DELETE",
     url: string,
     part: InputPart,
     schema: z.ZodType<T>,
@@ -340,6 +365,7 @@ export function buildServer(options: {
   const get = <T>(url: string, schema: z.ZodType<T>, handler: ApiHandler<T>) => register("GET", url, "query", schema, handler);
   const post = <T>(url: string, schema: z.ZodType<T>, handler: ApiHandler<T>) => register("POST", url, "body", schema, handler);
   const patch = <T>(url: string, schema: z.ZodType<T>, handler: ApiHandler<T>) => register("PATCH", url, "body", schema, handler);
+  const put = <T>(url: string, schema: z.ZodType<T>, handler: ApiHandler<T>) => register("PUT", url, "body", schema, handler);
   const del = <T>(url: string, schema: z.ZodType<T>, handler: ApiHandler<T>) => register("DELETE", url, "query", schema, handler);
 
   app.get("/api/health", async () => ({ ok: true }));
@@ -381,9 +407,16 @@ export function buildServer(options: {
   post("/api/runs/:id/cancel", emptySchema, (api, _input, params) => api.cancelRun(params.id!));
 
   get("/api/evals", emptySchema, (api) => api.listEvalFlows());
-  get("/api/evals/:id", emptySchema, (api, _input, params) => api.getEvalFlow(params.id!));
+  get("/api/evals/:id", evalFlowQuerySchema, (api, input, params) =>
+    input.swarmId ? api.getEvalFlow(params.id!, input.swarmId) : api.getEvalFlow(params.id!));
   post("/api/evals/:id/rounds", runEvalRoundsSchema, (api, input, params) => api.runEvalRounds(params.id!, input));
   post("/api/evals/:id/promote", promoteEvalVariantSchema, (api, input, params) => api.promoteEvalVariant(params.id!, input));
+  post("/api/evals/:id/preview", promoteEvalVariantSchema, (api, input, params) => api.previewEvalVariant(params.id!, input));
+
+  get("/api/swarms/:id/assumptions", emptySchema, (api, _input, params) => api.getAssumptions(params.id!));
+  get("/api/swarms/:id/pools", emptySchema, (api, _input, params) => api.getPools(params.id!));
+  post("/api/swarms/:id/pools/rebalance", rebalancePoolsSchema, (api, input, params) => api.rebalancePools(params.id!, input));
+  put("/api/swarms/:id/pools/:jobId", setPoolSchema, (api, input, params) => api.setPool(params.id!, params.jobId as JobId, input as SetPoolInput));
 
   app.setNotFoundHandler((request, reply) => {
     const pathname = request.url.split("?", 1)[0] ?? request.url;

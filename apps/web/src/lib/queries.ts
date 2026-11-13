@@ -15,12 +15,14 @@ import type {
   EffectiveSteeringQuery,
   FeedbackInput,
   FounderQuery,
+  JobId,
   NetworkImportInput,
   OutreachCompleteInput,
   OutreachDecisionInput,
   OutreachQuery,
   PromoteVariantInput,
   RunEvalRoundInput,
+  SetPoolInput,
   SettingsPatch,
   StartRunInput,
   UpdateAgentInput,
@@ -50,7 +52,9 @@ export const keys = {
   run: (id: string) => ["run", id] as const,
   task: (id: string) => ["task", id] as const,
   evals: ["evals"] as const,
-  evalFlow: (id: string) => ["eval", id] as const,
+  evalFlow: (id: string, swarmId?: string | null) => ["eval", id, swarmId ?? ""] as const,
+  assumptions: (swarmId: string) => ["assumptions", swarmId] as const,
+  pools: (swarmId: string) => ["pools", swarmId] as const,
 };
 
 /** After steering changes, everything that shows steering or its effects is stale. */
@@ -211,12 +215,33 @@ export function useEvalFlows() {
   return useQuery({ queryKey: keys.evals, queryFn: () => client.listEvalFlows() });
 }
 
-export function useEvalFlow(id: string | null) {
+/** One eval, as it stands for one swarm: which round that swarm is running is part of the answer. */
+export function useEvalFlow(id: string | null, swarmId?: string | null) {
   const { client } = useApi();
   return useQuery({
-    queryKey: keys.evalFlow(id ?? ""),
-    queryFn: () => client.getEvalFlow(id as string),
+    queryKey: keys.evalFlow(id ?? "", swarmId),
+    queryFn: () => client.getEvalFlow(id as string, swarmId ?? undefined),
     enabled: Boolean(id),
+  });
+}
+
+/** Every assumption the swarm runs on, with the evidence for and against it. */
+export function useAssumptions(swarmId: string | null) {
+  const { client } = useApi();
+  return useQuery({
+    queryKey: keys.assumptions(swarmId ?? ""),
+    queryFn: () => client.getAssumptions(swarmId as string),
+    enabled: Boolean(swarmId),
+  });
+}
+
+/** The pool of members behind each job, with what each member did. */
+export function usePools(swarmId: string | null) {
+  const { client } = useApi();
+  return useQuery({
+    queryKey: keys.pools(swarmId ?? ""),
+    queryFn: () => client.getPools(swarmId as string),
+    enabled: Boolean(swarmId),
   });
 }
 
@@ -418,10 +443,48 @@ export function useRunEvalRounds() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (args: { id: string; input?: RunEvalRoundInput }) => client.runEvalRounds(args.id, args.input),
-    onSuccess: (data) => {
-      qc.setQueryData(keys.evalFlow(data.id), data);
+    onSuccess: () => {
+      // The answer to a run does not say which round each swarm is running, so the page's own
+      // copy is fetched again instead of being overwritten with it.
+      void qc.invalidateQueries({ queryKey: ["eval"] });
       void qc.invalidateQueries({ queryKey: keys.evals });
       void qc.invalidateQueries({ queryKey: ["overview"] });
+    },
+  });
+}
+
+/** What putting a variant into use would change today. Nothing is saved. */
+export function usePreviewVariant() {
+  const { client } = useApi();
+  return useMutation({
+    mutationFn: (args: { id: string; input: PromoteVariantInput }) => client.previewEvalVariant(args.id, args.input),
+  });
+}
+
+export function useSetPool() {
+  const { client } = useApi();
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (args: { swarmId: string; jobId: JobId; input: SetPoolInput }) => client.setPool(args.swarmId, args.jobId, args.input),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ["pools"] });
+      void qc.invalidateQueries({ queryKey: ["tree"] });
+      void qc.invalidateQueries({ queryKey: keys.swarms });
+    },
+  });
+}
+
+/** Move shares toward the members whose work held up. With `apply` false, only reports. */
+export function useRebalancePools() {
+  const { client } = useApi();
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (args: { swarmId: string; apply: boolean }) => client.rebalancePools(args.swarmId, { apply: args.apply }),
+    onSuccess: (_report, args) => {
+      if (!args.apply) return;
+      void qc.invalidateQueries({ queryKey: ["pools"] });
+      void qc.invalidateQueries({ queryKey: ["tree"] });
+      void qc.invalidateQueries({ queryKey: keys.swarms });
     },
   });
 }

@@ -107,6 +107,9 @@ const migrations: readonly Migration[] = [
       CREATE INDEX tasks_by_company ON tasks(company_id, insertion_order);
     `);
   },
+  (db) => {
+    db.exec("ALTER TABLE tasks ADD COLUMN pool_member TEXT");
+  },
 ];
 
 export function migrate(db: Database.Database): void {

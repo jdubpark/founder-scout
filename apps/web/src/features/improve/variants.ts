@@ -1,4 +1,4 @@
-import { BASE_CONFIG, type EvalFlowDTO, type EvalVariant } from "@agentswarm/shared";
+import type { EvalFlowDTO, EvalVariant } from "@agentswarm/shared";
 import type { MarkState } from "../../components/ui/marks";
 
 export type Flow = EvalFlowDTO;
@@ -9,13 +9,15 @@ export function roundLabel(variant: Pick<EvalVariant, "id" | "round">): string {
   return `Round ${variant.round}`;
 }
 
-/** The round that is running in the swarm now. Promotion wins; otherwise the config the swarm holds. */
-export function inUseVariant(flow: Flow, swarmConfigId: string | null): string | null {
+/**
+ * The round of this eval that the swarm is running now. The server says which round's changes
+ * the swarm's config carries. When it carries none of this eval's, it is running this eval's
+ * starting point, whatever else has changed in it since (a pool of agents, another eval's
+ * weights). The config's id is not compared: it changes with every such addition.
+ */
+export function inUseVariant(flow: Flow, _swarmConfigId?: string | null): string | null {
   if (flow.promotedVariant) return flow.promotedVariant;
-  const held = flow.variants.find((v) => swarmConfigId !== null && v.config.id === swarmConfigId)?.id;
-  if (held) return held;
-  // A swarm nobody has changed still runs the starting configuration.
-  return swarmConfigId === BASE_CONFIG.id && flow.variants.some((v) => v.id === "baseline") ? "baseline" : null;
+  return flow.variants.some((v) => v.id === "baseline") ? "baseline" : null;
 }
 
 /** Any round the eval did not revert can be put into use, the winner and the start included. */

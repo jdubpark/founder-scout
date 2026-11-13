@@ -14,6 +14,7 @@ import { useOverview, useStartRun, useTree } from "../lib/queries";
 import { useSwarm } from "../lib/swarm";
 import { ActiveRunLine } from "../features/overview/ActiveRun";
 import { FunnelChart } from "../features/overview/FunnelChart";
+import { coachLine } from "../features/overview/coachLine";
 
 function funnelSteps(stats: RunStats) {
   return [
@@ -35,6 +36,7 @@ export default function OverviewPage() {
 
   if (!swarm) return null;
   const data = overview.data;
+  const coach = coachLine(data?.coach);
 
   const run = () =>
     startRun.mutate(
@@ -107,6 +109,13 @@ export default function OverviewPage() {
                     </span>
                   </div>
                 </li>
+                {coach ? (
+                  <li className="border-b border-rule">
+                    <Link to="/improve" className="block truncate py-2.5 text-base text-ink no-underline" title={coach}>
+                      {coach}
+                    </Link>
+                  </li>
+                ) : null}
                 {data.alerts.map((alert) => (
                   <li key={alert.id} className="border-b border-rule py-2.5 last:border-b-0">
                     <Status state={alert.level === "error" ? "error" : alert.level === "warning" ? "warn" : "idle"}>

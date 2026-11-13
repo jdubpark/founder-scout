@@ -219,9 +219,13 @@ describe("partner-calls eval flow", () => {
       best: null,
       bestVariant: null,
       variants: [],
+      ready: false,
+      callsModels: false,
       dataNote: expect.stringContaining("Needs 4 Yes and 4 No calls in each half of a fixed random split"),
     });
-    expect(fromRun).toEqual(fromGet);
+    expect(fromRun.spentUsd).toBe(0);
+    const { spentUsd: _spentUsd, ...runDto } = fromRun;
+    expect(runDto).toEqual(fromGet);
     expect(fromGet.dataNote).not.toMatch(/\b(train|test):/);
     expect(existsSync(join(fixture.deps.flowsDir, PARTNER_CALLS_FLOW_ID))).toBe(false);
   });
@@ -390,6 +394,9 @@ describe("partner-calls eval flow", () => {
     const fixture = makeFixture();
     const simulated = await fixture.eval.getFlow(PARTNER_CALLS_FLOW_ID);
     expect(simulated.baseline).not.toBeNull();
+    expect(simulated.realData).toBe(false);
+    expect(simulated.ready).toBe(true);
+    expect(simulated.callsModels).toBe(false);
 
     // One founder assessed by a live run gets a call. From now on only live answers count, and
     // one case is far too few, so the eval waits instead of blending it with sixteen simulated ones.
@@ -404,6 +411,7 @@ describe("partner-calls eval flow", () => {
     fixture.store.insertFeedback(makeFeedback("fbk_live", "fnd_partner_live", "yes", "2026-11-12T11:30:00.000Z"));
 
     const afterLive = await fixture.eval.getFlow(PARTNER_CALLS_FLOW_ID);
+    expect(afterLive.realData).toBe(true);
     expect(afterLive.baseline).toBeNull();
     expect(afterLive.variants).toEqual([]);
     expect(afterLive.dataNote).toContain("1 Yes");

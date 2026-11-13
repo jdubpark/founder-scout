@@ -2,13 +2,13 @@ import {
   BASE_CONFIG,
   CLASSES_SHOWN_CALLS,
   ZERO_STATS,
-  effectiveRoute,
   getJob,
   getParamDef,
   latestCalls,
   numberParam,
   renderSteeringBlock,
   renderCallsBlock,
+  routeForTask,
   resolveSteering,
   stableId,
   swarmIdentity,
@@ -178,6 +178,19 @@ export function createRunController(deps: EngineDeps): RunController {
     const taskSeed = (agent: Agent, founderId: string | null, attempt: number) =>
       createRng(hashSeed(run.id, agent.id, founderId ?? "", attempt));
 
+    const routeFor = (
+      jobId: ModelJobId,
+      steering: ReturnType<typeof steeringForTask>,
+      agent: Agent,
+      founderId: string | null,
+      companyId: string | null,
+    ) => routeForTask(
+      jobId,
+      steering,
+      config,
+      `${run.swarmId}:${jobId}:${companyId ?? founderId ?? agent.id}`,
+    );
+
     const makeRecord = (input: Omit<TaskRun, "id" | "runId" | "swarmId" | "trace">): TaskRun => {
       const task: TaskRun = {
         id: stableId("tsk", `${run.id}:${taskSequence++}`),
@@ -195,7 +208,9 @@ export function createRunController(deps: EngineDeps): RunController {
     const recordPlainTask = (input: PlainTaskInput): TaskRun => {
       const agentSteering = steeringForTask(input.agent);
       const job = getJob(input.jobId);
-      const route = job.kind === "code" ? null : effectiveRoute(input.jobId, agentSteering, config);
+      const selected = job.kind === "code" ? null : routeFor(input.jobId as ModelJobId, agentSteering, input.agent,
+        input.founderId ?? null, input.companyId ?? null);
+      const route = selected?.route ?? null;
       const at = iso(now());
       const snapshot = {
         directiveIds: [...agentSteering.directiveIds],
@@ -221,6 +236,7 @@ export function createRunController(deps: EngineDeps): RunController {
         promptVariant: config.promptVariants[input.jobId] ?? "base",
         promptHash: null,
         control: null,
+        poolMember: selected?.member ?? null,
         usage: null,
         costUsd: null,
         latencyMs: null,
@@ -260,7 +276,8 @@ export function createRunController(deps: EngineDeps): RunController {
         if (stopped()) return null;
         const job = deps.jobs.get(jobId);
         const steering = steeringForTask(agent);
-        const route = effectiveRoute(jobId, steering, config);
+        const selected = routeFor(jobId, steering, agent, founderId, companyId);
+        const route = selected.route;
         const steeringBlock = steeringBlockForTask(agent, steering);
         const taskBudgetUsd = numberParam("budget.task_usd", steering, config);
         const timestamp = iso(now());
@@ -287,6 +304,7 @@ export function createRunController(deps: EngineDeps): RunController {
           promptVariant: config.promptVariants[jobId] ?? "base",
           promptHash: null,
           control: null,
+          poolMember: selected.member,
           usage: null,
           costUsd: null,
           latencyMs: null,

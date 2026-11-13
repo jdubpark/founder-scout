@@ -43,10 +43,16 @@ export function decodeEntities(input: string): string {
   });
 }
 
-/** Removes HTML tags, keeping paragraph and line breaks, then decodes entities. */
+/**
+ * Removes HTML tags, keeping paragraph and line breaks, then decodes entities.
+ *
+ * An opening paragraph tag is a break too. Hacker News writes "first.<p>Second" with no
+ * closing tag, and dropping the tag glues the two sentences, and any link before it, together.
+ */
 export function htmlToText(html: string): string {
   const withBreaks = html
     .replace(/<\s*br\s*\/?>/gi, "\n")
+    .replace(/<\s*p(\s[^>]*)?>/gi, "\n\n")
     .replace(/<\/(p|div|li|h[1-6]|pre|blockquote)\s*>/gi, "\n")
     .replace(/<script[\s\S]*?<\/script\s*>/gi, "")
     .replace(/<style[\s\S]*?<\/style\s*>/gi, "");

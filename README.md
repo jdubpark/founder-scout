@@ -59,6 +59,60 @@ Nothing here requests linkedin.com, logged in or not; the design explains why
   the file are never read.
 - **By hand.** "Add" on the Founders page takes a name, a company and a link.
 
+## How it improves itself
+
+Three evals, on the Improve page. Each proposes a change, measures it on cases it was not tuned
+on, and keeps it only when the gain is larger than the noise.
+
+- **Ranking quality**: simulated founders with known strength. Free. It proves the loop works
+  and says nothing about real founders.
+- **Partner calls**: your own Yes and No. Free. Starts once there are about twenty calls.
+- **Past founders**: real companies at the moment they launched, whose outcome is now known.
+  It calls a model, so it has a budget.
+
+```bash
+pnpm swarm past collect --from 2018-01-01 --to 2021-01-01 --yc --unicorns
+pnpm swarm past show
+EVAL_JUDGE=claude-cli:claude-haiku-5-5 pnpm swarm eval rounds --flow past-founders --rounds 0 --budget 3
+```
+
+`past collect` reads old "Launch HN" posts and the founders' replies in the first three days,
+then labels each company from Y Combinator's own directory (`--yc`), matched on the company's
+name together with its intake or its own site. A company has met the bar when it is publicly
+listed, on the programme's list of top companies, or still operating with at least 100 people
+(`--min-team` changes that); `--unicorns` adds a public list of successes; `--labels file.csv`
+(columns company, outcome, source) overrides both. A company nobody can speak for, such as one
+bought on unpublished terms, is left out instead of being called a failure, so the command needs
+`--yc` or a labels file that marks some companies 0. The dataset names real people, so it is
+written to `evals/datasets/`, which is not in the repository.
+
+`EVAL_JUDGE` names the model that judges the cases. Without it the analysts' own model is used,
+which costs tens of dollars for a few hundred cases; a small model costs a few. `--rounds 0`
+measures the starting point; more rounds try changes. A run that reaches its budget stops, keeps
+what it judged, and resumes next time.
+
+Names, years and intake tags are removed before a model sees a case, and the model is then asked
+to name the company; cases it names are left out of the headline. That does not make the result
+clean: the judging model was trained after these outcomes, so the score is an upper bound on
+skill. The page says so, and shows what shuffled outcomes give beside it.
+
+**Autopilot** (Settings): after each scheduled run the swarm runs eval rounds itself. *Suggest*
+shows what it would change. *Apply* also puts a kept change into use, one at a time, and only one
+measured on real data. Before any change is put into use, the Improve page lists every founder
+and company whose decision would change.
+
+## Assumptions, pools of context, pools of agents
+
+- **Assumptions** page: every assumption behind "find the best founders", written down or not,
+  as a statement that could be false. Code tests each one on past companies and on your own
+  calls, and marks where the two disagree.
+- **Swarm, Context**: thirteen named pools of context. An agent sees only the pools its job
+  reads, and text crosses between pools only through the listed crossings.
+- **Swarm, Pools**: a job can be done by several models at once. Code gives each task to one,
+  and after a run moves share toward the models whose work held up under the swarm's own checks.
+
+Where these came from: `docs/research/swarm-methods-synthesis.md`.
+
 ## Run it every day
 
 1. `pnpm start` builds the dashboard and serves it with the API on http://127.0.0.1:4317.
@@ -99,6 +153,7 @@ LIVE_PROVIDERS=1 pnpm exec vitest run packages/core/src/providers # real Claude 
 | `apps/server` | HTTP API, scheduler, command line. |
 | `apps/web` | The dashboard. Page-building rules are in `apps/web/BUILDING.md`. |
 | `evals/flows` | Eval state, one directory per flow. |
+| `evals/datasets` | Datasets built from real past data. Not in the repository. |
 | `ops` | An example launchd file for keeping the server running. |
 
 ## What is and is not verified
@@ -112,19 +167,58 @@ Verified by running it:
 - one small live run (2026-11-13, $1.14): real Hacker News, GitHub and arXiv items, scouting,
   screening, web research on one founder, fact-checking by a second vendor, and rubric scoring;
 - one live repository review through Codex in a read-only sandbox, which returned findings with
-  file and line references.
+  file and line references;
+- the past-founders eval on real companies (2026-11-13, about $2.70 in all), described below;
+- pools of agents on a running server in simulation: tasks split between two models by share,
+  each member's supported items, planted claims and failures counted, share moved by code;
+- the Assumptions page on the real eval's judgments, and the Improve page on its rounds.
+
+**What the past-founders eval found.** 155 companies that launched on Hacker News between 2018
+and 2020, labelled from Y Combinator's directory (23 met the bar; 66 more were collected and left
+out because nobody can state their outcome), judged by `claude-haiku-5-5` twice each.
+
+| | |
+| --- | --- |
+| Later winner ranked above a contemporary, latest six quarters (88 cases) | 50%, 95% range 17% to 72% |
+| The same with outcomes shuffled | 50% on average; 95% of shuffles below 70% |
+| Earlier six quarters, where changes are proposed and chosen | 65% |
+| Masked companies the judge named anyway | 22 of 155 |
+| Changes tried | 2, both reverted: gains of 0.008 and 0.016 against noise of 0.21 |
+
+Read it this way. The loop did its job on real data: it proposed a change, measured it on
+quarters held back from tuning, and refused it because the gain was inside the noise. The default
+rubric, with a small judge and nothing but a launch post to read, has shown no ability to pick
+later winners: 50% is chance and the range is wide. The range is wide because the latest quarters
+hold few winners (11 among 88 companies, against 12 among 67 earlier: recent companies have had
+less time to grow). Narrowing it to ten points either side needs roughly seven times as many
+cases, which launch posts alone cannot supply. Nothing here is a finding about founders.
+
+**What the assumption ledger said on that run** (earlier quarters only: 54 comparable companies,
+8 winners). Of 31 statements: 4 supported, 1 against, 10 open, 16 untested. The company score
+alone ranked winners above contemporaries 85% of the time (range 66% to 100%); the founder score
+alone 57% (33% to 79%, open); the two together did 21 points worse than the company alone (range
+42 worse to level, open). Against: that masking stops a model recognising a company. A launch
+post answered Trajectory and Momentum for no company at all, and five more questions for fewer
+than three in ten. Eight winners is few and thirty statements were tested at once, so one or two
+of these will be chance; they say where to look next, and the page says so.
 
 Not verified against a live service, because no keys or accounts were available: the direct Claude
 API and the OpenAI-compatible adapters (OpenAI, DeepSeek, Meta).
 
 Not verified against a live service either: the People Data Labs adapter, for the same reason.
 
+Not run: the past-founders eval with the analysts' own model as judge (tens of dollars), and
+autopilot in Apply mode over several days.
+
 Checked by running it on 2026-11-13: the rule that stops research agents opening linkedin.com
 (a rule for the bare host does not cover `www.`, so both forms are passed); headless Claude and
 Codex still sign in after unrelated keys are removed from their environment; and the quote check,
 which found none of the first live run's nine excerpts on the pages they cited under the old
 "quote or paraphrase" prompt, and seven of eight under the exact-quote prompt (one was too short
-to check). One founder, so this shows the direction, not a rate.
+to check). One founder, so this shows the direction, not a rate. The quote check was run again
+after it was changed to connect only to the address it had validated: an exact quote was found
+on a live page, the same quote with one word changed was not, a redirect from http to https was
+followed, and loopback, cloud-metadata and never-requested hosts were refused without a request.
 
 Not built: AI voice calling, audio or video transcription, a retention schedule, and the notice
 that people in the EU and UK are owed when data about them is held. Calls are planned and drafted
@@ -153,6 +247,12 @@ Known limits:
   for live runs. GitHub returns at most 100 per request.
 - A message sent to a class of agents or to one job from the dashboard applies to the current
   swarm. Steering a class across every swarm is possible through the API only.
+- The past-founders eval asks the judge which year a masked case was written in, and counts an
+  answer within one year. Over a dataset that spans three years, always answering the middle
+  year scores 155 of 155, so the judge's 52 of 155 shows nothing either way. The page prints that
+  ceiling beside the figure. The probe needs a wider span of years to mean something.
+- Every past case is a Y Combinator company that posted a launch. What the eval says about
+  founders found elsewhere is unknown.
 
 ## Rules the code enforces
 

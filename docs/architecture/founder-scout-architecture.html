@@ -73,6 +73,18 @@
   td:first-child { font-weight: 700; width: 46%; }
   tr:last-child td { border-bottom: 0; }
   .chip { display: inline-flex; align-items: center; height: 24px; padding: 0 10px; border-radius: 999px; background: var(--sunk); font-weight: 700; font-size: 13px; }
+  .chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 12px; }
+  .better { display: grid; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); gap: 36px 56px; }
+  .fig h3 { margin: 0 0 12px; font-weight: 700; font-size: 15px; }
+  .fig svg { display: block; width: 100%; max-width: 520px; height: auto; }
+  .box { fill: var(--bg); stroke: var(--rule-strong); stroke-width: 1.25; }
+  .box-green { fill: var(--green-tint); }
+  .box-you { fill: var(--yellow-tint); stroke: var(--yellow); stroke-width: 1.25; }
+  .lbl { fill: var(--ink); font-family: var(--sans); font-weight: 700; font-size: 12.5px; }
+  .sub { fill: var(--ink-3); font-family: var(--sans); font-size: 11.5px; }
+  .bar { fill: var(--green); }
+  .track { fill: var(--sunk); }
+  .dot { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-right: 6px; }
 </style>
 
 <svg width="0" height="0" style="position:absolute" aria-hidden="true">
@@ -210,6 +222,62 @@
     </section>
 
   </div>
+
+  <section>
+    <h2>How it gets better</h2>
+    <div class="better">
+      <figure class="fig">
+        <h3>Tests itself on past companies</h3>
+        <svg viewBox="0 0 380 96" role="img" aria-label="The swarm tests itself on companies from the past. It learns on the earliest launches, chooses changes on launches held back from tuning, and reports its score on the latest launches, which choose nothing.">
+          <defs><marker id="mt" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0 10 5 0 10z" fill="#c6c6cb"/></marker></defs>
+          <rect x="4" y="6" width="118" height="52" rx="10" class="box-green"/>
+          <rect x="130" y="6" width="118" height="52" rx="10" class="box-green"/>
+          <rect x="256" y="6" width="120" height="52" rx="10" class="box-you"/>
+          <text x="63" y="29" text-anchor="middle" class="lbl">Learn</text><text x="63" y="46" text-anchor="middle" class="sub">earliest launches</text>
+          <text x="189" y="29" text-anchor="middle" class="lbl">Choose</text><text x="189" y="46" text-anchor="middle" class="sub">held back</text>
+          <text x="316" y="29" text-anchor="middle" class="lbl">Report</text><text x="316" y="46" text-anchor="middle" class="sub">latest, never tuned on</text>
+          <path d="M4 78H372" class="flow" marker-end="url(#mt)"/>
+          <text x="372" y="93" text-anchor="end" class="sub">time</text>
+        </svg>
+        <div class="chips"><span class="chip">Names and years removed</span><span class="chip">Checked against shuffled outcomes</span><span class="chip">Shown as an upper bound</span></div>
+      </figure>
+
+      <figure class="fig">
+        <h3>Keeps knowledge in separate rooms</h3>
+        <svg viewBox="0 0 380 96" role="img" aria-label="Knowledge is kept in separate rooms. The founder file and the company file never mix: each becomes a score, and code combines the two scores. Hidden answers are locked away from every agent.">
+          <rect x="4" y="6" width="104" height="38" rx="8" class="box"/><text x="56" y="30" text-anchor="middle" class="lbl">Founder file</text>
+          <rect x="272" y="6" width="104" height="38" rx="8" class="box"/><text x="324" y="30" text-anchor="middle" class="lbl">Company file</text>
+          <rect x="146" y="6" width="88" height="38" rx="8" class="box-green"/><text x="190" y="30" text-anchor="middle" class="lbl">One score</text>
+          <path d="M110 25H141" class="flow" marker-end="url(#m)"/><path d="M270 25H239" class="flow" marker-end="url(#m)"/>
+          <rect x="4" y="56" width="140" height="36" rx="8" class="tile-grey"/><use href="#i-lock" x="14" y="65" width="18" height="18" class="ic-grey"/><text x="40" y="79" class="lbl">Hidden answers</text>
+          <text x="156" y="79" class="sub">no agent sees them</text>
+        </svg>
+        <div class="chips"><span class="chip">Each agent sees only its own rooms</span><span class="chip">Only short records cross</span></div>
+      </figure>
+
+      <figure class="fig">
+        <h3>Several models can share a job</h3>
+        <svg viewBox="0 0 380 96" role="img" aria-label="A job can be done by several models. Code shares out the work, and gives more of it to the model whose work passed the swarm's own checks.">
+          <text x="4" y="30" class="lbl">Model A</text><rect x="72" y="19" width="256" height="14" rx="7" class="track"/><rect x="72" y="19" width="154" height="14" rx="7" class="bar"/><text x="338" y="31" class="lbl">60%</text>
+          <text x="4" y="70" class="lbl">Model B</text><rect x="72" y="59" width="256" height="14" rx="7" class="track"/><rect x="72" y="59" width="102" height="14" rx="7" class="bar"/><text x="338" y="71" class="lbl">40%</text>
+        </svg>
+        <div class="chips"><span class="chip">Code shares out the work</span><span class="chip">More goes to work that passed the checks</span><span class="chip">Benched if it fails them</span></div>
+      </figure>
+
+      <figure class="fig">
+        <h3>Checks its own assumptions</h3>
+        <svg viewBox="0 0 380 96" role="img" aria-label="Every assumption is a statement that could be false. Each is tested twice, on past companies and on your own calls, and shown as a range against the line that chance would give.">
+          <text x="4" y="30" class="lbl">Past companies</text>
+          <rect x="120" y="22" width="220" height="6" rx="3" class="track"/><rect x="246" y="19" width="62" height="12" rx="6" fill="#bfe3d6"/><circle cx="278" cy="25" r="6" class="bar"/>
+          <text x="4" y="70" class="lbl">Your calls</text>
+          <rect x="120" y="62" width="220" height="6" rx="3" class="track"/><rect x="196" y="59" width="84" height="12" rx="6" fill="#bfe3d6"/><circle cx="236" cy="65" r="6" class="bar"/>
+          <path d="M230 10V80" stroke="#c6c6cb" stroke-width="1.5" stroke-dasharray="3 3"/>
+          <text x="230" y="93" text-anchor="middle" class="sub">chance</text>
+        </svg>
+        <div class="chips"><span class="chip"><span class="dot" style="background:var(--green)"></span>Supported</span><span class="chip"><span class="dot" style="background:var(--red)"></span>Against</span><span class="chip"><span class="dot" style="background:var(--yellow)"></span>Open</span><span class="chip">Code decides, never a model</span></div>
+      </figure>
+    </div>
+  </section>
 
   <section>
     <h2>Safeguards</h2>

@@ -1,6 +1,6 @@
 import { scopeLevel, type ScopeSelector } from "@agentswarm/shared";
 import { EmptyState, ErrorNote, SkeletonRows } from "../../components/ui/layout";
-import { KindChip, ScopeLabel } from "../../components/ui/marks";
+import { Chip, KindChip, ScopeLabel } from "../../components/ui/marks";
 import { useEffectiveSteering } from "../../lib/queries";
 import { attachedHere, effectiveQuery, type NodeRef } from "./nodes";
 
@@ -12,13 +12,15 @@ export function ToldTab({ node, swarmId }: { node: NodeRef; swarmId: string }) {
   if (!eff.data) return <SkeletonRows rows={3} />;
 
   const data = eff.data;
+  const lessons = data.lessons ?? [];
   const scopeById = new Map<string, ScopeSelector>(data.resolved.guidance.map((g) => [g.directiveId, g.scope]));
 
   return (
     <div className="flex flex-col gap-4">
-      {data.guidance.length === 0 ? (
+      {data.guidance.length === 0 && lessons.length === 0 ? (
         <EmptyState title="Nothing yet" />
-      ) : (
+      ) : null}
+      {data.guidance.length > 0 ? (
         <ol className="m-0 flex list-none flex-col p-0">
           {data.guidance.map((line) => {
             const scope = scopeById.get(line.directiveId) ?? {};
@@ -38,7 +40,20 @@ export function ToldTab({ node, swarmId }: { node: NodeRef; swarmId: string }) {
             );
           })}
         </ol>
-      )}
+      ) : null}
+
+      {lessons.length > 0 ? (
+        <ol className="m-0 flex list-none flex-col p-0">
+          {lessons.map((text, i) => (
+            <li key={i} className="flex flex-col gap-1.5 rounded-md px-3 py-2.5 hover:bg-sunk">
+              <p className="text-base break-words whitespace-pre-line text-ink">{text}</p>
+              <div className="flex flex-wrap items-center gap-1.5">
+                <Chip>Learned</Chip>
+              </div>
+            </li>
+          ))}
+        </ol>
+      ) : null}
 
       {data.block || data.callsBlock ? (
         <details className="flex flex-col">

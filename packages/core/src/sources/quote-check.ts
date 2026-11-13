@@ -1,8 +1,12 @@
 import { lookup } from "node:dns/promises";
-import { isIP } from "node:net";
+import { isIP, type LookupFunction } from "node:net";
+import { request as httpRequest } from "node:http";
+import { request as httpsRequest } from "node:https";
+import { Readable } from "node:stream";
+import { createBrotliDecompress, createGunzip, createInflate } from "node:zlib";
 import { isNeverFetchHost, type QuoteStatus } from "@agentswarm/shared";
 import type { QuoteChecker } from "../contracts";
-import { defaultFetch, USER_AGENT, type FetchFn } from "./http";
+import { USER_AGENT, type FetchFn } from "./http";
 
 const DEFAULT_TIMEOUT_MS = 15_000;
 const DEFAULT_MAX_BYTES = 2_000_000;
@@ -24,16 +28,17 @@ export interface QuoteCheckOptions {
 }
 
 type CheckResult = { status: QuoteStatus; detail: string };
-type ReadableAddressRule = (url: URL) => string | null;
+type ReadableAddress = { url: string; completeness: "complete" | "partial" };
+type ReadableAddressRule = (url: URL) => ReadableAddress | null;
 
 const READABLE_ADDRESS_RULES: ReadableAddressRule[] = [
-  // Hacker News item pages are blocked to automated readers, so use Algolia's JSON copy of the item and comments.
+  // Complete stand-in: Algolia returns the item and comments for a Hacker News item.
   (url) => {
     if (url.hostname.toLowerCase().replace(/\.$/u, "") !== "news.ycombinator.com" || url.pathname !== "/item") return null;
     const id = url.searchParams.get("id");
-    return id && /^\d+$/u.test(id) ? `https://hn.algolia.com/api/v1/items/${id}` : null;
+    return id && /^\d+$/u.test(id) ? { url: `https://hn.algolia.com/api/v1/items/${id}`, completeness: "complete" } : null;
   },
-  // GitHub blob views are rendered by script, while the raw host serves the file text directly.
+  // Complete stand-in: the raw host serves the same file text as the rendered GitHub blob.
   (url) => {
     if (url.hostname.toLowerCase().replace(/\.$/u, "") !== "github.com") return null;
     const parts = url.pathname.split("/");
@@ -41,18 +46,18 @@ const READABLE_ADDRESS_RULES: ReadableAddressRule[] = [
       return null;
     }
     const rawPath = [parts[1], parts[2], parts[4], ...parts.slice(5)].join("/");
-    return `https://raw.githubusercontent.com/${rawPath}`;
+    return { url: `https://raw.githubusercontent.com/${rawPath}`, completeness: "complete" };
   },
-  // arXiv PDF requests are changed to the readable abstract page; paper-body quotes may not be present there.
+  // Partial stand-in: the abstract page does not include the full paper body.
   (url) => {
     if (url.hostname.toLowerCase().replace(/\.$/u, "") !== "arxiv.org" || !url.pathname.startsWith("/pdf/")) return null;
     const id = url.pathname.slice("/pdf/".length).replace(/\.pdf$/iu, "");
-    return id && !id.endsWith("/") ? `https://arxiv.org/abs/${id}` : null;
+    return id && !id.endsWith("/") ? { url: `https://arxiv.org/abs/${id}`, completeness: "partial" } : null;
   },
 ];
 
 export function createQuoteChecker(options: QuoteCheckOptions = {}): QuoteChecker {
-  const fetchFn = options.fetchFn ?? defaultFetch;
+  const fetchFn = options.fetchFn;
   const resolveHost = options.resolveHost ?? (async (hostname: string) =>
     (await lookup(hostname, { all: true })).map((entry) => entry.address));
   const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
@@ -67,25 +72,32 @@ export function createQuoteChecker(options: QuoteCheckOptions = {}): QuoteChecke
       try {
         let currentUrl = urlText;
         let redirects = 0;
+        let partialStandInDetail: string | null = null;
         let response: Response;
 
         while (true) {
-          const addressProblem = await validateAddress(currentUrl, resolveHost);
+          const validation = await validateAddress(currentUrl, resolveHost);
           throwIfAborted(callerSignal);
-          if (addressProblem) return unreachable(addressProblem);
+          if (validation.problem) return unreachable(validation.problem);
 
-          const readableUrl = readableAddress(currentUrl);
-          if (readableUrl !== currentUrl) {
-            currentUrl = readableUrl;
+          const readable = readableAddress(currentUrl);
+          if (readable && readable.url !== currentUrl) {
+            if (readable.completeness === "partial") {
+              partialStandInDetail = "Only the abstract of this paper could be read.";
+            }
+            currentUrl = readable.url;
             continue;
           }
 
-          response = await fetchFn(currentUrl, {
+          const init: RequestInit = {
             method: "GET",
             redirect: "manual",
             headers: { "User-Agent": USER_AGENT, Accept: ACCEPT },
             signal,
-          });
+          };
+          response = fetchFn
+            ? await fetchFn(currentUrl, init)
+            : await pinnedFetch(currentUrl, init, validation.addresses);
 
           if (!REDIRECT_STATUSES.has(response.status)) break;
           if (redirects >= 3) return unreachable("The page redirects too many times.");
@@ -106,7 +118,7 @@ export function createQuoteChecker(options: QuoteCheckOptions = {}): QuoteChecke
         const contentType = response.headers.get("content-type")?.split(";", 1)[0]?.trim().toLowerCase() ?? "";
         if (!READABLE_TYPES.has(contentType)) return unreachable("The page is not in a readable text format.");
 
-        const body = await readLimitedBody(response, maxBytes);
+        const { text: body, truncated } = await readLimitedBody(response, maxBytes);
         throwIfAborted(callerSignal);
         const pageTexts = pageTextsForBody(contentType, body);
         const pages = pageTexts.map(comparisonForm);
@@ -120,6 +132,8 @@ export function createQuoteChecker(options: QuoteCheckOptions = {}): QuoteChecke
 
         const missing = fragments.filter((fragment) => !pages.some((page) => fragmentMatches(page, fragment))).length;
         if (missing === 0) return { status: "found", detail: "The quoted text appears on the page." };
+        if (truncated) return unreachable("The page is too long to check in full.");
+        if (partialStandInDetail) return unreachable(partialStandInDetail);
         if (readableLength < 1_500) {
           return unreachable("The page has too little readable text to check a quote against.");
         }
@@ -136,19 +150,19 @@ export function createQuoteChecker(options: QuoteCheckOptions = {}): QuoteChecke
   };
 }
 
-function readableAddress(text: string): string {
+function readableAddress(text: string): ReadableAddress | null {
   let url: URL;
   try {
     url = new URL(text);
   } catch {
-    return text;
+    return null;
   }
 
   for (const rule of READABLE_ADDRESS_RULES) {
     const readable = rule(url);
     if (readable) return readable;
   }
-  return text;
+  return null;
 }
 
 function pageTextsForBody(contentType: string, body: string): string[] {
@@ -169,41 +183,128 @@ function collectStringValues(value: unknown): string[] {
   return [];
 }
 
+/** Makes an HTTP request using only addresses that have already passed validation. */
+export function pinnedFetch(urlText: string, init: RequestInit | undefined, addresses: readonly string[]): Promise<Response> {
+  const url = new URL(urlText);
+  if (url.protocol !== "http:" && url.protocol !== "https:") return Promise.reject(new Error("Unsupported request protocol."));
+  if (addresses.length === 0) return Promise.reject(new Error("No validated addresses were provided."));
+
+  const lookupPinned = createPinnedLookup(addresses);
+  const headers = new Headers(init?.headers);
+  const requestOptions = {
+    method: init?.method ?? "GET",
+    headers: Object.fromEntries(headers.entries()),
+    lookup: lookupPinned,
+    ...(init?.signal ? { signal: init.signal } : {}),
+  };
+  const request = url.protocol === "https:" ? httpsRequest : httpRequest;
+
+  return new Promise((resolve, reject) => {
+    const outgoing = request(url, requestOptions, (incoming) => {
+      const status = incoming.statusCode ?? 502;
+      if (status === 101) {
+        incoming.destroy();
+        reject(new Error("Protocol upgrades are not supported."));
+        return;
+      }
+      const responseHeaders = new Headers();
+      for (const [name, value] of Object.entries(incoming.headers)) {
+        if (Array.isArray(value)) value.forEach((entry) => responseHeaders.append(name, entry));
+        else if (value !== undefined) responseHeaders.set(name, value);
+      }
+      if (status === 204 || status === 205 || status === 304) {
+        incoming.resume();
+        resolve(new Response(null, { status, headers: responseHeaders }));
+        return;
+      }
+      // Unlike fetch, this client does not undo compression. A server may compress without
+      // being asked, and searching compressed bytes would report a real quote as missing.
+      const decoded = decodedBody(incoming, responseHeaders.get("content-encoding"));
+      if (!decoded) {
+        incoming.destroy();
+        reject(new Error("The page is compressed in a form this check cannot read."));
+        return;
+      }
+      responseHeaders.delete("content-encoding");
+      responseHeaders.delete("content-length");
+      resolve(new Response(Readable.toWeb(decoded) as ReadableStream<Uint8Array>, { status, headers: responseHeaders }));
+    });
+    outgoing.once("error", reject);
+    outgoing.end();
+  });
+}
+
+/** The body with any compression the server applied removed, or null when the scheme is not one we read. */
+function decodedBody(incoming: Readable, encoding: string | null): Readable | null {
+  const steps = (encoding ?? "").split(",").map((step) => step.trim().toLowerCase()).filter((step) => step && step !== "identity");
+  let stream: Readable = incoming;
+  // Encodings are listed in the order they were applied, so they are undone last to first.
+  for (const step of steps.reverse()) {
+    const decoder = step === "gzip" || step === "x-gzip" ? createGunzip()
+      : step === "deflate" ? createInflate()
+      : step === "br" ? createBrotliDecompress()
+      : null;
+    if (!decoder) return null;
+    stream.once("error", (error) => decoder.destroy(error));
+    stream = stream.pipe(decoder);
+  }
+  return stream;
+}
+
+/** Returns only the prevalidated records to Node, for both lookup callback forms. */
+export function createPinnedLookup(addresses: readonly string[]): LookupFunction {
+  const records = addresses.map((address) => ({ address, family: isIP(address) }));
+  return (_hostname, lookupOptions, callback) => {
+    if (typeof lookupOptions === "object" && lookupOptions !== null && lookupOptions.all) {
+      callback(null, records);
+      return;
+    }
+    const first = records[0];
+    if (!first) {
+      callback(new Error("No validated addresses were provided."), "", 0);
+      return;
+    }
+    callback(null, first.address, first.family);
+  };
+}
+
 async function validateAddress(
   text: string,
   resolveHost: (hostname: string) => Promise<string[]>,
-): Promise<string | null> {
-  if (!/^https?:\/\//iu.test(text)) return "The address must use HTTP or HTTPS.";
+): Promise<{ problem: string; addresses: [] } | { problem: null; addresses: string[] }> {
+  if (!/^https?:\/\//iu.test(text)) return { problem: "The address must use HTTP or HTTPS.", addresses: [] };
 
   let url: URL;
   try {
     url = new URL(text);
   } catch {
-    return "The address is invalid.";
+    return { problem: "The address is invalid.", addresses: [] };
   }
 
-  if (url.protocol !== "http:" && url.protocol !== "https:") return "The address must use HTTP or HTTPS.";
-  if (url.username || url.password) return "The address must not include a user name or password.";
-  if (url.port) return "The address must use the default port for its scheme.";
+  if (url.protocol !== "http:" && url.protocol !== "https:") return { problem: "The address must use HTTP or HTTPS.", addresses: [] };
+  if (url.username || url.password) return { problem: "The address must not include a user name or password.", addresses: [] };
+  if (url.port) return { problem: "The address must use the default port for its scheme.", addresses: [] };
 
   const hostname = url.hostname.replace(/^\[|\]$/gu, "");
-  if (isNeverFetchHost(hostname)) return "This address is never requested.";
-  if (isLocalHostname(hostname)) return "The address points to a local network host.";
+  if (isNeverFetchHost(hostname)) return { problem: "This address is never requested.", addresses: [] };
+  if (isLocalHostname(hostname)) return { problem: "The address points to a local network host.", addresses: [] };
 
   const ipVersion = isIP(hostname);
   if (ipVersion !== 0) {
-    return isRestrictedIp(hostname) ? "The address points to a restricted network range." : null;
+    return isRestrictedIp(hostname)
+      ? { problem: "The address points to a restricted network range.", addresses: [] }
+      : { problem: null, addresses: [hostname] };
   }
 
   try {
     const addresses = await resolveHost(hostname);
     if (addresses.length === 0 || addresses.some(isRestrictedIp)) {
-      return "The address does not resolve only to public network addresses.";
+      return { problem: "The address does not resolve only to public network addresses.", addresses: [] };
     }
+    return { problem: null, addresses };
   } catch {
-    return "The address could not be verified as public.";
+    return { problem: "The address could not be verified as public.", addresses: [] };
   }
-  return null;
 }
 
 function isLocalHostname(hostname: string): boolean {
@@ -277,19 +378,24 @@ function ipv6Bytes(address: string): number[] | null {
   });
 }
 
-async function readLimitedBody(response: Response, maxBytes: number): Promise<string> {
-  if (!response.body || maxBytes <= 0) return "";
+async function readLimitedBody(response: Response, maxBytes: number): Promise<{ text: string; truncated: boolean }> {
+  if (!response.body) return { text: "", truncated: false };
   const reader = response.body.getReader();
   const chunks: Uint8Array[] = [];
   let total = 0;
+  let truncated = false;
   try {
-    while (total < maxBytes) {
+    while (true) {
       const { done, value } = await reader.read();
       if (done || !value) break;
-      const keep = value.subarray(0, Math.min(value.byteLength, maxBytes - total));
-      chunks.push(keep);
+      const keepSize = Math.max(0, Math.min(value.byteLength, maxBytes - total));
+      const keep = value.subarray(0, keepSize);
+      if (keep.byteLength > 0) chunks.push(keep);
       total += keep.byteLength;
-      if (keep.byteLength < value.byteLength) break;
+      if (keep.byteLength < value.byteLength) {
+        truncated = true;
+        break;
+      }
     }
   } finally {
     await reader.cancel().catch(() => undefined);
@@ -300,7 +406,7 @@ async function readLimitedBody(response: Response, maxBytes: number): Promise<st
     bytes.set(chunk, offset);
     offset += chunk.byteLength;
   }
-  return new TextDecoder().decode(bytes);
+  return { text: new TextDecoder().decode(bytes), truncated };
 }
 
 function htmlToText(html: string): string {
@@ -333,12 +439,7 @@ function comparisonForm(text: string): string {
 }
 
 function fragmentMatches(page: string, fragment: string): boolean {
-  if (page.includes(fragment)) return true;
-  const words = fragment.split(" ");
-  if (words.length < 5) return false;
-  const shingles = Array.from({ length: words.length - 4 }, (_, index) => words.slice(index, index + 5).join(" "));
-  const found = shingles.filter((shingle) => page.includes(shingle)).length;
-  return found / shingles.length >= 0.85;
+  return page.includes(fragment);
 }
 
 function unreachable(detail: string): CheckResult {

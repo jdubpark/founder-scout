@@ -16,6 +16,7 @@
  * all compute exactly the same answer.
  */
 
+import { pickMember, type Pools } from "./pools";
 import { COMPANY_DIMENSIONS, type CompanyDimensionId } from "./company";
 import { coerceParam, getParamDef, type ParamValue } from "./params";
 import { DIMENSIONS, type DimensionId } from "./rubric";
@@ -289,7 +290,29 @@ export interface SwarmConfig {
   routes: Partial<Record<JobId, ModelRoute>>;
   /** Named prompt variant per job. Jobs not listed use "base". */
   promptVariants: Partial<Record<JobId, string>>;
+  /**
+   * Guidance the swarm wrote for itself, per job. A line is added only when an eval round
+   * with that line beat the same config without it on held-out cases, and it is part of
+   * the config so it is put into use, and taken out again, like any other change.
+   */
+  lessons?: Partial<Record<JobId, string[]>>;
+  /**
+   * Jobs done by more than one member. A job not listed here is done by its one route. See
+   * pools.ts for how a task is given to a member and how shares move.
+   */
+  pools?: Pools;
+  /**
+   * The eval variant whose changes this config carries, for each eval flow that has had one put
+   * into use. A config is built up from several sources (an eval's winner, a pool change, a
+   * learned line), so which variant is "in use" cannot be read from the config's id.
+   */
+  applied?: Record<string, string>;
 }
+
+/** The most learned lines one job carries. Past this, a new line must replace an old one. */
+export const MAX_LESSONS_PER_JOB = 8;
+/** The longest a learned line may be. A lesson is one sentence, not an essay. */
+export const MAX_LESSON_LENGTH = 240;
 
 export const BASE_CONFIG: SwarmConfig = {
   id: "cfg_base",
@@ -418,4 +441,78 @@ export function effectiveRoute(
   if (model) route.model = model;
   if (effort) route.effort = effort;
   return route;
+}
+
+/**
+ * `current` with the differences between `from` and `to` applied, and nothing else touched.
+ *
+ * This is how an eval's winner is put into use. The winner was measured as a change to the
+ * eval's own starting config; a swarm's config has meanwhile gathered other things (another
+ * eval's weights, pools of agents, learned lines). Copying the winner's config over the swarm's
+ * would throw those away, so only what the winner changed is carried across. Going back is the
+ * same call with `from` and `to` exchanged.
+ */
+export function overlayConfig(from: SwarmConfig, to: SwarmConfig, current: SwarmConfig): SwarmConfig {
+  const next: SwarmConfig = {
+    ...current,
+    params: { ...current.params },
+    routes: { ...current.routes },
+    promptVariants: { ...current.promptVariants },
+  };
+  for (const key of new Set([...Object.keys(from.params), ...Object.keys(to.params)])) {
+    if (from.params[key] === to.params[key]) continue;
+    if (to.params[key] === undefined) delete next.params[key];
+    else next.params[key] = to.params[key] as ParamValue;
+  }
+  for (const job of new Set([...Object.keys(from.routes), ...Object.keys(to.routes)]) as Set<JobId>) {
+    if (JSON.stringify(from.routes[job]) === JSON.stringify(to.routes[job])) continue;
+    if (to.routes[job] === undefined) delete next.routes[job];
+    else next.routes[job] = { ...(to.routes[job] as ModelRoute) };
+  }
+  for (const job of new Set([...Object.keys(from.promptVariants), ...Object.keys(to.promptVariants)]) as Set<JobId>) {
+    if ((from.promptVariants[job] ?? "base") === (to.promptVariants[job] ?? "base")) continue;
+    if (to.promptVariants[job] === undefined) delete next.promptVariants[job];
+    else next.promptVariants[job] = to.promptVariants[job] as string;
+  }
+  const lessonJobs = new Set([...Object.keys(from.lessons ?? {}), ...Object.keys(to.lessons ?? {})]) as Set<JobId>;
+  if (lessonJobs.size > 0) {
+    const lessons: Partial<Record<JobId, string[]>> = { ...(current.lessons ?? {}) };
+    for (const job of lessonJobs) {
+      const before = from.lessons?.[job] ?? [];
+      const after = to.lessons?.[job] ?? [];
+      const added = after.filter((line) => !before.includes(line));
+      const removed = before.filter((line) => !after.includes(line));
+      if (added.length === 0 && removed.length === 0) continue;
+      const kept = (lessons[job] ?? []).filter((line) => !removed.includes(line));
+      const lines = [...kept, ...added.filter((line) => !kept.includes(line))].slice(0, MAX_LESSONS_PER_JOB);
+      if (lines.length > 0) lessons[job] = lines;
+      else delete lessons[job];
+    }
+    if (Object.keys(lessons).length > 0) next.lessons = lessons;
+    else delete next.lessons;
+  }
+  return next;
+}
+
+/**
+ * The route one task runs on, and the pool member it was given to when the job has a pool.
+ *
+ * `key` names what the task is about (the job and its founder or company), so the same subject
+ * goes to the same member on a retry or the next day while shares are unchanged.
+ *
+ * A person who has pinned a provider or a model for this scope has said which model does the
+ * job, so the pool is not used and no member is recorded. An effort setting is not a choice of
+ * model and still applies on top of the member's route.
+ */
+export function routeForTask(
+  jobId: JobId,
+  resolved: ResolvedSteering,
+  config: SwarmConfig,
+  key: string,
+): { route: ModelRoute; member: string | null } {
+  const pinned = resolved.params["route.provider"] !== undefined || resolved.params["route.model"] !== undefined;
+  const member = pinned ? null : pickMember(config.pools?.[jobId], key);
+  if (!member) return { route: effectiveRoute(jobId, resolved, config), member: null };
+  const effort = resolved.params["route.effort"]?.value as Effort | undefined;
+  return { route: effort ? { ...member.route, effort } : { ...member.route }, member: member.id };
 }

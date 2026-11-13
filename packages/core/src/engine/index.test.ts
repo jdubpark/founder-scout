@@ -470,6 +470,70 @@ async function runThreeDays() {
 }
 
 describe("run engine", () => {
+  it("routes simulated investigation tasks to stable pool members unless a person pins the model", async () => {
+    const world = createSimWorld({ seed: 7031, founders: 12, days: 2 });
+    const members = [
+      { id: "alpha", route: { provider: "openai-api" as const, model: "pool-model-alpha", effort: "medium" as const }, share: 0.5, status: "active" as const, note: null },
+      { id: "beta", route: { provider: "openai-api" as const, model: "pool-model-beta", effort: "medium" as const }, share: 0.5, status: "active" as const, note: null },
+    ];
+    const harness = makeHarness({
+      simWorld: world,
+      agentJobs: ["investigate.background"],
+      config: {
+        params: { "investigate.max_founders": 20 },
+        pools: { "investigate.background": members },
+      },
+    });
+    const founders = world.founders().slice(0, 12).map((sim, index) =>
+      makeFounder(sim, `fnd_pool_${index}`, { status: "queued" }));
+    founders.forEach((founder) => harness.store.insertFounder(founder));
+
+    const firstStart = await harness.controller.start({ swarmId: SWARM_ID, trigger: "manual", brain: "sim", sources: "live" });
+    const firstRun = await harness.controller.wait(firstStart.id);
+    const firstTasks = harness.store.listTasks({ runId: firstRun.id }).filter((task) => task.jobId === "investigate.background");
+    const memberModels = new Map(members.map((member) => [member.id, member.route.model]));
+
+    expect(firstRun.status).toBe("succeeded");
+    expect(firstTasks).toHaveLength(founders.length);
+    expect(firstTasks.every((task) => task.poolMember !== null && task.poolMember !== undefined)).toBe(true);
+    expect(firstTasks.every((task) => task.model === memberModels.get(task.poolMember!))).toBe(true);
+    expect(new Set(firstTasks.map((task) => task.poolMember))).toEqual(new Set(members.map((member) => member.id)));
+
+    const repeated = firstTasks[0]!;
+    harness.store.updateFounder(repeated.founderId!, { status: "queued" });
+    const secondStart = await harness.controller.start({ swarmId: SWARM_ID, trigger: "manual", brain: "sim", sources: "live" });
+    const secondRun = await harness.controller.wait(secondStart.id);
+    const repeatedTask = harness.store.listTasks({ runId: secondRun.id }).find((task) => task.jobId === "investigate.background");
+    expect(repeatedTask).toMatchObject({ founderId: repeated.founderId, poolMember: repeated.poolMember, model: repeated.model });
+
+    const pinned = makeHarness({
+      simWorld: world,
+      agentJobs: ["investigate.background"],
+      config: { pools: { "investigate.background": members } },
+    });
+    const pinnedFounder = makeFounder(world.founders()[8]!, "fnd_pool_pinned", { status: "queued" });
+    pinned.store.insertFounder(pinnedFounder);
+    pinned.store.insertDirective(makeDirective({
+      id: "dir_pool_model_pin",
+      scope: { swarmId: SWARM_ID, jobId: "investigate.background" },
+      kind: "param",
+      key: "route.model",
+      value: "person-pinned-model",
+    }));
+    const pinnedStart = await pinned.controller.start({ swarmId: SWARM_ID, trigger: "manual", brain: "sim", sources: "live" });
+    const pinnedRun = await pinned.controller.wait(pinnedStart.id);
+    const pinnedTask = pinned.store.listTasks({ runId: pinnedRun.id }).find((task) => task.jobId === "investigate.background");
+    expect(pinnedTask).toMatchObject({ founderId: pinnedFounder.id, model: "person-pinned-model", poolMember: null });
+
+    const unpooled = makeHarness({ simWorld: world, agentJobs: ["investigate.background"] });
+    const unpooledFounder = makeFounder(world.founders()[9]!, "fnd_pool_unpooled", { status: "queued" });
+    unpooled.store.insertFounder(unpooledFounder);
+    const unpooledStart = await unpooled.controller.start({ swarmId: SWARM_ID, trigger: "manual", brain: "sim", sources: "live" });
+    const unpooledRun = await unpooled.controller.wait(unpooledStart.id);
+    const unpooledTask = unpooled.store.listTasks({ runId: unpooledRun.id }).find((task) => task.jobId === "investigate.background");
+    expect(unpooledTask).toMatchObject({ founderId: unpooledFounder.id, poolMember: null });
+  });
+
   it("advances a deterministic simulated timeline and matches cross-source identities without merging homonyms", async () => {
     const first = await runThreeDays();
     const second = await runThreeDays();

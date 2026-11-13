@@ -15,6 +15,7 @@ import {
   type EvalFlowSummary,
   type EvalMetricDef,
   type EvalVariant,
+  type ModelRoute,
   type PromoteVariantInput,
   type RunEvalRoundInput,
   type SwarmConfig,
@@ -36,6 +37,7 @@ import {
 } from "./runner";
 import { ndcg5, pedigreeLeak, precision5, rankMatch, recall5, top5Match } from "./metrics";
 import { createPartnerEval, PARTNER_CALLS_FLOW_ID } from "./partner";
+import { createPastEval, PAST_FOUNDERS_FLOW_ID } from "./past";
 import { serializeEvalFlow } from "./lock";
 import { appendJsonLine, readJsonLines, writeAtomicFile } from "./persistence";
 
@@ -46,6 +48,7 @@ export type { EvalCase, EvalScoreFn } from "./runner";
 export const ASSESS_RANKING_ID = "assess-ranking";
 export const ASSESS_RANKING_LABEL = "Ranking quality";
 export { PARTNER_CALLS_FLOW_ID };
+export { PAST_FOUNDERS_FLOW_ID };
 export { partnerAgreement, partnerSplit } from "./partner";
 export const SYNTHETIC_DATA_NOTE =
   "Synthetic founders with known outcomes. This shows the loop works; it says nothing yet about real founders.";
@@ -72,6 +75,8 @@ export interface EvalOptions {
   scoreFn?: (founder: SimFounder, config: SwarmConfig) => number | null;
   /** Optional proposer override for controlled experiments. It receives train ids only. */
   propose?: typeof proposeTrainChange;
+  /** The model that judges past cases. null or absent uses the analysts' own routes. */
+  pastJudge?: ModelRoute | null;
 }
 
 interface TriedChange {
@@ -854,6 +859,7 @@ function summarize(id: string, variants: readonly EvalVariant[], state: EvalStat
     best: best?.test[GOAL.target] ?? null,
     rounds: state?.current_round ?? 0,
     updatedAt,
+    realData: false,
   };
 }
 
@@ -901,6 +907,13 @@ function flowOptions(options: EvalOptions) {
 
 export function createEvalService(deps: EvalDeps, options: EvalOptions = {}): EvalService {
   const partnerFlow = deps.store ? createPartnerEval(deps) : null;
+  // A named judge does both analysts' work on past cases. The swarm's own analysts are unchanged.
+  const pastFlow = createPastEval(deps, {
+    decideCandidate,
+    ...(options.pastJudge
+      ? { initialConfig: { ...BASE_CONFIG, routes: { ...BASE_CONFIG.routes, "assess.judgments": options.pastJudge, "assess.company": options.pastJudge } } }
+      : {}),
+  });
   const knownFlow = (id: string): void => {
     if (id !== ASSESS_RANKING_ID) throw new ServiceError(404, `Unknown eval flow: ${id}`);
   };
@@ -929,6 +942,8 @@ export function createEvalService(deps: EvalDeps, options: EvalOptions = {}): Ev
         bestVariant: null,
         promotedVariant: null,
         narrative: "",
+        ready: true,
+        callsModels: false,
       };
     }
     const variants = await buildVariantDtos(root, state);
@@ -947,6 +962,8 @@ export function createEvalService(deps: EvalDeps, options: EvalOptions = {}): Ev
       bestVariant: best?.id ?? null,
       promotedVariant: null,
       narrative: await refreshNarrative(root),
+      ready: true,
+      callsModels: false,
     };
   }
 
@@ -962,7 +979,7 @@ export function createEvalService(deps: EvalDeps, options: EvalOptions = {}): Ev
         const { state, variants } = await getStateOrEmpty();
         return summarize(ASSESS_RANKING_ID, variants, state, state?.updated_at ?? null);
       });
-      return [summary, ...(partnerFlow ? await partnerFlow.listFlows() : [])];
+      return [summary, ...(partnerFlow ? await partnerFlow.listFlows() : []), ...(await pastFlow.listFlows())];
     },
 
     async getFlow(id: string): Promise<EvalFlowDTO> {
@@ -970,6 +987,7 @@ export function createEvalService(deps: EvalDeps, options: EvalOptions = {}): Ev
         if (!partnerFlow) throw new ServiceError(404, `Unknown eval flow: ${id}`);
         return partnerFlow.getFlow(id);
       }
+      if (id === PAST_FOUNDERS_FLOW_ID) return pastFlow.getFlow(id);
       knownFlow(id);
       return serializeEvalFlow(rankingLockKey, getAssessmentFlow);
     },
@@ -979,6 +997,7 @@ export function createEvalService(deps: EvalDeps, options: EvalOptions = {}): Ev
         if (!partnerFlow) throw new ServiceError(404, `Unknown eval flow: ${id}`);
         return partnerFlow.runRounds(id, input);
       }
+      if (id === PAST_FOUNDERS_FLOW_ID) return pastFlow.runRounds(id, input);
       knownFlow(id);
       return rankingWrite(async () => {
       const brain = input.brain ?? "sim";
@@ -1117,7 +1136,9 @@ export function createEvalService(deps: EvalDeps, options: EvalOptions = {}): Ev
       const rowsByVariant = new Map<string, ResultRow[]>();
       for (const meta of metas) rowsByVariant.set(meta.id, await readRows(path.join(root, meta.id, "results.jsonl")));
       await updateReports(root, state, metas, rowsByVariant);
-      return getAssessmentFlow();
+      const dto = await getAssessmentFlow();
+      dto.spentUsd = 0;
+      return dto;
       });
     },
 
@@ -1126,6 +1147,7 @@ export function createEvalService(deps: EvalDeps, options: EvalOptions = {}): Ev
         if (!partnerFlow) throw new ServiceError(404, `Unknown eval flow: ${id}`);
         return partnerFlow.variantConfig(id, input);
       }
+      if (id === PAST_FOUNDERS_FLOW_ID) return pastFlow.variantConfig(id, input);
       knownFlow(id);
       return serializeEvalFlow(rankingLockKey, async () => {
       const root = flowDir(deps, id);
@@ -1140,6 +1162,10 @@ export function createEvalService(deps: EvalDeps, options: EvalOptions = {}): Ev
         label: config.label.startsWith(labelPrefix) ? config.label : `${labelPrefix} ${config.label}`,
       };
       });
+    },
+
+    outcomeEvidence() {
+      return pastFlow.outcomeEvidence();
     },
   };
 }

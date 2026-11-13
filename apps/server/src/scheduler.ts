@@ -21,7 +21,7 @@ export interface SchedulerOptions {
 
 export interface SchedulerHandle {
   stop(): void;
-  /** Resolves after a scheduled dispatch already in progress has returned. */
+  /** Resolves after scheduled dispatch and settings reads already in progress have returned. */
   waitForIdle(): Promise<void>;
 }
 
@@ -42,6 +42,25 @@ export function startScheduler(options: SchedulerOptions): SchedulerHandle {
     const detail = { error: error instanceof Error ? error.message : String(error) };
     if (logger) logger.error(message, detail);
     else console.error(message, detail);
+  };
+
+  const coachAfterRun = (runs: Awaited<ReturnType<SwarmService["runScheduled"]>>): void => {
+    for (const run of runs) {
+      void (async () => {
+        try {
+          await service.runs.wait(run.id);
+        } catch (error) {
+          reportFailure("Scheduled run completion wait failed", error);
+          return;
+        }
+        if (stopped) return;
+        try {
+          await service.coach(run.swarmId);
+        } catch (error) {
+          reportFailure("Scheduled run coaching failed", error);
+        }
+      })();
+    }
   };
 
   const clearScheduleTimer = (): void => {
@@ -68,7 +87,8 @@ export function startScheduler(options: SchedulerOptions): SchedulerHandle {
       }
       const dispatch = (async () => {
         try {
-          await service.runScheduled();
+          const runs = await service.runScheduled();
+          coachAfterRun(runs);
         } catch (error) {
           reportFailure("Scheduled run failed", error);
         } finally {
@@ -111,7 +131,7 @@ export function startScheduler(options: SchedulerOptions): SchedulerHandle {
       if (!latest || Date.parse(latest.startedAt) < due) overdue.push(swarm.id);
     }
     // Only the swarms that missed their run: one that already ran today is not run again.
-    if (overdue.length > 0) await service.runScheduled(overdue);
+    if (overdue.length > 0) coachAfterRun(await service.runScheduled(overdue));
   };
 
   const poll = async (): Promise<void> => {

@@ -12,6 +12,7 @@ const Swarm = lazy(() => import("./pages/Swarm"));
 const Steering = lazy(() => import("./pages/Steering"));
 const Approvals = lazy(() => import("./pages/Approvals"));
 const Improve = lazy(() => import("./pages/Improve"));
+const Assumptions = lazy(() => import("./pages/Assumptions"));
 const Activity = lazy(() => import("./pages/Activity"));
 const RunDetail = lazy(() => import("./pages/RunDetail"));
 const Settings = lazy(() => import("./pages/Settings"));
@@ -34,6 +35,7 @@ export const routes: RouteObject[] = [
       { path: "approvals", element: page(<Approvals />) },
       { path: "improve", element: page(<Improve />) },
       { path: "improve/:flowId", element: page(<Improve />) },
+      { path: "assumptions", element: page(<Assumptions />) },
       { path: "activity", element: page(<Activity />) },
       { path: "activity/:runId", element: page(<RunDetail />) },
       { path: "settings", element: page(<Settings />) },

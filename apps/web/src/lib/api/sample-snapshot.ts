@@ -1075,7 +1075,11 @@ export const SAMPLE_SNAPSHOT: DemoSnapshot = {
   generatedAt: new Date(NOW).toISOString(),
   note: "Simulated founders and companies. No real people or companies.",
   settings: {
-    settings: { ...DEFAULT_SETTINGS, schedule: { ...DEFAULT_SETTINGS.schedule, enabled: true } },
+    settings: {
+      ...DEFAULT_SETTINGS,
+      schedule: { ...DEFAULT_SETTINGS.schedule, enabled: true },
+      autopilot: { mode: "suggest", budgetUsd: 0 },
+    },
     providers: PROVIDERS.map((p) => ({
       id: p.id,
       label: p.label,
@@ -1131,6 +1135,21 @@ export const SAMPLE_SNAPSHOT: DemoSnapshot = {
       })),
       spendByClass: AGENT_CLASSES.map((c) => ({ classId: c.id, label: c.label, costUsd: classCost(c.id) })),
       calls: { yes: 0, no: 0, waiting: 0, hitRate: null, topReasons: [] },
+      coach: {
+        at: iso(9 * 60 + 20),
+        mode: "suggest",
+        spentUsd: 0,
+        flows: [
+          {
+            flowId: "assess-ranking",
+            label: "Ranking quality",
+            rounds: 1,
+            kept: ["Tell the rubric analyst to ignore school and employer names"],
+            applied: null,
+            note: null,
+          },
+        ],
+      },
       evalTrend: [
         { variant: "baseline", test: 0.52 },
         { variant: "v1", test: 0.58 },

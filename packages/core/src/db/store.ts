@@ -20,6 +20,7 @@ import {
   type Founder,
   type FounderStatus,
   type Lead,
+  type MemberStats,
   type Memo,
   type OutreachAction,
   type OutreachStatus,
@@ -51,6 +52,10 @@ function parse<T>(row: RecordRow | undefined): T | null {
 
 function serialize(value: unknown): string {
   return JSON.stringify(value);
+}
+
+function normalizedTask(task: TaskRun): TaskRun {
+  return { ...task, poolMember: task.poolMember ?? null };
 }
 
 function clone<T>(value: T): T {
@@ -156,7 +161,14 @@ export class SqliteStore implements Store {
 
   getSettings(): Settings {
     const found = parse<Settings>(this.db.prepare("SELECT record FROM settings WHERE id = 'settings'").get() as RecordRow | undefined);
-    return found ?? clone(DEFAULT_SETTINGS);
+    if (!found) return clone(DEFAULT_SETTINGS);
+    // Settings saved before a field existed read back with that field's default.
+    return {
+      ...clone(DEFAULT_SETTINGS),
+      ...found,
+      schedule: { ...DEFAULT_SETTINGS.schedule, ...found.schedule },
+      autopilot: { ...DEFAULT_SETTINGS.autopilot, ...found.autopilot },
+    };
   }
 
   saveSettings(settings: Settings): void {
@@ -814,14 +826,16 @@ export class SqliteStore implements Store {
 
   insertTask(task: TaskRun): void {
     this.transaction(() => {
-      const { trace, ...record } = task;
+      const normalized = normalizedTask(task);
+      const { trace, ...record } = normalized;
       this.db.prepare(`INSERT INTO tasks (id, run_id, swarm_id, agent_id, founder_id, status, started_at, finished_at,
-        cost_usd, items_out, output_summary, company_id, record) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
-        .run(task.id, task.runId, task.swarmId, task.agentId, task.founderId, task.status, task.startedAt, task.finishedAt,
-          task.costUsd, task.itemsOut, task.outputSummary, task.companyId ?? null, serialize(record));
-      if (trace !== undefined) this.db.prepare("INSERT INTO task_traces (task_id, trace) VALUES (?, ?)").run(task.id, serialize(trace));
+        cost_usd, items_out, output_summary, company_id, pool_member, record) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+        .run(normalized.id, normalized.runId, normalized.swarmId, normalized.agentId, normalized.founderId,
+          normalized.status, normalized.startedAt, normalized.finishedAt, normalized.costUsd, normalized.itemsOut,
+          normalized.outputSummary, normalized.companyId ?? null, normalized.poolMember, serialize(record));
+      if (trace !== undefined) this.db.prepare("INSERT INTO task_traces (task_id, trace) VALUES (?, ?)").run(normalized.id, serialize(trace));
       const insertDirective = this.db.prepare("INSERT OR IGNORE INTO task_directives (task_id, directive_id, started_at) VALUES (?, ?, ?)");
-      for (const directiveId of new Set(task.steering.directiveIds)) insertDirective.run(task.id, directiveId, task.startedAt);
+      for (const directiveId of new Set(normalized.steering.directiveIds)) insertDirective.run(normalized.id, directiveId, normalized.startedAt);
     });
   }
 
@@ -829,12 +843,13 @@ export class SqliteStore implements Store {
     this.transaction(() => {
       const row = this.db.prepare("SELECT record FROM tasks WHERE id = ?").get(id) as RecordRow | undefined;
       if (!row) throw missing("Task", id);
-      const updated = { ...JSON.parse(row.record) as Omit<TaskRun, "trace">, ...patch } as TaskRun;
+      const updated = normalizedTask({ ...JSON.parse(row.record) as Omit<TaskRun, "trace">, ...patch } as TaskRun);
       const { trace, ...record } = updated;
       this.db.prepare(`UPDATE tasks SET agent_id = ?, founder_id = ?, status = ?, started_at = ?, finished_at = ?,
-        cost_usd = ?, items_out = ?, output_summary = ?, company_id = ?, record = ? WHERE id = ?`)
+        cost_usd = ?, items_out = ?, output_summary = ?, company_id = ?, pool_member = ?, record = ? WHERE id = ?`)
         .run(updated.agentId, updated.founderId, updated.status, updated.startedAt, updated.finishedAt,
-          updated.costUsd, updated.itemsOut, updated.outputSummary, updated.companyId ?? null, serialize(record), id);
+          updated.costUsd, updated.itemsOut, updated.outputSummary, updated.companyId ?? null, updated.poolMember,
+          serialize(record), id);
       if (Object.hasOwn(patch, "trace")) {
         if (trace === undefined) this.db.prepare("DELETE FROM task_traces WHERE task_id = ?").run(id);
         else this.db.prepare("INSERT INTO task_traces (task_id, trace) VALUES (?, ?) ON CONFLICT(task_id) DO UPDATE SET trace = excluded.trace")
@@ -844,9 +859,10 @@ export class SqliteStore implements Store {
   }
 
   getTask(id: string, options: { withTrace: boolean }): TaskRun | null {
-    const task = parse<Omit<TaskRun, "trace">>(this.db.prepare("SELECT record FROM tasks WHERE id = ?").get(id) as RecordRow | undefined);
-    if (task === null) return null;
-    if (!options.withTrace) return task as TaskRun;
+    const record = parse<Omit<TaskRun, "trace">>(this.db.prepare("SELECT record FROM tasks WHERE id = ?").get(id) as RecordRow | undefined);
+    if (record === null) return null;
+    const task = normalizedTask(record as TaskRun);
+    if (!options.withTrace) return task;
     const traceRow = this.db.prepare("SELECT trace FROM task_traces WHERE task_id = ?").get(id) as { trace: string } | undefined;
     return { ...task, trace: traceRow ? JSON.parse(traceRow.trace) as NonNullable<TaskRun["trace"]> : [] };
   }
@@ -864,7 +880,7 @@ export class SqliteStore implements Store {
       : `SELECT record FROM (SELECT record, insertion_order FROM tasks ${clause} ORDER BY insertion_order DESC LIMIT ?)
          ORDER BY insertion_order ASC`;
     if (filter.limit !== undefined) params.push(Math.max(0, Math.floor(filter.limit)));
-    return rowRecords(this.db.prepare(sql).all(...params) as RecordRow[]) as TaskRun[];
+    return (rowRecords(this.db.prepare(sql).all(...params) as RecordRow[]) as TaskRun[]).map(normalizedTask);
   }
 
   runCost(runId: string): number {
@@ -897,6 +913,61 @@ export class SqliteStore implements Store {
       }
     }
     return [...stats.values()];
+  }
+
+  memberStats(swarmId: string, jobId: TaskRun["jobId"], sinceIso: string): MemberStats[] {
+    const rows = this.db.prepare(`
+      WITH filtered_tasks AS (
+        SELECT id, COALESCE(pool_member, '') AS member_id, status, cost_usd,
+          json_extract(record, '$.control') AS control
+        FROM tasks
+        WHERE swarm_id = ? AND json_extract(record, '$.jobId') = ? AND started_at >= ?
+      ),
+      task_stats AS (
+        SELECT member_id, COUNT(*) AS tasks,
+          SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) AS failed,
+          COALESCE(SUM(COALESCE(cost_usd, 0)), 0) AS cost_usd,
+          SUM(CASE WHEN control IS NOT NULL THEN 1 ELSE 0 END) AS controls,
+          SUM(CASE WHEN control = 'failed' THEN 1 ELSE 0 END) AS controls_failed
+        FROM filtered_tasks
+        GROUP BY member_id
+      ),
+      evidence_stats AS (
+        SELECT filtered_tasks.member_id, COUNT(evidence.id) AS items,
+          SUM(CASE WHEN evidence.verification = 'supported' THEN 1 ELSE 0 END) AS supported,
+          SUM(CASE WHEN evidence.verification = 'unsupported' THEN 1 ELSE 0 END) AS rejected
+        FROM filtered_tasks
+        LEFT JOIN evidence ON json_extract(evidence.record, '$.collectedByTaskId') = filtered_tasks.id
+        GROUP BY filtered_tasks.member_id
+      )
+      SELECT task_stats.member_id, task_stats.tasks, task_stats.failed, task_stats.cost_usd,
+        evidence_stats.items, evidence_stats.supported, evidence_stats.rejected,
+        task_stats.controls, task_stats.controls_failed
+      FROM task_stats
+      JOIN evidence_stats ON evidence_stats.member_id = task_stats.member_id
+      ORDER BY task_stats.member_id ASC
+    `).all(swarmId, jobId, sinceIso) as Array<{
+      member_id: string;
+      tasks: number;
+      failed: number;
+      cost_usd: number;
+      items: number;
+      supported: number;
+      rejected: number;
+      controls: number;
+      controls_failed: number;
+    }>;
+    return rows.map((row) => ({
+      memberId: row.member_id,
+      tasks: row.tasks,
+      failed: row.failed,
+      costUsd: row.cost_usd,
+      items: row.items,
+      supported: row.supported,
+      rejected: row.rejected,
+      controls: row.controls,
+      controlsFailed: row.controls_failed,
+    }));
   }
 
   audit(entry: Omit<AuditEntry, "id" | "at">): AuditEntry {

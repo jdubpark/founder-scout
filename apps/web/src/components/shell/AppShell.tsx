@@ -6,6 +6,7 @@ import {
   Hash,
   House,
   LineChart,
+  ListChecks,
   Network,
   Plus,
   Settings as SettingsIcon,
@@ -41,6 +42,7 @@ const MANAGE: NavItem[] = [
   { to: "/swarm", label: "Swarm", icon: Network },
   { to: "/steering", label: "Steering", icon: SlidersHorizontal },
   { to: "/improve", label: "Improve", icon: LineChart },
+  { to: "/assumptions", label: "Assumptions", icon: ListChecks },
   { to: "/activity", label: "Activity", icon: Activity },
   { to: "/settings", label: "Settings", icon: SettingsIcon },
 ];

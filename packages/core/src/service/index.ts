@@ -2,14 +2,14 @@ import { join } from "node:path";
 import {
   AGENT_CLASSES, BASE_CONFIG, JOBS, SOURCES, STAGES,
   buildEffectiveSteering, coerceParam, effectiveRoute, getParamDef, isClassId, isCompanyReasonFor, isJobId,
-  isNeverFetchUrl, isReasonFor, newId, normalizeCompanyName, normalizeScope, paramsFor, scopeLabel,
+  isNeverFetchUrl, isReasonFor, newId, normalizeCompanyName, normalizeScope, overlayConfig, paramsFor, scopeLabel,
   scopeLevel, stableId, suggestSteering, suggestionTextKey, summarizeCalls, swarmIdentity,
   type Agent, type AgentIdentity, type ApiClient,
-  type AddFounderInput, type CallExample, type ClassId, type CompanyFeedback, type CompanyQuery, type Directive, type DirectiveFilter,
+  type AddFounderInput, type CallExample, type ClassId, type CoachReport, type CompanyFeedback, type CompanyQuery, type Directive, type DirectiveFilter,
   type DirectiveRow, type EffectiveSteeringQuery, type Evidence, type Feedback,
   type Founder, type FounderRow, type NetworkContact, type NodeHealth, type NodeStats, type ProfileLinks, type CompanyRow,
   type OutreachRow, type Run, type SettingsPatch,
-  type StageId, type Swarm, type TaskRun, type Thesis,
+  type StageId, type Swarm, type SwarmConfig, type TaskRun, type Thesis,
 } from "@agentswarm/shared";
 import type {
   App, AppOptions, ServiceDeps, Store, SwarmService,
@@ -22,6 +22,9 @@ import { createProviderRegistry } from "../providers";
 import { createJobRegistry, createExecuteJob, findSensitive, redactSensitive } from "../jobs";
 import { createRunController } from "../engine";
 import { createEvalService } from "../eval";
+import { poolsView, rebalancePools, setPool } from "./pools";
+import { assumptionsFor } from "./assumptions";
+import { previewConfig } from "./preview";
 
 const iso = (date: Date): string => date.toISOString();
 const messageOf = (error: unknown): string => error instanceof Error ? error.message : String(error);
@@ -235,10 +238,74 @@ export function createSwarmService(deps: ServiceDeps): SwarmService {
     }
     const config = store.getConfig(swarm.configId) ?? BASE_CONFIG;
     const names = { swarms: swarmNames(), agents: agentNames() };
-    return buildEffectiveSteering({
+    const resolved = buildEffectiveSteering({
       directives: store.listDirectives(), identity, config, names, label,
       calls: feedbackExamples(swarm.id), now: now(),
     });
+    return { ...resolved, lessons: identity.jobId ? config.lessons?.[identity.jobId] ?? [] : [] };
+  };
+
+  const coachAudits = (swarmId?: string) => store.recentAudit(100_000).filter((entry) =>
+    entry.actor === "Swarm" && entry.action === "coach.run" && (swarmId === undefined || entry.target === swarmId),
+  );
+  const coachReportFrom = (entry: ReturnType<Store["recentAudit"]>[number]): CoachReport | null => {
+    const report = entry.detail.report;
+    if (!report || typeof report !== "object") return null;
+    const candidate = report as CoachReport;
+    return typeof candidate.at === "string" && Array.isArray(candidate.flows) ? candidate : null;
+  };
+  // The overview asks for this on every refresh. The audit log is scanned once per swarm after a
+  // restart and the answer is kept; coach() replaces it when it writes a new report.
+  const coachReports = new Map<string, CoachReport | null>();
+  const latestCoachReport = (swarmId: string): CoachReport | null => {
+    if (coachReports.has(swarmId)) return coachReports.get(swarmId) ?? null;
+    let latest: CoachReport | null = null;
+    for (const entry of coachAudits(swarmId)) {
+      latest = coachReportFrom(entry);
+      if (latest) break;
+    }
+    coachReports.set(swarmId, latest);
+    return latest;
+  };
+  /**
+   * The swarm's config with one eval variant put into use. Only what the variant changed is
+   * carried across: the swarm's config also holds what other evals changed, its pools of agents
+   * and its learned lines, and replacing it with the variant's own config would drop them. The
+   * starting point is the variant of this flow already in use, or the flow's baseline, so
+   * choosing the baseline again takes this flow's changes back out.
+   */
+  const variantInUse = (flow: Awaited<ReturnType<ServiceDeps["evals"]["getFlow"]>>, swarm: Swarm, variantId: string): SwarmConfig => {
+    const target = flow.variants.find((variant) => variant.id === variantId);
+    if (!target) fail(404, `Unknown eval variant: ${variantId}`);
+    if (target.status === "reverted") fail(409, "This round was reverted. Only a round the eval kept can be put into use.");
+    const current = store.getConfig(swarm.configId) ?? BASE_CONFIG;
+    const startId = current.applied?.[flow.id];
+    const start = flow.variants.find((variant) => variant.id === startId)?.config
+      ?? flow.variants.find((variant) => variant.id === "baseline")?.config
+      ?? BASE_CONFIG;
+    const applied = { ...(current.applied ?? {}) };
+    if (target.id === "baseline") delete applied[flow.id];
+    else applied[flow.id] = target.id;
+    const next: SwarmConfig = {
+      ...overlayConfig(start, target.config, current),
+      id: stableId("cfg", `${swarm.id}:${flow.id}:${target.id}:${current.id}`),
+      label: `${flow.label}, ${target.id}`,
+      applied,
+    };
+    if (Object.keys(applied).length === 0) delete next.applied;
+    return next;
+  };
+  const promoteVariant = async (id: string, input: { variant: string; swarmId: string }, actor: string, action: "eval.promote" | "coach.apply"): Promise<SwarmConfig> => {
+    const swarm = getSwarm(input.swarmId);
+    const flow = await busyAsConflict(() => deps.evals.getFlow(id));
+    const config = variantInUse(flow, swarm, input.variant);
+    const at = iso(now());
+    store.transaction(() => {
+      store.saveConfig(config);
+      store.updateSwarm(swarm.id, { configId: config.id, updatedAt: at } as never);
+    });
+    audit(actor, action, swarm.id, { flowId: id, variant: input.variant, configId: config.id });
+    return config;
   };
   const buildTree = (swarmId: string) => {
     const swarm = getSwarm(swarmId);
@@ -350,7 +417,13 @@ export function createSwarmService(deps: ServiceDeps): SwarmService {
     }
     const alerts: Array<{ id: string; level: "info" | "warning" | "error"; title: string; detail: string; at: string; link: string | null }> = [];
     const alertAt = latestRun?.finishedAt ?? latestRun?.startedAt ?? iso(now());
+    const coach = latestCoachReport(swarm.id);
     if (settings.killSwitch) alerts.push({ id: "kill-switch", level: "error", title: "Emergency stop is on", detail: "No new run, task or eval round starts. Turn it off in Settings when it is safe to resume.", at: iso(now()), link: "/settings" });
+    const appliedCoachChange = coach?.flows.find((flow) => flow.applied !== null)?.applied;
+    const coachAgeMs = coach ? now().getTime() - Date.parse(coach.at) : Number.NaN;
+    if (appliedCoachChange && coachAgeMs >= 0 && coachAgeMs <= 48 * 60 * 60 * 1000) {
+      alerts.push({ id: "coach-applied", level: "info", title: "The swarm changed its own settings", detail: `${appliedCoachChange}. You can undo it on the Improve page.`, at: coach!.at, link: "/improve" });
+    }
     if (latestRun?.status === "failed") alerts.push({ id: `run-failed-${latestRun.id}`, level: "error", title: "Latest run failed", detail: latestRun.error ?? "Review the run details and retry when ready.", at: alertAt, link: `/activity/${latestRun.id}` });
     if (latestRun?.status === "budget_stopped") alerts.push({ id: `run-budget-${latestRun.id}`, level: "warning", title: "Latest run reached its spend cap", detail: "Review the run's spend and raise the cap only if the remaining work is worth it.", at: alertAt, link: `/activity/${latestRun.id}` });
     if (latestRun && latestRun.stats.failures > 0) alerts.push({ id: `run-tasks-${latestRun.id}`, level: "warning", title: "Latest run had failed tasks", detail: `${latestRun.stats.failures} task${latestRun.stats.failures === 1 ? "" : "s"} failed. Review the run details.`, at: alertAt, link: `/activity/${latestRun.id}` });
@@ -399,6 +472,7 @@ export function createSwarmService(deps: ServiceDeps): SwarmService {
       sourceYield,
       spendByClass: AGENT_CLASSES.map((cls) => ({ classId: cls.id, label: cls.label, costUsd: classCosts.get(cls.id) ?? 0 })),
       evalTrend, calls, recentAudit: store.recentAudit(8),
+      coach,
     };
   }
 
@@ -412,14 +486,17 @@ export function createSwarmService(deps: ServiceDeps): SwarmService {
       async updateSettings(patch: SettingsPatch) {
         if (!patch || typeof patch !== "object") fail(400, "Enter settings to update.");
         if (patch.schedule !== undefined && (!patch.schedule || typeof patch.schedule !== "object")) fail(400, "Enter valid schedule settings.", { schedule: "Enter valid schedule settings." });
+        if (patch.autopilot !== undefined && (!patch.autopilot || typeof patch.autopilot !== "object" || Array.isArray(patch.autopilot))) fail(400, "Enter valid autopilot settings.", { autopilot: "Enter valid autopilot settings." });
         if (patch.dismissedSuggestions !== undefined && !Array.isArray(patch.dismissedSuggestions)) fail(400, "Choose valid dismissed suggestions.", { dismissedSuggestions: "Choose valid suggestion keys." });
         const current = store.getSettings();
-        const next = { ...current, ...patch, schedule: { ...current.schedule, ...patch.schedule }, dismissedSuggestions: patch.dismissedSuggestions ? uniqueText(patch.dismissedSuggestions) : current.dismissedSuggestions };
+        const next = { ...current, ...patch, schedule: { ...current.schedule, ...patch.schedule }, autopilot: { ...current.autopilot, ...patch.autopilot }, dismissedSuggestions: patch.dismissedSuggestions ? uniqueText(patch.dismissedSuggestions) : current.dismissedSuggestions };
         if (patch.killSwitch !== undefined && typeof patch.killSwitch !== "boolean") fail(400, "Choose whether emergency stop is on or off.", { killSwitch: "Choose on or off." });
         if (patch.operatorName !== undefined) {
           next.operatorName = trimmed(patch.operatorName);
           if (next.operatorName.length < 1 || next.operatorName.length > 60) fail(400, "Enter an operator name from 1 to 60 characters.", { operatorName: "Enter an operator name from 1 to 60 characters." });
         }
+        if (patch.autopilot?.mode !== undefined && patch.autopilot.mode !== "off" && patch.autopilot.mode !== "suggest" && patch.autopilot.mode !== "apply") fail(400, "Choose off, suggest or apply for autopilot.", { "autopilot.mode": "Choose off, suggest or apply." });
+        if (patch.autopilot?.budgetUsd !== undefined && (!Number.isFinite(patch.autopilot.budgetUsd) || patch.autopilot.budgetUsd < 0 || patch.autopilot.budgetUsd > 1000)) fail(400, "Enter a daily eval budget from 0 to 1000 USD.", { "autopilot.budgetUsd": "Enter 0 to 1000." });
         if (patch.schedule?.enabled !== undefined && typeof patch.schedule.enabled !== "boolean") fail(400, "Choose whether the schedule is enabled.", { "schedule.enabled": "Choose enabled or disabled." });
         if (patch.schedule?.brain !== undefined && patch.schedule.brain !== "sim" && patch.schedule.brain !== "live") fail(400, "Choose a supported run brain.", { "schedule.brain": "Choose simulation or live." });
         if (patch.schedule?.sources !== undefined && patch.schedule.sources !== "sim" && patch.schedule.sources !== "live") fail(400, "Choose a supported source mode.", { "schedule.sources": "Choose simulated or live sources." });
@@ -743,7 +820,14 @@ export function createSwarmService(deps: ServiceDeps): SwarmService {
         const contacts: NetworkContact[] = parsed.contacts.map((contact) => {
           const identity = contact.profileUrl?.trim().toLowerCase() || contact.name.trim().toLowerCase();
           const id = stableId("net", `${actor}\0${identity}`);
-          return { ...contact, id, owner: actor, importedAt, previous: null };
+          // A title or company field is free text someone typed. It passes the same boundary as
+          // everything else stored, so a personal detail written there is not kept.
+          return {
+            ...contact,
+            position: contact.position === null ? null : redactSensitive(contact.position),
+            company: contact.company === null ? null : redactSensitive(contact.company),
+            id, owner: actor, importedAt, previous: null,
+          };
         });
         const fresh = store.replaceNetwork(actor, contacts);
         let leadContacts = 0;
@@ -766,9 +850,9 @@ export function createSwarmService(deps: ServiceDeps): SwarmService {
             const toCompany = contact.company || "an unlisted company";
             const lead = {
               id: newId("led"), swarmId: swarm.id, founderId: null, source: "network" as const,
-              // A lead's text reaches prompts later, so it passes the same boundary as everything else stored.
+              // The contact was redacted when it was stored, so these fields are already clean.
               sourceRef, sourceTitle: `Contact list of ${actor}`, personName: contact.name,
-              role: contact.position === null ? null : redactSensitive(contact.position),
+              role: contact.position,
               companyName: contact.company, companyUrl: null, oneLiner: null, links,
               why: redactSensitive(`Changed from ${fromPosition} at ${fromCompany} to ${toPosition} at ${toCompany}.`),
               discoveredByTaskId: null, discoveredAt: importedAt,
@@ -871,11 +955,15 @@ export function createSwarmService(deps: ServiceDeps): SwarmService {
         catch (error) { if (error instanceof ServiceError) throw error; fail(409, `The run could not be cancelled: ${messageOf(error)} Refresh the run and try again.`); }
       },
       async listEvalFlows() { return busyAsConflict(() => deps.evals.listFlows()); },
-      async getEvalFlow(id) {
+      async getEvalFlow(id, swarmId) {
         const flow = await busyAsConflict(() => deps.evals.getFlow(id));
+        // A swarm's config records which variant of each flow it carries. Its id says nothing:
+        // the config has since gathered pool changes and other evals' changes. The answer is
+        // for one swarm: another swarm running a variant does not put it in use here.
         const swarms = store.listSwarms();
-        const used = new Set(swarms.map((swarm) => swarm.configId));
-        const promoted = flow.variants.find((variant) => used.has(variant.config.id));
+        const asked = swarmId ? getSwarm(swarmId) : swarms.length === 1 ? swarms[0] : undefined;
+        const carried = asked ? (store.getConfig(asked.configId) ?? BASE_CONFIG).applied?.[flow.id] : undefined;
+        const promoted = flow.variants.find((variant) => variant.id === carried);
         return { ...flow, promotedVariant: promoted?.id ?? null, variants: flow.variants.map((variant) => variant.id === promoted?.id ? { ...variant, status: "champion" } : variant) };
       },
       async runEvalRounds(id, input) {
@@ -884,15 +972,37 @@ export function createSwarmService(deps: ServiceDeps): SwarmService {
         return busyAsConflict(() => deps.evals.runRounds(id, input));
       },
       async promoteEvalVariant(id, input) {
+        // The eval keep rule is the only way a change earns a place, so a reverted round cannot be put into use by hand.
+        return promoteVariant(id, input, actor, "eval.promote");
+      },
+
+      async previewEvalVariant(id, input) {
+        // The same config a promotion would save, scored against the answers on file. Nothing is saved.
         const swarm = getSwarm(input.swarmId);
-        // The keep rule is the only way a change earns a place, so a reverted round cannot be put into use by hand.
         const flow = await busyAsConflict(() => deps.evals.getFlow(id));
-        if (flow.variants.find((variant) => variant.id === input.variant)?.status === "reverted") fail(409, "This round was reverted. Only a round the eval kept can be put into use.");
-        const config = await busyAsConflict(() => deps.evals.variantConfig(id, input));
-        store.saveConfig(config);
-        store.updateSwarm(swarm.id, { configId: config.id, updatedAt: iso(now()) } as never);
-        audit(actor, "eval.promote", swarm.id, { flowId: id, variant: input.variant, configId: config.id });
-        return config;
+        return previewConfig({ store, now }, swarm.id, variantInUse(flow, swarm, input.variant));
+      },
+
+      async getAssumptions(swarmId) {
+        return assumptionsFor({ store, evals: deps.evals }, swarmId);
+      },
+
+      async getPools(swarmId) {
+        return poolsView({ store, now }, swarmId);
+      },
+      async setPool(swarmId, jobId, input) {
+        const config = setPool({ store, now }, swarmId, jobId, input);
+        audit(actor, "pool.set", swarmId, {
+          jobId,
+          configId: config.id,
+          members: input.members.map((member) => ({ id: member.id, model: member.route.model, share: member.share })),
+        });
+        return poolsView({ store, now }, swarmId);
+      },
+      async rebalancePools(swarmId, input) {
+        const { report, config } = rebalancePools({ store, now }, swarmId, { apply: input?.apply === true });
+        if (config) audit(actor, "pool.rebalance", swarmId, { configId: config.id, pools: report.pools.filter((pool) => pool.changes.length > 0) });
+        return report;
       },
     };
     return api;
@@ -918,6 +1028,10 @@ export function createSwarmService(deps: ServiceDeps): SwarmService {
     return clean;
   }
 
+  // One coaching pass at a time. Each pass reads what has been spent today, runs rounds, and
+  // records its own spend at the end; two passes side by side (two swarms finishing a scheduled
+  // run together) would both read the same remainder and could each spend all of it.
+  let coachTail: Promise<void> = Promise.resolve();
   const service = {
     as: apiFor,
     runs: deps.runs,
@@ -939,6 +1053,133 @@ export function createSwarmService(deps: ServiceDeps): SwarmService {
         }
       }
       return started;
+    },
+    coach(swarmId: string): Promise<CoachReport> {
+      const pass = coachTail.then(() => service.coachOnce(swarmId));
+      coachTail = pass.then(() => undefined, () => undefined);
+      return pass;
+    },
+    async coachOnce(swarmId: string): Promise<CoachReport> {
+      const swarm = getSwarm(swarmId);
+      const settings = store.getSettings();
+      const at = iso(now());
+      const report: CoachReport = { at, mode: settings.autopilot.mode, spentUsd: 0, flows: [] };
+      if (settings.killSwitch) {
+        report.flows.push({ flowId: "autopilot", label: "Autopilot", rounds: 0, kept: [], applied: null, note: "Emergency stop is on; no eval round was started." });
+      } else if (settings.autopilot.mode === "off") {
+        report.flows.push({ flowId: "autopilot", label: "Autopilot", rounds: 0, kept: [], applied: null, note: "Autopilot is off." });
+      } else {
+        const day = at.slice(0, 10);
+        const spentToday = coachAudits().reduce((sum, entry) => {
+          const previous = coachReportFrom(entry);
+          return previous?.at.slice(0, 10) === day && Number.isFinite(previous.spentUsd) && previous.spentUsd >= 0
+            ? sum + previous.spentUsd
+            : sum;
+        }, 0);
+        let remainingBudget = Math.max(0, settings.autopilot.budgetUsd - spentToday);
+        let appliedThisRun = false;
+        let summaries: Awaited<ReturnType<ServiceDeps["evals"]["listFlows"]>> = [];
+        try {
+          summaries = await deps.evals.listFlows();
+        } catch (error) {
+          report.flows.push({ flowId: "evals", label: "Evaluations", rounds: 0, kept: [], applied: null, note: messageOf(error) });
+          summaries = [];
+        }
+        for (const summary of summaries) {
+          let before;
+          try {
+            // The service API adds the current promotion state, which raw eval DTOs do not know.
+            before = await apiFor("Swarm").getEvalFlow(summary.id, swarm.id);
+          } catch (error) {
+            report.flows.push({ flowId: summary.id, label: summary.label, rounds: 0, kept: [], applied: null, note: messageOf(error) });
+            continue;
+          }
+          // The flow says for itself whether it has the cases it needs; its note says what is missing.
+          if (before.ready === false) {
+            report.flows.push({ flowId: summary.id, label: summary.label, rounds: 0, kept: [], applied: null, note: before.dataNote });
+            continue;
+          }
+          // The flow says for itself whether a round calls a model. One that does needs budget left.
+          if (remainingBudget <= 0 && before.callsModels === true) {
+            report.flows.push({ flowId: summary.id, label: summary.label, rounds: 0, kept: [], applied: null, note: "Today's eval budget is used. Raise it in Settings." });
+            continue;
+          }
+          let after;
+          try {
+            after = await deps.evals.runRounds(summary.id, { rounds: 1, brain: before.realData ? "live" : "sim", budgetUsd: remainingBudget });
+          } catch (error) {
+            report.flows.push({ flowId: summary.id, label: summary.label, rounds: 0, kept: [], applied: null, note: messageOf(error) });
+            continue;
+          }
+          const priorStatus = new Map(before.variants.map((variant) => [variant.id, variant.status]));
+          const newVariants = after.variants.filter((variant) => !priorStatus.has(variant.id));
+          const keptVariants = after.variants.filter((variant) => {
+            const newlyKept = variant.status === "kept" || variant.status === "champion";
+            const wasKept = priorStatus.get(variant.id) === "kept" || priorStatus.get(variant.id) === "champion";
+            return newlyKept && !wasKept;
+          });
+          // What the round spent, as the flow reports it. A variant's own cost figure is the mean
+          // cost of one case, and a baseline that stops part-way has no variant at all.
+          const spentOnFlow = typeof after.spentUsd === "number" && Number.isFinite(after.spentUsd) && after.spentUsd > 0 ? after.spentUsd : 0;
+          report.spentUsd += spentOnFlow;
+          remainingBudget = Math.max(0, remainingBudget - spentOnFlow);
+          const flowReport: CoachReport["flows"][number] = {
+            flowId: summary.id,
+            label: summary.label,
+            rounds: Math.max(0, after.rounds - before.rounds),
+            kept: keptVariants.flatMap((variant) => variant.changes.length ? variant.changes : [variant.description]),
+            applied: null,
+            note: null,
+          };
+          if (settings.autopilot.mode === "suggest") {
+            flowReport.note = keptVariants.length
+              ? "A partner can promote this change from Improve."
+              : flowReport.rounds === 0 ? "No eval round ran within the remaining daily budget." : "No new change was kept by the eval.";
+          } else if (after.realData !== true) {
+            flowReport.note = keptVariants.length
+              ? "Changes measured on simulated data wait for a partner to promote them."
+              : flowReport.rounds === 0 ? "No eval round ran within the remaining daily budget." : "No new change was kept by the eval.";
+          } else if (!appliedThisRun && after.bestVariant && after.bestVariant !== "baseline" && after.bestVariant !== before.promotedVariant) {
+            const bestKept = after.variants.find((variant) => variant.id === after.bestVariant);
+            if (!bestKept || (bestKept.status !== "kept" && bestKept.status !== "champion")) {
+              flowReport.note = keptVariants.length ? "No newly kept real-data change is ready for automatic promotion." : "No new change was kept by the eval.";
+            } else {
+              try {
+                await promoteVariant(summary.id, { variant: bestKept.id, swarmId: swarm.id }, "Swarm", "coach.apply");
+                flowReport.applied = bestKept.changes.join("; ") || bestKept.description;
+                flowReport.note = null;
+                appliedThisRun = true;
+              } catch (error) {
+                flowReport.note = messageOf(error);
+              }
+            }
+          } else if (keptVariants.length === 0) {
+            flowReport.note = flowReport.rounds === 0
+              ? "No eval round ran within the remaining daily budget."
+              : "No new change was kept by the eval.";
+          } else {
+            flowReport.note = appliedThisRun
+              ? "A different real-data change was applied this time; this one can be promoted from Improve."
+              : "No newly kept real-data change is ready for automatic promotion.";
+          }
+          report.flows.push(flowReport);
+        }
+      }
+      // Pools of agents: after a run there is new evidence about which member's work held up.
+      // In "apply" the shares are moved; in "suggest" the report says what would move.
+      if (!settings.killSwitch && settings.autopilot.mode !== "off") {
+        try {
+          const moved = rebalancePools({ store, now }, swarm.id, { apply: settings.autopilot.mode === "apply" });
+          const changed = moved.report.pools.filter((pool) => pool.changes.length > 0);
+          if (changed.length > 0) report.pools = changed;
+          if (moved.config) audit("Swarm", "pool.rebalance", swarm.id, { configId: moved.config.id, pools: changed });
+        } catch (error) {
+          deps.logger?.warn?.("Rebalancing the pools failed", { error: messageOf(error) });
+        }
+      }
+      audit("Swarm", "coach.run", swarm.id, { report });
+      coachReports.set(swarm.id, report);
+      return report;
     },
     async ensureSeeded() {
       if (store.listSwarms().length) return;
@@ -967,7 +1208,17 @@ export function createApp(options: AppOptions): App {
   const jobs = createJobRegistry();
   const executeJob = createExecuteJob({ jobs, providers });
   const runs = createRunController({ store, jobs, executeJob, quotes: createQuoteChecker(), people: createLivePeopleLookup(options.env ?? process.env), sources: { sim: simSources, live: liveSources }, repos: { sim: simRepos, live: liveRepos }, simWorld: world, fundName: options.fundName ?? "the fund", now: options.now, logger: options.logger });
-  const evals = createEvalService({ store, jobs, executeJob, flowsDir: options.flowsDir, now: options.now, logger: options.logger });
+  const evals = createEvalService({
+    store,
+    jobs,
+    executeJob,
+    flowsDir: options.flowsDir,
+    datasetsDir: options.datasetsDir ?? join(options.flowsDir, "..", "datasets"),
+    providers,
+    sensitive: findSensitive,
+    now: options.now,
+    logger: options.logger,
+  }, { pastJudge: options.evalJudge ?? null });
   const service = createSwarmService({ store, runs, evals, providers, liveSources, cron: options.cron, now: options.now, logger: options.logger });
   return { service, store, providers, close: () => store.close() };
 }

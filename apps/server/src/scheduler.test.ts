@@ -17,14 +17,20 @@ function makeService(initial: ScheduleSettings) {
   let current = initial;
   const getSettings = vi.fn(async () => ({ settings: { schedule: current } }) as SettingsDTO);
   const runScheduled = vi.fn(async () => []);
+  const waitForRun = vi.fn(async (runId: string) => ({ id: runId, swarmId: "swarm-1" }));
+  const coach = vi.fn(async () => ({}));
   const service = {
     as: vi.fn(() => ({ getSettings })),
     runScheduled,
+    runs: { wait: waitForRun },
+    coach,
   } as unknown as SwarmService;
   return {
     service,
     getSettings,
     runScheduled,
+    waitForRun,
+    coach,
     setSchedule(next: ScheduleSettings) { current = next; },
   };
 }
@@ -62,6 +68,58 @@ describe("startScheduler", () => {
 
     scheduler.stop();
     expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("coaches each scheduled run only after it finishes, without waiting for coaching before later ticks", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-01-01T00:00:00.000Z"));
+    const fixture = makeService(schedule());
+    const run = { id: "run-1", swarmId: "swarm-1" };
+    let finishRun!: () => void;
+    let finishCoach!: () => void;
+    fixture.runScheduled.mockResolvedValueOnce([run] as never);
+    fixture.waitForRun.mockImplementation(() => new Promise((resolve) => {
+      finishRun = () => resolve(run);
+    }));
+    fixture.coach.mockImplementation(() => new Promise((resolve) => {
+      finishCoach = () => resolve({});
+    }));
+    const scheduler = startScheduler({ service: fixture.service, cron: makeCron(), pollMs: 300_000 });
+    await flushPromises();
+
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(fixture.waitForRun).toHaveBeenCalledWith(run.id);
+    expect(fixture.coach).not.toHaveBeenCalled();
+
+    finishRun();
+    await flushPromises();
+    expect(fixture.coach).toHaveBeenCalledWith(run.swarmId);
+
+    // The coach promise is still pending, but that must not hold the scheduler's next tick.
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(fixture.runScheduled).toHaveBeenCalledTimes(2);
+
+    finishCoach();
+    scheduler.stop();
+  });
+
+  it("logs coaching failures and continues scheduling later runs", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-01-01T00:00:00.000Z"));
+    const fixture = makeService(schedule());
+    fixture.runScheduled.mockResolvedValueOnce([{ id: "run-1", swarmId: "swarm-1" }] as never);
+    fixture.coach.mockRejectedValueOnce(new Error("eval storage is unavailable"));
+    const logger = { error: vi.fn() } as unknown as Pick<Logger, "error">;
+    const scheduler = startScheduler({ service: fixture.service, cron: makeCron(), pollMs: 300_000, logger });
+    await flushPromises();
+
+    await vi.advanceTimersByTimeAsync(60_000);
+    await flushPromises();
+    expect(logger.error).toHaveBeenCalledWith("Scheduled run coaching failed", { error: "eval storage is unavailable" });
+
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(fixture.runScheduled).toHaveBeenCalledTimes(2);
+    scheduler.stop();
   });
 
   it("replaces the pending firing when enabled, expression, or timezone settings change", async () => {
@@ -179,8 +237,10 @@ describe("startScheduler catch-up", () => {
     const listSwarms = vi.fn(async () => [{ id: "swarm-1", status }]);
     const listRuns = vi.fn(async () => (lastRunStartedAt ? [{ id: "run-1", startedAt: lastRunStartedAt }] : []));
     const runScheduled = vi.fn(async () => []);
-    const service = { as: vi.fn(() => ({ getSettings, listSwarms, listRuns })), runScheduled } as unknown as SwarmService;
-    return { service, runScheduled, listRuns };
+    const waitForRun = vi.fn(async (runId: string) => ({ id: runId, swarmId: "swarm-1" }));
+    const coach = vi.fn(async () => ({}));
+    const service = { as: vi.fn(() => ({ getSettings, listSwarms, listRuns })), runScheduled, runs: { wait: waitForRun }, coach } as unknown as SwarmService;
+    return { service, runScheduled, listRuns, waitForRun, coach };
   }
 
   const settle = async (): Promise<void> => {
@@ -200,6 +260,27 @@ describe("startScheduler catch-up", () => {
     // Later settings polls do not catch up again.
     await vi.advanceTimersByTimeAsync(600_000);
     expect(fixture.runScheduled).toHaveBeenCalledTimes(1);
+    scheduler.stop();
+  });
+
+  it("coaches a catch-up run only after its completion", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-01-01T09:00:00.000Z"));
+    const fixture = makeCatchUpService("2025-12-31T06:00:02.000Z");
+    const run = { id: "catch-up-run", swarmId: "swarm-1" };
+    let finishRun!: () => void;
+    fixture.runScheduled.mockResolvedValueOnce([run] as never);
+    fixture.waitForRun.mockImplementation(() => new Promise((resolve) => {
+      finishRun = () => resolve(run);
+    }));
+    const scheduler = startScheduler({ service: fixture.service, cron: createCronHelper(), pollMs: 300_000, catchUp: true });
+
+    await settle();
+    expect(fixture.waitForRun).toHaveBeenCalledWith(run.id);
+    expect(fixture.coach).not.toHaveBeenCalled();
+    finishRun();
+    await settle();
+    expect(fixture.coach).toHaveBeenCalledWith(run.swarmId);
     scheduler.stop();
   });
 

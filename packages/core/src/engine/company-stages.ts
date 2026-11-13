@@ -127,6 +127,16 @@ function founderLinks(founder: Founder): ProfileLinks {
   return founder.links;
 }
 
+function companySiteFrontPage(url: string | null): boolean {
+  if (!url) return false;
+  try {
+    const path = new URL(url).pathname;
+    return path === "" || path === "/";
+  } catch {
+    return false;
+  }
+}
+
 /** Resolve company identity without a model call. */
 export async function runCompanyResolve(runtime: EngineRuntime): Promise<void> {
   const founders = runtime.deps.store.listFounders({ swarmId: runtime.swarm.id })
@@ -141,14 +151,17 @@ export async function runCompanyResolve(runtime: EngineRuntime): Promise<void> {
     const linked = founder.companyId ? runtime.deps.store.getCompany(founder.companyId) : null;
     let company: Company | null = null;
 
-    // Two founders share a company only when the company NAME matches. A site alone is not
-    // enough: many unrelated companies live under one host (a page on a site builder, a
-    // profile on a directory), and merging them would file one company's evidence under
-    // another. With the name matching, the site settles which of several same-named
-    // companies it is.
+    // A matching company name and site host identifies a company. Different names can share
+    // a record only when both links point to the host's front page; paths on shared hosting
+    // can belong to separate businesses.
     const sameName = runtime.deps.store.findCompaniesByName(runtime.swarm.id, normalizedName);
     if (domain) {
-      company = sameName.find((candidate) => candidate.domain === domain) ?? null;
+      const sameSite = runtime.deps.store.listCompanies({ swarmId: runtime.swarm.id })
+        .filter((candidate) => candidate.domain === domain);
+      company = sameSite.find((candidate) => normalizeCompanyName(candidate.name) === normalizedName) ?? null;
+      if (!company && companySiteFrontPage(founder.company.url)) {
+        company = sameSite.find((candidate) => companySiteFrontPage(candidate.url)) ?? null;
+      }
       if (!company) {
         // A company known only by name gets its site when a founder first supplies one.
         const withoutSite = sameName.filter((candidate) => !candidate.domain);
@@ -244,7 +257,7 @@ function addCompanyEvidence(
     const excerpt = draft.excerpt.trim().slice(0, 1200);
     const claim = draft.claim.trim();
     if (!excerpt || !claim || !draft.url?.trim()) continue;
-    const hash = hashEvidence("web", draft.url, excerpt);
+    const hash = hashEvidence("web", draft.url, `company-evidence:${companyId}:${excerpt}`);
     const item: Evidence = {
       id: stableId("evd", `${runtime.run.id}:${taskId}:${hash}`),
       founderId,
@@ -428,7 +441,9 @@ function dealFor(runtime: EngineRuntime, company: Company, assessment: CompanyAs
     composite: lead.assessment.composite,
     coverage: lead.assessment.coverage,
     potential: lead.assessment.potential,
-    integrityCritical: lead.assessment.flags.some((flag) => flag.code === "integrity_critical"),
+    integrityCritical: founders.some((founder) =>
+      latestFounderAssessment(runtime, founder)?.flags.some((flag) => flag.code === "integrity_critical") === true,
+    ),
   } : null;
   const fit = lead ? (lead.assessment.fit ?? lead.founder.fit) : founders.reduce<number | null>((highest, founder) =>
     founder.fit === null ? highest : highest === null ? founder.fit : Math.max(highest, founder.fit), null);
@@ -562,9 +577,11 @@ export async function runCompanyAssess(runtime: EngineRuntime, companyCandidates
     const previous = runtime.deps.store.latestCompanyAssessment(company.id);
     if (!previous) return;
     const founders = foundersFor(runtime, company.id);
-    const lead = leadFounder(runtime, founders);
-    const latest = lead ? latestFounderAssessment(runtime, lead) : null;
-    if (!latest || latest.createdAt <= previous.createdAt) return;
+    const hasNewerFounderAssessment = founders.some((founder) => {
+      const latest = latestFounderAssessment(runtime, founder);
+      return latest !== null && latest.createdAt > previous.createdAt;
+    });
+    if (!hasNewerFounderAssessment) return;
     const combined = dealFor(runtime, company, previous, weights, thresholds, teamShare);
     saveDealAssessment(runtime, company, previous, combined, stableId("cas", `${runtime.run.id}:${company.id}`), runtime.run.id, recheckDays);
   });

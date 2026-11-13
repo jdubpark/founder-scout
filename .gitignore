@@ -21,3 +21,7 @@ apps/web/src/lib/api/demo-snapshot.json
 
 # Held by a process while it runs eval rounds
 evals/flows/.*.lock
+# Eval datasets built from real past data. They name real people and companies.
+evals/datasets/
+# Judgments and outcome labels for those real companies, keyed by their public post ids.
+evals/flows/past-founders/

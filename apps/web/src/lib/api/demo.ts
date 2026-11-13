@@ -32,6 +32,7 @@ import {
   type ScopeNames,
   type ScopeSelector,
   type SwarmTreeDTO,
+  judgeAssumptions,
 } from "@agentswarm/shared";
 import { ApiError } from "./http";
 
@@ -174,11 +175,12 @@ export function createDemoClient(snapshot: DemoSnapshot, getActor: () => string)
       return clone(state.settings);
     },
     async updateSettings(patch) {
-      const { schedule, ...rest } = patch;
+      const { schedule, autopilot, ...rest } = patch;
       state.settings.settings = {
         ...state.settings.settings,
         ...rest,
         schedule: { ...state.settings.settings.schedule, ...(schedule ?? {}) },
+        autopilot: { ...state.settings.settings.autopilot, ...(autopilot ?? {}) },
       };
       return clone(state.settings);
     },
@@ -317,7 +319,7 @@ export function createDemoClient(snapshot: DemoSnapshot, getActor: () => string)
         identity = { swarmId: query.swarmId, classId: cls.cls.id, jobId: null, agentId: null };
         label = cls.cls.label;
       }
-      return buildEffectiveSteering({
+      const steering = buildEffectiveSteering({
         directives: state.directives,
         identity,
         config: t.config,
@@ -325,6 +327,11 @@ export function createDemoClient(snapshot: DemoSnapshot, getActor: () => string)
         label,
         calls: callExamples(query.swarmId),
       });
+      // One sample job carries a line the swarm wrote for itself, so the Told tab shows it.
+      if (identity.jobId === "scout.github") {
+        return { ...steering, lessons: ["Repositories with fast star growth from several unrelated accounts were often paid for."] };
+      }
+      return steering;
     },
     async listSuggestions(swarmId) {
       return suggestions(swarmId);
@@ -548,6 +555,26 @@ export function createDemoClient(snapshot: DemoSnapshot, getActor: () => string)
       throw new ApiError(400, READ_ONLY);
     },
     async promoteEvalVariant() {
+      throw new ApiError(400, READ_ONLY);
+    },
+    async previewEvalVariant() {
+      return clone(snapshot.preview ?? { founders: [], companies: [], considered: { founders: 0, companies: 0 }, unseen: [] });
+    },
+    async getAssumptions() {
+      // A snapshot made before assumptions existed still shows the list, with nothing tested yet.
+      return clone(snapshot.assumptions ?? {
+        rows: judgeAssumptions({ outcomes: null, calls: [], current: () => null }),
+        outcomesBasis: null,
+        callsBasis: null,
+      });
+    },
+    async getPools() {
+      return clone(snapshot.pools ?? { pools: [], windowDays: 14 });
+    },
+    async setPool() {
+      throw new ApiError(400, READ_ONLY);
+    },
+    async rebalancePools() {
       throw new ApiError(400, READ_ONLY);
     },
   };

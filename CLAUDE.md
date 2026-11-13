@@ -21,6 +21,8 @@ pnpm check                                   # typecheck all packages, then all 
 pnpm exec vitest run packages/core/src/engine   # one area
 pnpm dev                                     # API on 4317, dashboard on 5317
 pnpm swarm run --days 3                      # simulated runs from the command line
+pnpm swarm past collect --from 2018-01-01 --to 2021-01-01 --yc --unicorns   # build the past-companies dataset
+pnpm swarm eval rounds --flow past-founders --rounds 0 --budget 3          # measure it; this calls models
 ```
 
 Package scripts call `../../node_modules/.bin/tsc` and `../../node_modules/.bin/tsx` on purpose: a
@@ -81,6 +83,44 @@ check it. `packages/core/src/rules.test.ts` enforces that, so add the test with 
   beyond the noise floor with no guardrail worse, or no loss at all with a guardrail clearly better.
   The synthetic flow's headline is rank correlation with hidden true quality, on purpose: outcomes
   in the simulated world are too noisy to steer by. Test: `packages/core/src/eval/index.test.ts`.
+- **On past companies, the latest periods choose nothing.** A change is proposed on the earliest
+  periods, chosen on middle periods held back from tuning, and only reported on the latest. The
+  noise floor is the larger of the judge's own spread and a bootstrap over which cases were drawn.
+  A rejected line of guidance is not judged on the latest periods at all, and a candidate is
+  never compared with the current config on different cases: if a failed call left one side
+  short, the round is reverted as incomplete. Test: `packages/core/src/eval/past.test.ts`.
+- **A past case is masked, cut off at its date, and its score is called an upper bound.** Names,
+  years and intake tags are replaced; anything dated later is dropped; a case the judge names is
+  left out of the headline; the page says the judge was trained after the outcomes. Do not
+  describe the result as free of look-ahead. Tests: `packages/shared/src/past.test.ts`,
+  `packages/core/src/eval/past.test.ts`.
+- **An outcome label is matched on the company's own name, together with its intake or its own
+  site, never on a name or a site taken from a link alone, and an outcome nobody can state is
+  left out, not called a failure.** A list of successes cannot say that a company missing from
+  it failed. The dataset has sentences stating personal details removed, names found in replies
+  masked as well as those in the post, and stays out of the repository. Tests:
+  `packages/core/src/sources/past.test.ts`, `apps/server/src/cli.test.ts`.
+- **Putting an eval's winner into use applies only what the winner changed.** A swarm's config
+  also holds its pools, its learned lines and other evals' changes; `overlayConfig` keeps them,
+  and the config records which variant of each flow it carries. Tests:
+  `packages/shared/src/steering.test.ts`, `packages/core/src/service/index.test.ts`.
+- **Autopilot applies one change at a time, and only one measured on real data.** A change kept
+  on simulated founders waits for a person. Evals that call a model have a daily ceiling, zero
+  by default, counted from what each round reports it spent; coaching passes run one at a time
+  so two swarms cannot spend the same remainder. Test: `packages/core/src/service/index.test.ts`.
+- **A pool of context is isolated unless a crossing is listed.** Each job names the pool behind
+  every one of its input fields in `packages/shared/src/context.ts`; a field with no pool does
+  not compile, and no job reads a sealed pool (contact lists, hidden truth). Add a crossing to
+  `CROSSINGS` before moving text between pools. Test: `packages/shared/src/context.test.ts`.
+- **Code picks the pool member, and share moves only on checks the member did not make about
+  itself.** Supported items for each dollar, planted claims accepted, tasks failed. A model never
+  chooses a model, and a pinned model takes that scope out of the pool. Tests:
+  `packages/shared/src/pools.test.ts`, `packages/core/src/service/pools.test.ts`,
+  `packages/core/src/engine/index.test.ts`.
+- **Code marks an assumption supported, never a model, and never from the latest periods.** The
+  ledger in `packages/shared/src/assumptions.ts` tests each statement on past companies from the
+  tuning periods and on the partner's calls, and keeps the two apart. Tests:
+  `packages/shared/src/assumptions.test.ts`, `packages/core/src/service/assumptions.test.ts`.
 - **The server has no login.** It binds to loopback and rejects other Host names and other sites'
   Origins (`apps/server/src/app.ts`). Keep both checks until there is a login. Test:
   `apps/server/src/app.test.ts`.

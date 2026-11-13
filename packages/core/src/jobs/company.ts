@@ -103,7 +103,7 @@ export function buildCompanyPrompt(
 
   const value = input as CompanyResearchInput;
   const prompt = [
-    "Task: research " + value.company.name + " for " + FOCUS[id] + ". Return sourced evidence, a careful profile update, team listings when relevant, and notes on what was not found.",
+    "Task: research the company described in the company block for " + FOCUS[id] + ". Return sourced evidence, a careful profile update, team listings when relevant, and notes on what was not found.",
   ];
   if (value.gaps.length) {
     const gaps = value.gaps.map((gap) => ({ label: gap.label, question: gap.question }));

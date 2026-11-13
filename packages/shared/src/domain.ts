@@ -685,6 +685,8 @@ export interface TaskRun {
   promptHash?: string | null;
   /** For a fact-check call that carried a planted false claim: whether the checker rejected it. */
   control?: "passed" | "failed" | null;
+  /** The pool member this task was sent to, when the job has a pool. */
+  poolMember?: string | null;
   /** Loaded only by the task detail endpoint. */
   trace?: TraceTurn[];
 }
@@ -700,10 +702,25 @@ export interface ScheduleSettings {
   sources: SourceMode;
 }
 
+/**
+ * How far the swarm may steer itself from its own evals.
+ * - off:     evals run only when a person starts them.
+ * - suggest: after each scheduled run the swarm runs eval rounds and shows what it would change.
+ * - apply:   it also puts a kept change into use, when that change was measured on real data.
+ */
+export type AutopilotMode = "off" | "suggest" | "apply";
+
+export interface AutopilotSettings {
+  mode: AutopilotMode;
+  /** The most the swarm may spend on eval model calls in one day, in dollars. 0 keeps it to evals that cost nothing. */
+  budgetUsd: number;
+}
+
 export interface Settings {
   /** When true no new run or task starts, anywhere. */
   killSwitch: boolean;
   schedule: ScheduleSettings;
+  autopilot: AutopilotSettings;
   /** Name recorded as the author of steering and approvals. */
   operatorName: string;
   /** Suggested-steering keys a partner has dismissed, so they are not offered again. */
@@ -719,6 +736,8 @@ export const DEFAULT_SETTINGS: Settings = {
     brain: "sim",
     sources: "sim",
   },
+  // The swarm looks for improvements by itself but changes nothing until a person says so.
+  autopilot: { mode: "suggest", budgetUsd: 0 },
   operatorName: "Partner",
   dismissedSuggestions: [],
 };

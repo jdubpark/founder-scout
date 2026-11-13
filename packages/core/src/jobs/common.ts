@@ -1,14 +1,33 @@
 import { PROHIBITED_ATTRIBUTES } from "@agentswarm/shared";
 import type { EvidenceBrief, Thesis } from "@agentswarm/shared";
 
+const NATIONALITIES = "american|canadian|mexican|brazilian|argentinian|argentine|chilean|colombian|peruvian|british|english|scottish|welsh|irish|french|german|italian|spanish|portuguese|dutch|belgian|swiss|austrian|swedish|norwegian|danish|finnish|icelandic|polish|czech|hungarian|romanian|bulgarian|greek|turkish|ukrainian|russian|israeli|iranian|chinese|taiwanese|japanese|korean|indian|pakistani|bangladeshi|sri lankan|nepali|vietnamese|thai|filipino|indonesian|malaysian|singaporean|australian|new zealander|nigerian|ghanaian|kenyan|ethiopian|egyptian|moroccan|south african";
+
+const FIRST_PERSON_NATIONALITIES = NATIONALITIES.split("|")
+  .map((name) => name.replace(/\b[a-z]/g, (letter) => letter.toUpperCase()))
+  .join("|");
+
 /**
  * Finds explicit mentions of prohibited personal attributes. The scanner is
  * deliberately phrase based: years of experience, company dates, and ordinary
  * company locations are not personal age, birth, or nationality claims.
+ *
+ * People also say these things about themselves ("we were 16", "we are three Norwegians"),
+ * and a founder's own launch post is where much of the evidence comes from, so the first
+ * person is covered as well as the third.
  */
 export function findSensitive(text: string): string[] {
   const rules: Array<[string, RegExp]> = [
     ["age", /\b(?:\d{1,3}\s+years?\s+old|age(?:d)?\s*(?:is\s*)?[:=]?\s*\d{1,3})\b/i],
+    // "when we were 16", "I'm 19." A count of people or a multiple is not an age, so the number
+    // must be a plausible age and must end the phrase.
+    ["age", /\b(?:I|we)\s*(?:['’]m|am|['’]re|are|was|were)\s+(?:both\s+|only\s+|just\s+)?(?:1[3-9]|[2-7]\d)(?=\s*(?:[.,;:!?)]|$|and\b|or\b|when\b|at the time\b|yo\b|y\/o\b))/i],
+    // "two 19-year-olds", "a 22-year-old founder". A company or a product can be so many years old too.
+    ["age", /\b(?:1[3-9]|[2-7]\d)[- ]year[- ]olds?\b(?!\s+(?:company|startup|business|firm|product|project|industry|problem|codebase|technology|system|standard|protocol|market|bank|institution)\b)/i],
+    ["age", /\b(?:teenagers?|as teens|in (?:my|our|his|her|their) (?:early |mid[- ]|late )?(?:teens|twenties|thirties|forties|fifties|sixties|20s|30s|40s|50s|60s))\b/i],
+    // "We are Brazilian", "We're three Norwegians". Case matters here: the word is capitalised when it
+    // names a people, and a capital after it means a proper name ("American Express"), not a person.
+    ["ethnicity or nationality", new RegExp(`\\b(?:I|[Ww]e)\\s*(?:['’]m|am|['’]re|are)\\s+(?:both\\s+|all\\s+|two\\s+|three\\s+|four\\s+)?(?:(?:a|an)\\s+)?(?:${FIRST_PERSON_NATIONALITIES})s?\\b(?!\\s+(?:[A-Z]|company|startup|business|firm|team|based))`)],
     ["birth date", /\b(?:date of birth|dob)\b|\bborn\s+(?:in\s+(?:19|20)\d{2}|on\b)/i],
     ["family status", /\b(?:married|divorced|husband|wife|pregnant|his children|her kids)\b/i],
     ["religion", /\b(?:religion|religious affiliation)\s*[:=]|\b(?:is|identifies as|practises|practices)\s+(?:a\s+)?(?:christian|muslim|jewish|jew|hindu|buddhist|sikh|catholic|protestant|mormon|atheist|agnostic)\b/i],
@@ -36,7 +55,8 @@ export function redactSensitive(text: string): string {
     .split(/(\n+)/)
     .map((line) => line.startsWith("\n")
       ? line
-      : line.split(/(?<=[.!?;])\s+/).map((sentence) =>
+      // A full stop after a single letter is an abbreviation ("U.S.", "e.g."), not the end of a sentence.
+      : line.split(/(?<=[.!?;])(?<!\b[A-Za-z]\.)\s+/).map((sentence) =>
         findSensitive(sentence).length > 0 ? REMOVED : sentence,
       ).join(" "))
     .join("");

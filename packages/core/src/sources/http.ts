@@ -8,6 +8,8 @@ import { isNeverFetchUrl } from "@agentswarm/shared";
 
 export const USER_AGENT = "agentswarm/0.1";
 export const REQUEST_TIMEOUT_MS = 20_000;
+const REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308]);
+const MAX_REDIRECTS = 5;
 
 export type FetchFn = (url: string, init?: RequestInit) => Promise<Response>;
 
@@ -48,25 +50,69 @@ export async function httpGet(
   options: { headers?: Record<string, string>; signal?: AbortSignal } = {},
 ): Promise<HttpResult> {
   if (isNeverFetchUrl(url)) {
-    throw new Error(`${source} cannot request this address because it is on the never-fetch list; nothing in this system requests it.`);
+    throw neverFetchError(source);
   }
   const timeout = AbortSignal.timeout(REQUEST_TIMEOUT_MS);
   const signal = options.signal ? AbortSignal.any([options.signal, timeout]) : timeout;
   try {
-    const res = await fetchFn(url, {
-      method: "GET",
-      headers: { "User-Agent": USER_AGENT, ...options.headers },
-      signal,
-    });
+    let currentUrl = url;
+    let originalHostname: string;
+    try {
+      originalHostname = new URL(url).host;
+    } catch {
+      originalHostname = "";
+    }
+    const visited = new Set([currentUrl]);
+    let redirects = 0;
+    let res: Response;
+    while (true) {
+      const current = new URL(currentUrl);
+      if (isNeverFetchUrl(currentUrl)) throw neverFetchError(source);
+      const headers = { "User-Agent": USER_AGENT, ...(current.host === originalHostname ? options.headers : {}) };
+      res = await fetchFn(currentUrl, { method: "GET", headers, signal, redirect: "manual" });
+      if (!REDIRECT_STATUSES.has(res.status)) break;
+
+      const location = res.headers.get("location");
+      if (!location) break;
+      if (redirects >= MAX_REDIRECTS) {
+        throw new HttpGetPolicyError(`${source} request failed: too many redirects.`);
+      }
+
+      let nextUrl: URL;
+      try {
+        nextUrl = new URL(location, currentUrl);
+      } catch {
+        throw new HttpGetPolicyError(`${source} request failed: invalid redirect address.`);
+      }
+      if (nextUrl.protocol !== "http:" && nextUrl.protocol !== "https:") {
+        throw new HttpGetPolicyError(`${source} request failed: redirect address must use HTTP or HTTPS.`);
+      }
+      // The redirect's own body is not wanted; leaving it unread would hold the connection open.
+      await res.body?.cancel().catch(() => undefined);
+      currentUrl = nextUrl.href;
+      if (isNeverFetchUrl(currentUrl)) throw neverFetchError(source);
+      if (visited.has(currentUrl)) throw new HttpGetPolicyError(`${source} request failed: redirect loop.`);
+      visited.add(currentUrl);
+      redirects += 1;
+    }
     const body = await res.text();
     return { status: res.status, headers: res.headers, body };
   } catch (err) {
+    if (err instanceof HttpGetPolicyError) throw err;
     if (options.signal?.aborted) throw err;
     if (timeout.aborted) {
       throw new Error(`${source} request timed out after ${REQUEST_TIMEOUT_MS / 1000} seconds.`, { cause: err });
     }
     throw new Error(`${source} request failed: ${errorMessage(err)}`, { cause: err });
   }
+}
+
+class HttpGetPolicyError extends Error {}
+
+function neverFetchError(source: string): HttpGetPolicyError {
+  return new HttpGetPolicyError(
+    `${source} cannot request this address because it is on the never-fetch list; nothing in this system requests it.`,
+  );
 }
 
 /** Throws SourceRateLimitError on 429 or rate-limited 403, and a plain Error on other non-2xx. */

@@ -121,7 +121,8 @@ function task(id: string, overrides: Partial<TaskRun> = {}): TaskRun {
     model: "test-model", effort: null, inputSummary: "input", outputSummary: `output ${id}`, output: { nested: [1, { ok: true }] },
     steering: { directiveIds: [], params: { maxItems: 5 }, block: "guidance" },
     usage: { inputTokens: 10, outputTokens: 2, totalTokens: 12 }, costUsd: 0.1, latencyMs: 100, itemsOut: 2,
-    error: null, startedAt: "2026-01-01T00:00:00.000Z", finishedAt: "2026-01-01T00:01:00.000Z", ...overrides,
+    error: null, startedAt: "2026-01-01T00:00:00.000Z", finishedAt: "2026-01-01T00:01:00.000Z",
+    poolMember: null, ...overrides,
   } as TaskRun;
 }
 
@@ -367,21 +368,25 @@ describe("SQLite store", () => {
     for (const item of [newer, archived, older]) store.insertDirective(item);
     expect(store.listDirectives().map((item) => item.id)).toEqual(["dir_old", "dir_new"]);
     expect(store.listDirectives({ includeArchived: true }).map((item) => item.id)).toEqual(["dir_old", "dir_archived", "dir_new"]);
-    const first = task("tsk_1", { startedAt: null, steering: { directiveIds: ["dir_a", "dir_a", "dir_b"], params: {}, block: "one" }, trace: [{ role: "user", content: "private trace" }] });
+    const first = task("tsk_1", { startedAt: null, poolMember: "sonnet", steering: { directiveIds: ["dir_a", "dir_a", "dir_b"], params: {}, block: "one" }, trace: [{ role: "user", content: "private trace" }] });
     const second = task("tsk_2", { startedAt: "2026-01-02T00:00:00.000Z", steering: { directiveIds: ["dir_a"], params: {}, block: "two" } });
     const third = task("tsk_3", { startedAt: "2026-01-03T00:00:00.000Z" });
     const fourth = task("tsk_4", { startedAt: "2026-01-04T00:00:00.000Z" });
     for (const t of [first, second, third, fourth]) store.insertTask(t);
     expect(store.getTask("tsk_1", { withTrace: true })).toEqual(first);
     expect(store.getTask("tsk_2", { withTrace: true })?.trace).toEqual([]);
+    expect(store.getTask("tsk_2", { withTrace: false })?.poolMember).toBeNull();
     expect(store.listTasks({}).every((t) => !Object.hasOwn(t, "trace"))).toBe(true);
+    expect(store.listTasks({}).map((t) => t.poolMember)).toEqual(["sonnet", null, null, null]);
     expect(store.listTasks({ limit: 2 }).map((t) => t.id)).toEqual(["tsk_3", "tsk_4"]);
     expect(store.directiveUsage()).toEqual(new Map([
       ["dir_a", { appliedCount: 2, lastAppliedAt: "2026-01-02T00:00:00.000Z" }],
       ["dir_b", { appliedCount: 1, lastAppliedAt: null }],
     ]));
-    store.updateTask("tsk_2", { trace: [{ role: "assistant", content: "saved later" }] });
+    store.updateTask("tsk_2", { poolMember: "haiku", trace: [{ role: "assistant", content: "saved later" }] });
     expect(store.getTask("tsk_2", { withTrace: true })?.trace).toEqual([{ role: "assistant", content: "saved later" }]);
+    expect(store.getTask("tsk_2", { withTrace: false })?.poolMember).toBe("haiku");
+    expect(store.listTasks({}).map((t) => t.poolMember)).toEqual(["sonnet", "haiku", null, null]);
     store.close();
   });
 
@@ -404,6 +409,48 @@ describe("SQLite store", () => {
       agentId: "agt_1", tasks: 2, failures: 1, costUsd: 0.6, itemsOut: 12,
       lastRunAt: "2026-01-06T00:00:00.000Z", lastOutput: "newest success",
     }]);
+    store.close();
+  });
+
+  it("aggregates member tasks and their evidence within the requested swarm, job and start window", () => {
+    const store = openStore(":memory:");
+    store.insertTask(task("tsk_haiku_fail", {
+      poolMember: "haiku", status: "failed", costUsd: null, control: "failed",
+      startedAt: "2026-01-04T00:00:00.000Z",
+    }));
+    store.insertTask(task("tsk_haiku_ok", {
+      poolMember: "haiku", costUsd: 0.3, control: null,
+      startedAt: "2026-01-05T00:00:00.000Z",
+    }));
+    store.insertTask(task("tsk_sonnet", {
+      poolMember: "sonnet", costUsd: 0.2, control: "passed",
+      startedAt: "2026-01-04T00:00:00.000Z",
+    }));
+    store.insertTask(task("tsk_no_member", {
+      costUsd: null, startedAt: "2026-01-04T00:00:00.000Z",
+    }));
+
+    store.insertEvidence({ ...evidence("evd_haiku_supported", "fnd_haiku", "haiku-supported", "supported"), collectedByTaskId: "tsk_haiku_fail" });
+    store.insertEvidence({ ...evidence("evd_haiku_unsupported", "fnd_haiku", "haiku-unsupported", "unsupported"), collectedByTaskId: "tsk_haiku_ok" });
+    store.insertEvidence({ ...evidence("evd_haiku_quote_only", "fnd_haiku", "haiku-quote-only"), collectedByTaskId: "tsk_haiku_ok", quote: "not_found" });
+    store.insertEvidence({ ...evidence("evd_sonnet_unsupported", "fnd_sonnet", "sonnet-unsupported", "unsupported"), collectedByTaskId: "tsk_sonnet" });
+    store.insertEvidence({ ...evidence("evd_sonnet_unverified", "fnd_sonnet", "sonnet-unverified"), collectedByTaskId: "tsk_sonnet" });
+
+    store.insertTask(task("tsk_before_window", {
+      poolMember: "haiku", startedAt: "2026-01-03T23:59:59.999Z", status: "failed", costUsd: 7,
+    }));
+    store.insertTask(task("tsk_other_job", {
+      poolMember: "haiku", jobId: "scout.hackernews", startedAt: "2026-01-04T00:00:00.000Z", costUsd: 5,
+    }));
+    store.insertTask(task("tsk_other_swarm", {
+      poolMember: "haiku", swarmId: "swm_2", startedAt: "2026-01-04T00:00:00.000Z", costUsd: 6,
+    }));
+
+    expect(store.memberStats("swm_1", "scout.github", "2026-01-04T00:00:00.000Z")).toEqual([
+      { memberId: "", tasks: 1, failed: 0, costUsd: 0, items: 0, supported: 0, rejected: 0, controls: 0, controlsFailed: 0 },
+      { memberId: "haiku", tasks: 2, failed: 1, costUsd: 0.3, items: 3, supported: 1, rejected: 1, controls: 1, controlsFailed: 1 },
+      { memberId: "sonnet", tasks: 1, failed: 0, costUsd: 0.2, items: 2, supported: 0, rejected: 1, controls: 1, controlsFailed: 0 },
+    ]);
     store.close();
   });
 
@@ -462,6 +509,7 @@ describe("SQLite store", () => {
       .run(oldEvidence.id, oldEvidence.founderId, oldEvidence.hash, oldEvidence.capturedAt, oldEvidence.verification, JSON.stringify(oldEvidence));
     const oldTaskRecord = { ...oldTask };
     delete oldTaskRecord.trace;
+    delete oldTaskRecord.poolMember;
     legacy.prepare(`INSERT INTO tasks (id, run_id, swarm_id, agent_id, founder_id, status, started_at, finished_at,
       cost_usd, items_out, output_summary, record) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
       .run(oldTask.id, oldTask.runId, oldTask.swarmId, oldTask.agentId, oldTask.founderId, oldTask.status, oldTask.startedAt,
@@ -474,11 +522,11 @@ describe("SQLite store", () => {
     const store = openStore(path);
     expect(store.getFounder(oldFounder.id)).toEqual(oldFounder);
     expect(store.listEvidence(oldFounder.id)).toEqual([oldEvidence]);
-    expect(store.getTask(oldTask.id, { withTrace: false })).toEqual(oldTaskRecord);
+    expect(store.getTask(oldTask.id, { withTrace: false })).toEqual({ ...oldTaskRecord, poolMember: null });
     expect(store.getRun(oldRun.id)).toEqual(oldRun);
     store.close();
     const migrated = new Database(path, { readonly: true });
-    expect(migrated.pragma("user_version", { simple: true })).toBe(2);
+    expect(migrated.pragma("user_version", { simple: true })).toBe(3);
     migrated.close();
   });
 
@@ -498,7 +546,7 @@ describe("SQLite store", () => {
     expect(reopened.getConfig("cfg_base")).toEqual(config);
     reopened.close();
     const db = new Database(path, { readonly: true });
-    expect(db.pragma("user_version", { simple: true })).toBe(2);
+    expect(db.pragma("user_version", { simple: true })).toBe(3);
     db.close();
   });
 });

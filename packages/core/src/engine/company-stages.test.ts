@@ -1,28 +1,35 @@
 import { afterEach, describe, expect, it } from "vitest";
 import {
   BASE_CONFIG,
+  COMPANY_DIMENSIONS,
   EMPTY_COMPANY_LINKS,
   getJob,
   type Agent,
   type Assessment,
   type Company,
+  type CompanyAssessInput,
+  type CompanyAssessOutput,
   type CompanyAssessment,
+  type CompanyResearchOutput,
+  type CompanyEvidenceDraft,
   type CompanyFeedback,
   type CompanyJudgment,
   type Evidence,
   type Founder,
   type JobInput,
   type ModelJobId,
+  type JobOutput,
   type Run,
   type Swarm,
   type SwarmConfig,
 } from "@agentswarm/shared";
 import { ProviderError } from "../contracts";
-import type { EngineDeps, ExecuteJob, JobContext, PersonRecord, ProviderRegistry, SimFounder, SimWorld } from "../contracts";
+import type { EngineDeps, ExecuteJob, JobContext, JobExecution, PersonRecord, ProviderRegistry, SimFounder, SimWorld } from "../contracts";
 import { createExecuteJob, createJobRegistry } from "../jobs";
 import { openStore } from "../db";
 import { createSimRepoFinder, createSimSources, createSimWorld } from "../sim";
 import { createRunController } from "./index";
+import { hashEvidence as founderEvidenceHash } from "./pipeline";
 
 const SWARM_ID = "swm_company_stages";
 const CONFIG_ID = "cfg_company_stages";
@@ -150,7 +157,7 @@ function makeCompanyAssessment(companyId: string, id: string, createdAt: string,
   };
 }
 
-function makeFounderAssessment(founderId: string, createdAt: string, composite = 0.7): Assessment {
+function makeFounderAssessment(founderId: string, createdAt: string, composite = 0.7, flags: Assessment["flags"] = []): Assessment {
   return {
     id: `asm_${founderId}_${createdAt.slice(0, 10)}`,
     founderId,
@@ -164,7 +171,7 @@ function makeFounderAssessment(founderId: string, createdAt: string, composite =
     fit: 0.9,
     decision: "surface",
     reasons: [],
-    flags: [],
+    flags,
     breakdown: [],
     judgments: [],
     summary: "Prior founder assessment.",
@@ -249,6 +256,33 @@ function sourceEvidence(founderId: string, companyId: string, evidenceId: string
   };
 }
 
+function strongCompanyOutput(input: CompanyAssessInput): CompanyAssessOutput {
+  const evidenceId = input.evidence[0]?.id;
+  if (!evidenceId) throw new Error("The test assessment needs verified company evidence.");
+  return {
+    judgments: COMPANY_DIMENSIONS.map((dimension) => ({
+      dimension: dimension.id,
+      level: 4,
+      confidence: 1,
+      rationale: "The verified source supports a strong answer.",
+      evidenceIds: [evidenceId],
+      counterEvidenceIds: [],
+    })),
+    summary: "A strong company with a shipped product.",
+    strengths: [{ text: "A usable product is available.", evidenceIds: [evidenceId] }],
+    risks: [],
+    openQuestions: [],
+  };
+}
+
+function withStrongCompanyAssessment(delegate: ExecuteJob): ExecuteJob {
+  return async <J extends ModelJobId>(jobId: J, input: JobInput<J>, context: JobContext, options: Parameters<ExecuteJob>[3]): Promise<JobExecution<J>> => {
+    const execution = await delegate(jobId, input, context, options);
+    if (jobId !== "assess.company") return execution;
+    return { ...execution, output: strongCompanyOutput(input as CompanyAssessInput) as JobOutput<J> };
+  };
+}
+
 describe("company pipeline stages", () => {
   it("creates founder company records, researches and assesses them with company evidence", async () => {
     const world = createSimWorld({ seed: 911, founders: 3, days: 3 });
@@ -315,6 +349,25 @@ describe("company pipeline stages", () => {
     // company's evidence under another.
     expect(id("fnd_builder_a")).not.toBe(id("fnd_builder_b"));
     expect(id("fnd_atlas_a")).not.toBe(id("fnd_atlas_b"));
+  });
+
+  it("merges different names only when both links are the same site's front page", async () => {
+    const world = createSimWorld({ seed: 18, founders: 6, days: 1 });
+    const source = world.founders();
+    const fixtures = [
+      makeFounder(source[0]!, "fnd_front_acme", { name: "A", company: { name: "Acme", url: "https://acme.example", oneLiner: null, stage: null } }),
+      makeFounder(source[1]!, "fnd_front_acme_labs", { name: "B", company: { name: "Acme Labs", url: "https://acme.example/", oneLiner: null, stage: null } }),
+      makeFounder(source[2]!, "fnd_path_alpha", { name: "C", company: { name: "Alpha Tools", url: "https://builder.example/alpha", oneLiner: null, stage: null } }),
+      makeFounder(source[3]!, "fnd_path_beta", { name: "D", company: { name: "Beta Tools", url: "https://builder.example/beta", oneLiner: null, stage: null } }),
+      makeFounder(source[4]!, "fnd_other_atlas_a", { name: "E", company: { name: "Atlas", url: "https://atlas-one.example", oneLiner: null, stage: null } }),
+      makeFounder(source[5]!, "fnd_other_atlas_b", { name: "F", company: { name: "Atlas", url: "https://atlas-two.example", oneLiner: null, stage: null } }),
+    ].map((founder) => ({ ...founder, status: "surfaced" as const, simId: null }));
+    const h = harness({ world, founders: fixtures });
+    await run(h);
+    const companyId = (founderId: string) => h.store.getFounder(founderId)?.companyId;
+    expect(companyId("fnd_front_acme")).toBe(companyId("fnd_front_acme_labs"));
+    expect(companyId("fnd_path_alpha")).not.toBe(companyId("fnd_path_beta"));
+    expect(companyId("fnd_other_atlas_a")).not.toBe(companyId("fnd_other_atlas_b"));
   });
 
   it("gives every simulated company its own record, although their sites share one host", async () => {
@@ -462,5 +515,122 @@ describe("company pipeline stages", () => {
     expect(current.breakdown).toEqual(prior.breakdown);
     expect(current.brief).toEqual(prior.brief);
     expect(h.store.listTasks({ runId: result.id }).some((task) => task.jobId === "assess.company")).toBe(false);
+  });
+
+  it("holds a company when any founder has an integrity-critical assessment", async () => {
+    const world = createSimWorld({ seed: 201, founders: 2, days: 1 });
+    const company = makeCompany("cmp_integrity_team", "Integrity Team", {
+      status: "tracked",
+      lastResearchedAt: "2026-11-11T00:00:00.000Z",
+    });
+    const founders = world.founders().slice(0, 2).map((sim, index) => makeFounder(sim, `fnd_integrity_${index}`, {
+      status: "surfaced",
+      company: { name: company.name, url: null, oneLiner: null, stage: null },
+      companyId: company.id,
+    }));
+    const h = harness({
+      jobs: ["assess.company"],
+      founders,
+      world,
+      wrapExecuteJob: withStrongCompanyAssessment,
+      now: () => new Date("2026-11-13T18:00:00.000Z"),
+    });
+    h.store.insertCompany(company);
+    h.store.insertAssessment(makeFounderAssessment(founders[0]!.id, "2026-11-11T10:00:00.000Z", 0.9));
+    h.store.insertAssessment(makeFounderAssessment(founders[1]!.id, "2026-11-11T11:00:00.000Z", 0.8, [
+      { code: "integrity_critical", severity: "critical", message: "A material claim may be false." },
+    ]));
+    h.store.insertEvidence(sourceEvidence(founders[0]!.id, company.id, "evd_integrity_company"));
+
+    const result = await run(h);
+    expect(result.status).toBe("succeeded");
+    const assessment = h.store.latestCompanyAssessment(company.id)!;
+    expect(assessment.leadFounderId).toBe(founders[0]!.id);
+    expect(assessment.team).toBe(0.9);
+    expect(assessment.decision).toBe("watch");
+  });
+
+  it("recomputes when a founder reassessment changes the lead", async () => {
+    const world = createSimWorld({ seed: 202, founders: 2, days: 1 });
+    const company = makeCompany("cmp_lead_change", "Lead Change Co", { status: "surfaced" });
+    const [a, b] = world.founders().slice(0, 2).map((sim, index) => makeFounder(sim, `fnd_lead_change_${index}`, {
+      status: "surfaced",
+      company: { name: company.name, url: null, oneLiner: null, stage: null },
+      companyId: company.id,
+    }));
+    const prior = makeCompanyAssessment(company.id, "cas_before_lead_change", "2026-11-12T15:00:00.000Z", {
+      leadFounderId: a!.id,
+      team: 0.9,
+      company: 0.7,
+      companyCoverage: 0.5,
+      companyPotential: 0.75,
+      deal: 0.82,
+      decision: "surface",
+    });
+    const h = harness({
+      jobs: ["assess.company"],
+      founders: [a!, b!],
+      world,
+      now: () => new Date("2026-11-13T18:00:00.000Z"),
+    });
+    h.store.insertCompany(company);
+    h.store.insertAssessment(makeFounderAssessment(a!.id, "2026-11-12T10:00:00.000Z", 0.9));
+    h.store.insertAssessment(makeFounderAssessment(b!.id, "2026-11-12T11:00:00.000Z", 0.8));
+    h.store.insertCompanyAssessment(prior);
+    h.store.insertAssessment(makeFounderAssessment(a!.id, "2026-11-13T17:00:00.000Z", 0.2));
+
+    const result = await run(h);
+    expect(result.status).toBe("succeeded");
+    const updated = h.store.latestCompanyAssessment(company.id)!;
+    expect(updated.leadFounderId).toBe(b!.id);
+    expect(updated.team).toBe(0.8);
+    expect(h.store.companyAssessmentHistory(company.id)).toHaveLength(2);
+    expect(h.store.listTasks({ runId: result.id }).some((task) => task.jobId === "assess.company")).toBe(false);
+  });
+
+  it("keeps a company quote distinct from identical founder evidence and deduplicates company repeats", async () => {
+    const world = createSimWorld({ seed: 203, founders: 1, days: 1 });
+    const founder = makeFounder(world.founders()[0]!, "fnd_shared_quote", { status: "surfaced" });
+    const url = "https://shared-quote.example/product";
+    const excerpt = "The product is available to engineering teams.";
+    const sharedDraft: CompanyEvidenceDraft = {
+      kind: "article",
+      facet: "product",
+      url,
+      title: "Product page",
+      excerpt,
+      claim: "The company has shipped its product.",
+      publishedAt: null,
+    };
+    const wrap: (delegate: ExecuteJob) => ExecuteJob = (delegate) => async <J extends ModelJobId>(jobId: J, input: JobInput<J>, context: JobContext, options: Parameters<ExecuteJob>[3]): Promise<JobExecution<J>> => {
+      const execution = await delegate(jobId, input, context, options);
+      if (jobId !== "company.product") return execution;
+      const output = execution.output as CompanyResearchOutput;
+      return { ...execution, output: { ...output, evidence: [...output.evidence, sharedDraft, sharedDraft] } as JobOutput<J> };
+    };
+    const h = harness({
+      jobs: ["company.product"],
+      founders: [founder],
+      world,
+      wrapExecuteJob: wrap,
+    });
+    h.store.insertEvidence({
+      ...sourceEvidence(founder.id, "", "evd_founder_shared_quote"),
+      companyId: null,
+      facet: null,
+      url,
+      excerpt,
+      hash: founderEvidenceHash("web", url, excerpt),
+    });
+
+    const result = await run(h);
+    expect(result.status).toBe("succeeded");
+    const companyId = h.store.getFounder(founder.id)?.companyId;
+    expect(companyId).toBeTruthy();
+    const founderItems = h.store.listEvidence(founder.id).filter((item) => item.url === url && item.excerpt === excerpt);
+    const companyItems = h.store.listCompanyEvidence(companyId!).filter((item) => item.url === url && item.excerpt === excerpt);
+    expect(founderItems).toHaveLength(2);
+    expect(companyItems).toHaveLength(1);
+    expect(new Set(founderItems.map((item) => item.hash)).size).toBe(2);
   });
 });

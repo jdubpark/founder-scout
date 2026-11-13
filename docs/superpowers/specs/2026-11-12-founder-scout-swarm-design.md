@@ -110,8 +110,12 @@ trajectory (against years of experience, never age), earned insight, ambition, c
 magnet, persistence, and whether claims match the record. There is deliberately no pedigree question.
 
 **Companies.** A founder is judged as a person; a company is judged as a business, and the two are
-kept apart so a partner can see a strong person at a weak company or the reverse. Founders who name
-the same company site (or, with no site, exactly the same name) share one company record.
+kept apart so a partner can see a strong person at a weak company or the reverse. Founders share
+one company record when they name the same company on the same site, when two differently spelled
+names both point at the front page of the same site, or, with no site, when the names are exactly
+the same. A page under a host that many companies use (a code host, a site builder) identifies
+nobody, so two names there stay two companies: merging puts one company's evidence on another,
+which is worse than keeping one company twice.
 
 The company rubric (`packages/shared/src/company.ts`) has nine questions: is the stated mission a
 problem worth solving, how large is the market, what has shipped, what edge does it have, do people
@@ -291,15 +295,97 @@ that does not restart every time a record is refreshed.
 | Ranking quality | 120 groups of 20 synthetic founders whose true strength is known, 60 train and 60 test | How closely the swarm's ranking matches true strength (rank correlation: 1 perfect, 0 chance) | Pedigree leak, cost | Free in simulation, about ten seconds |
 | Agreement with your calls | Founders a partner called yes or no, with their stored rubric answers, split in half | Chance a yes outranks a no | Noes that would be surfaced | Free: re-scoring only |
 
+| Past founders | Real companies at the moment they launched, whose later outcome is known. Names and years removed | Chance that a company which later did well outranks a contemporary which did not, among cases the model did not recognise | Cost | Re-scoring is free; a change to wording re-judges the cases with a model |
+
 The second flow starts once each half of a fixed random split holds four yeses and four noes: sixteen calls at the least, usually twenty to thirty.
+
+**Past founders, and not knowing the answer.** The third flow asks whether the swarm, shown only
+what was public on a past date, ranks the companies that later did well above their
+contemporaries. A model has read about the winners and today's web is full of their success, so
+each case is built to hold that out (`packages/shared/src/past.ts`):
+
+1. *Cut-off.* Every piece of evidence carries the date it was published. Code drops anything dated after the case's as-of date, and anything undated.
+2. *No research.* A case is a frozen pack: the company's own launch post and its founders' replies in the first three days. Nothing is looked up when the eval runs, because anything read today can carry what happened later.
+3. *Masking.* The names of the company, its people, its sites and accounts, and every calendar year are replaced before a model sees the pack.
+4. *Recognition.* The judging model is asked to name the company from the masked pack. Code compares the guess with the hidden names. Cases it names are scored apart and left out of the headline, so the size of what memory adds is measured and not assumed.
+5. *Cohorts.* A company is compared only with others that launched in the same quarter.
+6. *Order, in three slices.* A change is proposed on the earliest quarters, chosen on the middle quarters, which are held back from tuning, and reported on the latest quarters. The latest quarters choose nothing, so a headline is not the best of several looks at the same cases. A change counts only when it beats the larger of two noise estimates: the spread between repeats of the judge, and the spread from which cases happened to be drawn (a paired bootstrap).
+7. *Placebo.* The outcomes are shuffled inside each quarter and the score recomputed a thousand times. The page shows what shuffled outcomes give; a headline that does not clear 95% of the shuffles cannot be told from chance.
+8. *Era.* The same probe asks the model which year the text was written in. A model that can date a masked launch can bring what it knows of that era, so the share it dates is reported too.
+
+**What these controls do not do.** Published tests found that masking does not stop a model
+recognising a well-known company (every masked earnings call from three large firms was named),
+and that models recall exact figures from before their training cut-off and none from after
+(`docs/research/look-ahead-bias-in-llm-backtests.md`). The judging models here were trained years
+after these companies launched. So the score is an upper bound on skill, and the page says so in
+those words. The only clean test runs forward: today's assessments, scored when their outcomes
+are known. They are stored with their dates and the config that produced them for that purpose.
+
+**Labels.** The dataset is built by a command (`pnpm swarm past collect`) from Hacker News launch
+posts. Outcomes come from Y Combinator's own directory, matched on the company's own name
+together with its intake or its own site, because unrelated companies share names and a link in
+a post can point at someone else's site. A company has met the bar when it is
+publicly listed, on the programme's list of top companies, or still operating with at least 100
+people; a public list of unicorns can raise a company the directory shows still operating; a
+person's own labels file overrides both. A company nobody can speak for (acquired on unpublished
+terms, absent from the directory, or simply not on a list of successes) is left out instead of
+being called a failure. The bar is a proxy, it is this system's own choice,
+and it is listed among the assumptions (section 15). A company that launched twice is one case.
+Sentences in which a founder states a personal detail are removed before the dataset is written.
+It is kept out of the repository because it names real people.
+
+**What the past-founders eval measured** (2026-11-13, real data). 155 companies that launched on
+Hacker News between 2018 and 2020, 23 of which met the bar; 66 more were collected and left out
+because nobody can state their outcome. Twelve quarters: the earliest (39 cases) propose, the
+middle (28) choose, the latest six (88) report. Judge: `claude-haiku-5-5`, two repetitions, under
+one cent a case, about $2.70 for everything including the first collection that was later
+relabelled.
+
+| Figure | Value |
+|---|---|
+| Latest quarters, cases the judge did not name | 0.50, 95% range 0.17 to 0.72 |
+| Shuffled outcomes on the same cases | 0.50 on average, 95% of shuffles below 0.70 |
+| Latest quarters, all cases | 0.44 |
+| Earlier quarters | 0.65 |
+| Named by the judge despite masking | 22 of 155; their score 0.57 |
+| Year given within one | 52 of 155; one fixed answer would score 155 |
+| Noise floor | 0.21 |
+| Round 1, founders' share 0.6 to 0.5 | fit 0.68 to 0.73, held back 0.61 to 0.62, reverted |
+| Round 2, Talent magnet weight 1.5 to 2.5 | fit 0.68 to 0.71, held back 0.61 to 0.63, reverted |
+
+Three readings. The machinery held on real data: both changes looked good where they were
+proposed, gained 0.008 and 0.016 where they were chosen, and were refused. The default rubric
+with a small judge and a launch post alone shows no skill: 0.50 is chance. And the eval cannot
+steer yet: with a noise floor of 0.21 only a very large gain would be kept, and narrowing the
+range to 0.10 either side needs roughly seven times the cases. The difference between the earlier
+and the latest quarters is not overfitting, since nothing was tuned; it is what samples this
+small do. Winners thin out toward the present, 8 of 42 companies from 2018 against 6 of 64 from
+2020, because a recent company has had less time to reach the bar. Comparing only within a
+quarter keeps that from biasing the score, but it leaves the reporting quarters with 11 winners,
+and the last quarter with none. More cases matter more than a stronger judge, and launch posts
+cannot supply them, which is why a public benchmark of labelled founder profiles is the next
+eval to build (below).
 
 **Why the synthetic headline is not outcomes.** The first design ranked on simulated outcomes. Measured on 200 groups, a random ranker scored 0.20, the default pipeline 0.31 and an oracle that knows true quality 0.35, with noise of 0.03: the whole headroom was the size of the noise, so no change could ever be kept. Outcomes in the simulated world are a weak, noisy function of quality, as they are in venture. In a simulated world true strength is known, and recovering it is the thing the pipeline controls, so that is the headline; outcome hits in the top five are reported beside it.
 
 **What the loop did on the default configuration** (2026-11-13, simulation): starting quality 0.877, noise 0.012. Of five proposals, four were reverted because their gains were inside the noise or raised cost. One was kept: hiding school and employer names from the rubric analyst cut pedigree leak from 0.31 to 0.20 with ranking quality no lower. A separate test starts from a deliberately broken configuration (the two engineering weights at zero) and checks that the loop climbs out of it.
 
-What the loop may change: rubric weights, thresholds, the prompt variant of the rubric analyst,
-and the model of the analyst and the fact-checker. What it may not: anything a person has set by
-directive. Promotion to the live swarm is a person's click.
+What the loop may change: rubric weights for founders and for companies, the share of a company's
+score that comes from its founders, thresholds, the prompt variant of the rubric analyst, the model
+of the analyst and the fact-checker, and **learned guidance**: one-sentence lines the swarm writes
+for its own analysts. A line is proposed by a model shown the cases the current configuration
+ranked wrongly on the tuning half, and it is kept only if the same configuration with the line
+beats it without on the held-out half. Kept lines are part of the configuration, so they are put
+into use and taken out like any other change, and an agent's "Told" tab shows them. What the loop
+may not change: anything a person has set by directive, the thesis, spend caps, or outreach.
+
+**Autopilot.** After each scheduled run the swarm can run eval rounds by itself. The setting has
+three positions. *Off*: only a person starts an eval. *Suggest* (the default): it runs the rounds
+and shows what it would change. *Apply*: it also puts a kept change into use, one at a time, and
+only when the change was measured on real data, which means the partner's calls or past founders.
+A change kept on simulated founders always waits for a person. Evals that call a model have their
+own daily budget, zero by default. Every automatic change is recorded, shown on the home page, and
+undone on the Improve page.
 
 **What the synthetic flow proves and does not.** It proves the machinery: the split, the noise
 floor, keep-or-revert, the guardrails, and that a pipeline which leaks pedigree is caught. It says
@@ -308,19 +394,20 @@ nothing about real founders.
 **Next evals, in order of value**
 
 1. Partner calls, which start accumulating on day one.
-2. A public benchmark of anonymised real founder profiles with outcome labels (VCBench: 9,000 profiles, 9% base rate, with re-identification tests; licence to confirm) for the assessment stage.
-3. A sourcing-recall replay: of founders who later raised from strong investors, how many would the scouts have flagged, and how early.
-4. Groundedness: plant unsupported claims and measure the fact-checker's catch rate on real pages.
+2. A forward ledger: the outcome of each founder and company the swarm decided on, recorded as it becomes known. It is the one eval a model's memory cannot reach.
+3. A public benchmark of anonymised real founder profiles with outcome labels (VCBench: 9,000 profiles, 9% base rate, with re-identification tests; licence to confirm) for the assessment stage.
+4. A sourcing-recall replay: of founders who later raised from strong investors, how many would the scouts have flagged, and how early.
 5. A judge calibrated against partner labels before any model-graded metric steers a change.
 
-Known hazards: models may recognise famous founders (anonymise, and test for recognition); outcomes
-are right-censored; scores can learn pedigree as a proxy (the pedigree-leak metric exists for this);
+Known hazards: models may recognise famous founders (the past-founders flow masks names and tests
+for recognition); outcomes are right-censored; scores can learn pedigree as a proxy (the pedigree-leak metric exists for this);
 language models over-predict success by trusting founder claims (the reason for the fact-checker and
 the integrity question).
 
 ## 12. The dashboard
 
-Eight destinations: Home, Founders, Approvals, Swarm, Steering, Improve, Activity, Settings.
+Ten destinations: Home, Founders, Companies, Approvals, Swarm, Steering, Improve, Assumptions,
+Activity, Settings.
 Direction from the owner: light, very simple and professional, modelled on Slack; as little text as
 possible, with icons and simple diagrams in its place; desktop only. The visual system is recorded
 in `DESIGN.md` and the page-building rules in `apps/web/BUILDING.md`.
@@ -331,7 +418,9 @@ in `DESIGN.md` and the page-building rules in `apps/web/BUILDING.md`.
 - **Founders**: the ranked list with a yes and a no on every row; a slider that shows who would clear a different bar before saving it; a dossier where each rubric answer sits beside its evidence.
 - **Steering**: everything the swarm has been told, suggestions from the partner's calls, and a composer.
 - **Approvals**: drafts to approve, edit or reject.
-- **Improve**: both eval flows, round by round.
+- **Companies**: the ranked list of companies with the same Yes and No, and a dossier per company.
+- **Improve**: the three eval flows, round by round, with a budget for the one that calls a model and a list of every decision a change would flip before it is put into use.
+- **Assumptions**: the ledger of section 15, one row per statement, with a bar for past companies and a bar for the partner's calls.
 
 The demo build is one self-contained file running on a snapshot of a simulated system, for sharing.
 The snapshot is made with a simulated clock, one run per day, so it has two weeks of history.
@@ -391,7 +480,85 @@ traces: it cannot be evaluated in simulation, where the simulated agents do not 
 planted claim has no published evidence behind it; it is this project's own idea and should be
 judged by the failures it catches.
 
-## 15. Decisions that are yours
+## 15. Pools of agents, pools of context, and the assumptions behind the objective
+
+Five agent frameworks were read from source, and the published evidence on systems of several
+agents was collected, to decide what to add here and what to leave
+(`docs/research/swarm-methods-synthesis.md`). Three things were built from it.
+
+**Pools of context** (`packages/shared/src/context.ts`). Every piece of text an agent can be shown
+belongs to one of thirteen named pools: the objective, steering, the partner's calls, learned
+lines, source items, a lead, a founder's file, a company's file, a code checkout, open questions,
+scores, and two that are sealed from every prompt (a partner's contact lists, and the hidden
+truth: simulator ground truth, eval labels and the names behind masked cases). A pool is isolated
+by default. Each job declares the pool behind every one of its input fields, and the declaration
+is typed against the job's inputs, so giving a job a new field without naming its pool stops the
+build. Text moves between pools only through thirteen listed crossings, each with who carries it
+(code, the fact-checker, a scout, a person, an eval), in what form, and what stays behind: a
+founder's file reaches the company file as a name and a site and nothing else; the hidden truth
+reaches an agent only as one line or one setting that the keep rule accepted. The Swarm page
+draws the grid and the crossings.
+
+Why isolation: in the largest controlled study, agents without a central checker multiplied
+errors 17 times, and with one, 4 times; and what the working systems pass between agents is a
+short structured record, not a transcript.
+
+**Pools of agents** (`packages/shared/src/pools.ts`). A job can be done by up to four members,
+each a model with a share of the job's tasks. Code gives each task to a member, deterministically,
+so the same founder goes to the same member on a retry. After a run, code counts what each member
+did using evidence the member did not produce about itself: how many of its items the
+fact-checker supported, for each dollar; whether it accepted planted false claims; how many of
+its tasks failed. Share moves toward the members whose work held up, by at most ten points at a
+time and never below ten, and only once every member has done twenty tasks. A member is benched,
+with the reason recorded, once the count leaves little doubt (the low end of a 90% interval) that
+it accepts more than 15% of planted claims, fails more than 30% of its tasks, or has more than
+30% of its items rejected by the checks. The figure counts supported items, not how much each
+one told the analyst; the floor, the small step and the rejected-items rule bound what a cheap
+member that returns obvious items can gain, and the evals are where thinner evidence would show. A person
+who pins a model for a scope takes that scope out of the pool. A model never chooses a model: the
+routers that allow it were the least reliable part of the frameworks studied.
+
+**The assumption ledger** (`packages/shared/src/assumptions.ts`). "Find the best founders" leaves
+most of the work to assumptions. Some are written down where a person can change them: each
+rubric question and its weight, the founders' share of a company's score, the bar. Some are not
+written anywhere: that "best" means the outcome and not a partner's Yes, that a launch post holds
+enough to judge a company, that what the partner wants stays the same while they grade, that
+several agents find more than one. The ledger lists both kinds as statements that could turn out
+false. Code tests each one on two kinds of evidence that are kept apart: past companies whose
+outcome is known (earlier quarters only, so the latest stay untouched for the headline), and the
+partner's own calls. Each row gets a status from code: supported when the 95% range sits above
+chance, against when it sits below, open when it straddles, untested when fewer than five cases
+of either kind exist. A statement that compares two scores ("founders and company together beat
+either alone") is tested on the difference between them over the same cases, resampled together,
+because two separate ranges overlap even when one score is better on every draw. About thirty
+statements are tested at once at a 95% range, so one or two will look settled by chance; the page
+says so above the list, and a single row is a reason to look, not a result. Where the partner's
+calls and the outcomes disagree, the page marks it: taste and results are different things, and
+the difference is the finding. A model never marks an assumption supported.
+
+On the first real run (the earlier six quarters: 54 comparable companies, 8 winners) the ledger
+marked 4 statements supported, 1 against, 10 open and 16 untested. Supported: the company score
+alone ranks winners above contemporaries (85%, range 66% to 100%), Ambition (74%, 55% to 88%),
+Problem worth solving (70%, 57% to 81%), and that a launch post settles most rubric questions
+(56% of them). Against: that masking stops a model recognising a company. Open: the founder
+score alone (57%, 33% to 79%), and founders and company together, which did 21 points worse than
+the company alone (range 42 worse to level). A launch post answered Trajectory and Momentum for
+no company, the two Claims match record questions for about one in ten, Shipping speed and Talent
+magnet for one in five, and Market for three in ten, so those seven weights are untested by this
+evidence and will stay so until cases carry more than a launch. The second change the loop tried
+was a higher weight on Talent magnet, a question answered for eight comparable companies; it was
+refused on the held-back quarters, which is the keep rule doing what it is for. Eight winners is
+few. These rows say where to look; none is a result.
+
+**Seeing what a change would do.** Before a kept change is put into use, the rubric answers
+already on file are scored again under it, and every founder and company whose decision would
+change is listed. No model is called.
+
+What was left out, with reasons, is in the synthesis note: consensus protocols, debate, models
+that pick their own topology or sub-agents, shared mutable state, memory a model may rewrite or
+delete, and self-modifying code.
+
+## 16. Decisions that are yours
 
 1. The fund's name and first thesis.
 2. Which profile-data vendor to sign with, after reading its terms and asking where its data comes from. The People Data Labs adapter works with a free key (100 records a month) for a first look.
@@ -399,5 +566,8 @@ judged by the failures it catches.
 4. How much the founders should count against the company (the share is 0.6 today), once there are real calls to tune it on.
 5. Whether AI voice calls are wanted at all, and with which vendor, after legal review.
 6. API keys for unattended daily runs. The command-line logins are fine for a prototype; a scheduled production run should bill an API account.
-7. Where real labelled founders for the eval come from.
+7. Where real labelled founders for the eval come from. The past-founders eval has 155 cases and needs roughly seven times that to steer anything; a licensed benchmark or the fund's own deal history are the two sources that could supply them.
 8. Hosting and login, before anyone but you opens the dashboard.
+9. What counts as a company that did well. Today: publicly listed, on its programme's list of top companies, or still operating with at least 100 people. A labels file overrides it.
+10. Which model judges past cases (`EVAL_JUDGE`), and how much autopilot may spend on evals each day (zero today, so it only suggests).
+11. Whether a job should be shared between models at all, and which ones. Pools are empty until members are added on the Swarm page.

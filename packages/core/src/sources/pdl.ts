@@ -56,42 +56,47 @@ export interface PdlOptions {
  * lookups. It starts again when the server restarts, so it is a guard, not an account.
  */
 export interface RecordAllowance {
-  /** How many of `wanted` records may still be asked for today. Throws when none are left. */
+  /** Reserve how many of `wanted` records may still be asked for today. Throws when none are left. */
   take(wanted: number): number;
-  /** Count records the vendor actually returned. */
-  used(count: number): void;
-  /** Records left today. */
+  /** Settle a reservation with the number of records the vendor actually charged. */
+  used(charged: number, granted: number): void;
+  /** Records neither spent nor reserved today. */
   left(): number;
 }
 
 export function createRecordAllowance(perDay: number, now: () => Date = () => new Date()): RecordAllowance {
   let day = "";
   let spent = 0;
+  let reserved = 0;
   const roll = () => {
     const today = now().toISOString().slice(0, 10);
     if (today !== day) {
       day = today;
       spent = 0;
+      reserved = 0;
     }
   };
   return {
     take(wanted) {
       roll();
-      const left = Math.max(0, perDay - spent);
+      const left = Math.max(0, perDay - spent - reserved);
       if (left === 0) {
         throw new Error(
           `${VENDOR}: today's allowance of ${perDay} records is used up. Raise PDL_RECORDS_PER_DAY to spend more.`,
         );
       }
-      return Math.max(0, Math.min(wanted, left));
+      const granted = Math.max(0, Math.min(wanted, left));
+      reserved += granted;
+      return granted;
     },
-    used(count) {
+    used(charged, granted) {
       roll();
-      spent += Math.max(0, count);
+      reserved = Math.max(0, reserved - Math.max(0, granted));
+      spent += Math.max(0, charged);
     },
     left() {
       roll();
-      return Math.max(0, perDay - spent);
+      return Math.max(0, perDay - spent - reserved);
     },
   };
 }
@@ -349,30 +354,41 @@ export function createPdlVendor(options: PdlOptions): ProfileDataVendor & People
       const seen = cursorSeen(req.cursor);
       if (wanted === 0) return { items: [], cursor: { seen } satisfies SeenCursor };
       const limit = allowance ? allowance.take(wanted) : wanted;
-      const month = monthFromDate(req.since, now());
-      const sql = `SELECT * FROM person WHERE job_title LIKE '%founder%' AND job_start_date >= '${escapeSql(month)}'`;
-      const result = await request(makeUrl("/person/search", {
-        sql,
-        size: String(limit),
-        data_include: DATA_INCLUDE,
-      }), req.signal);
-      if (result.status === 404) return { items: [], cursor: { seen } satisfies SeenCursor };
-      checkStatus(result);
+      let settled = !allowance;
+      try {
+        const month = monthFromDate(req.since, now());
+        const sql = `SELECT * FROM person WHERE job_title LIKE '%founder%' AND job_start_date >= '${escapeSql(month)}'`;
+        const result = await request(makeUrl("/person/search", {
+          sql,
+          size: String(limit),
+          data_include: DATA_INCLUDE,
+        }), req.signal);
+        if (result.status === 404) {
+          allowance?.used(0, limit);
+          settled = true;
+          return { items: [], cursor: { seen } satisfies SeenCursor };
+        }
+        checkStatus(result);
 
-      const body = parseBody(result.body);
-      // Every record in the answer was charged for, including ones already seen.
-      allowance?.used(responseData(body).length);
-      const previous = new Set(seen);
-      const newIds: string[] = [];
-      const items: RawItem[] = [];
-      for (const record of responseData(body)) {
-        const person = mapPerson(record);
-        if (!person || previous.has(person.vendorId) || newIds.includes(person.vendorId)) continue;
-        newIds.push(person.vendorId);
-        items.push(buildRawItem(person));
-        if (items.length >= limit) break;
+        const body = parseBody(result.body);
+        const records = responseData(body);
+        // Every record in the answer was charged for, including ones already seen.
+        allowance?.used(records.length, limit);
+        settled = true;
+        const previous = new Set(seen);
+        const newIds: string[] = [];
+        const items: RawItem[] = [];
+        for (const record of records) {
+          const person = mapPerson(record);
+          if (!person || previous.has(person.vendorId) || newIds.includes(person.vendorId)) continue;
+          newIds.push(person.vendorId);
+          items.push(buildRawItem(person));
+          if (items.length >= limit) break;
+        }
+        return { items, cursor: { seen: [...seen, ...newIds].slice(-SEEN_LIMIT) } satisfies SeenCursor };
+      } finally {
+        if (!settled) allowance?.used(0, limit);
       }
-      return { items, cursor: { seen: [...seen, ...newIds].slice(-SEEN_LIMIT) } satisfies SeenCursor };
     },
 
     async enrich(key: PersonKey, signal?: AbortSignal): Promise<PersonRecord | null> {
@@ -385,35 +401,55 @@ export function createPdlVendor(options: PdlOptions): ProfileDataVendor & People
       } else {
         params.pdl_id = key.vendorId;
       }
-      allowance?.take(1);
-      const result = await request(makeUrl("/person/enrich", params), signal);
-      // No match is not charged for.
-      if (result.status === 404) return null;
-      checkStatus(result);
-      allowance?.used(1);
-      const body = asRecord(parseBody(result.body));
-      return body ? mapPerson(body.data, body.likelihood) : null;
+      const granted = allowance ? allowance.take(1) : 0;
+      let settled = !allowance;
+      try {
+        const result = await request(makeUrl("/person/enrich", params), signal);
+        // No match is not charged for.
+        if (result.status === 404) {
+          allowance?.used(0, granted);
+          settled = true;
+          return null;
+        }
+        checkStatus(result);
+        allowance?.used(1, granted);
+        settled = true;
+        const body = asRecord(parseBody(result.body));
+        return body ? mapPerson(body.data, body.likelihood) : null;
+      } finally {
+        if (!settled) allowance?.used(0, granted);
+      }
     },
 
     async team(company, limit, signal): Promise<PersonRecord[]> {
       const wanted = Math.min(normalizeLimit(limit), 25);
       if (wanted === 0) return [];
       const boundedLimit = allowance ? allowance.take(wanted) : wanted;
-      const sql = company.domain?.trim()
-        ? `SELECT * FROM person WHERE job_company_website = '${escapeSql(company.domain.trim().toLowerCase())}'`
-        : `SELECT * FROM person WHERE job_company_name = '${escapeSql(company.name.trim().toLowerCase())}'`;
-      const result = await request(makeUrl("/person/search", {
-        sql,
-        size: String(boundedLimit),
-        data_include: DATA_INCLUDE,
-      }), signal);
-      if (result.status === 404) return [];
-      checkStatus(result);
-      const records = responseData(parseBody(result.body));
-      allowance?.used(records.length);
-      return records
-        .map((record) => mapPerson(record))
-        .filter((person): person is PersonRecord => person !== null);
+      let settled = !allowance;
+      try {
+        const sql = company.domain?.trim()
+          ? `SELECT * FROM person WHERE job_company_website = '${escapeSql(company.domain.trim().toLowerCase())}'`
+          : `SELECT * FROM person WHERE job_company_name = '${escapeSql(company.name.trim().toLowerCase())}'`;
+        const result = await request(makeUrl("/person/search", {
+          sql,
+          size: String(boundedLimit),
+          data_include: DATA_INCLUDE,
+        }), signal);
+        if (result.status === 404) {
+          allowance?.used(0, boundedLimit);
+          settled = true;
+          return [];
+        }
+        checkStatus(result);
+        const records = responseData(parseBody(result.body));
+        allowance?.used(records.length, boundedLimit);
+        settled = true;
+        return records
+          .map((record) => mapPerson(record))
+          .filter((person): person is PersonRecord => person !== null);
+      } finally {
+        if (!settled) allowance?.used(0, boundedLimit);
+      }
     },
   };
 }

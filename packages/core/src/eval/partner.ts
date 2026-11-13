@@ -438,6 +438,7 @@ function emptySummary(): EvalFlowSummary {
     best: null,
     rounds: 0,
     updatedAt: null,
+    realData: false,
   };
 }
 
@@ -475,6 +476,7 @@ function dataNote(cases: readonly PartnerCase[], includeDeficits = false): strin
 function emptyDto(cases: readonly PartnerCase[]): EvalFlowDTO {
   return {
     ...emptySummary(),
+    realData: modeOf(cases) === "live",
     metrics: [...METRICS],
     goal: { target: "agreement", direction: "higher", hold: ["no_surfaced"] },
     cases: {
@@ -486,6 +488,8 @@ function emptyDto(cases: readonly PartnerCase[]): EvalFlowDTO {
     dataNote: dataNote(cases, true),
     variants: [],
     bestVariant: null,
+    ready: isReady(cases),
+    callsModels: false,
     promotedVariant: null,
     narrative: "",
   };
@@ -903,7 +907,10 @@ export function createPartnerEval(deps: EvalDeps, options: PartnerEvalOptions = 
       return guarded(async () => {
       const cases = partnerCases(deps);
       const initial = await refresh();
-      if (!initial.state) return initial.dto;
+      if (!initial.state) {
+        initial.dto.spentUsd = 0;
+        return initial.dto;
+      }
       let state = initial.state;
       let records = initial.records;
       let dto = initial.dto;
@@ -952,6 +959,7 @@ export function createPartnerEval(deps: EvalDeps, options: PartnerEvalOptions = 
         dto = updated.dto;
         await writeArtifacts(deps, cases, state, records, dto);
       }
+      dto.spentUsd = 0;
       return dto;
       });
     },

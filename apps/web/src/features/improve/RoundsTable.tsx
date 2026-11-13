@@ -4,9 +4,10 @@ import type { EvalFlowDTO, EvalVariant } from "@agentswarm/shared";
 import { Button, IconButton } from "../../components/ui/Button";
 import { Status } from "../../components/ui/marks";
 import { Table, TableScroll, Td, Th, Tr } from "../../components/ui/table";
-import { Hint, useToast } from "../../components/ui/overlay";
+import { Hint } from "../../components/ui/overlay";
 import { usd } from "../../lib/format";
-import { usePromoteVariant } from "../../lib/queries";
+import { usePreviewVariant } from "../../lib/queries";
+import { UseRoundDialog } from "./UseRoundDialog";
 import { canUseVariant, changeLabel, decisionReason, inUseVariant, roundLabel, score, statusView } from "./variants";
 
 /** Every round with its score, cost and status. A round that was not reverted and is not in use gets "Use this". */
@@ -15,21 +16,14 @@ export function RoundsTable({ flow, swarmId, swarmConfigId }: { flow: EvalFlowDT
   const inUse = inUseVariant(flow, swarmConfigId);
   // Cost has its own column, from the round's recorded cost.
   const others = flow.metrics.filter((m) => m.id !== head && m.id !== "cost_usd");
-  const [confirming, setConfirming] = useState<string | null>(null);
-  const promote = usePromoteVariant();
-  const toast = useToast();
+  const [previewing, setPreviewing] = useState<EvalVariant | null>(null);
+  const preview = usePreviewVariant();
 
-  const use = (v: EvalVariant) =>
-    promote.mutate(
-      { id: flow.id, input: { variant: v.id, swarmId } },
-      {
-        onSuccess: () => {
-          setConfirming(null);
-          toast.done(`${roundLabel(v)} is in use`);
-        },
-        onError: (e) => toast.problem("The configuration was not changed", e.message),
-      },
-    );
+  // Opening a round asks what it would change first; the dialog then puts it into use.
+  const openPreview = (v: EvalVariant) => {
+    setPreviewing(v);
+    preview.mutate({ id: flow.id, input: { variant: v.id, swarmId } });
+  };
 
   const headMetric = flow.metrics.find((m) => m.id === head);
 
@@ -90,20 +84,10 @@ export function RoundsTable({ flow, swarmId, swarmConfigId }: { flow: EvalFlowDT
                   </span>
                 </Td>
                 <Td className="whitespace-nowrap">
-                  {canUse && confirming !== v.id ? (
-                    <Button size="sm" onClick={() => setConfirming(v.id)}>
+                  {canUse ? (
+                    <Button size="sm" onClick={() => openPreview(v)}>
                       Use this
                     </Button>
-                  ) : null}
-                  {canUse && confirming === v.id ? (
-                    <span className="inline-flex gap-2">
-                      <Button size="sm" onClick={() => use(v)} busy={promote.isPending} busyLabel="Saving">
-                        Confirm
-                      </Button>
-                      <Button size="sm" variant="quiet" onClick={() => setConfirming(null)} disabled={promote.isPending}>
-                        Cancel
-                      </Button>
-                    </span>
                   ) : null}
                 </Td>
               </Tr>
@@ -111,6 +95,16 @@ export function RoundsTable({ flow, swarmId, swarmConfigId }: { flow: EvalFlowDT
           })}
         </tbody>
       </Table>
+      {previewing ? (
+        <UseRoundDialog
+          key={previewing.id}
+          flow={flow}
+          variant={previewing}
+          swarmId={swarmId}
+          preview={preview}
+          onClose={() => setPreviewing(null)}
+        />
+      ) : null}
     </TableScroll>
   );
 }

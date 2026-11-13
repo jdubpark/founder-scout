@@ -9,7 +9,7 @@ import { buildServer } from "./app";
 
 type Call = { actor: string; method: string; args: unknown[] };
 type RouteCase = {
-  method: "GET" | "POST" | "PATCH" | "DELETE";
+  method: "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
   url: string;
   apiMethod: string;
   args?: unknown[];
@@ -30,6 +30,7 @@ afterEach(async () => {
 
 function fakeService(failure?: unknown) {
   const calls: Call[] = [];
+  const coach = vi.fn(async () => ({}));
   const service = {
     as(actor: string) {
       return new Proxy(
@@ -45,8 +46,9 @@ function fakeService(failure?: unknown) {
         },
       ) as ApiClient;
     },
+    coach,
   } as unknown as SwarmService;
-  return { service, calls };
+  return { service, calls, coach };
 }
 
 async function serverFor(service: SwarmService, options: { webDist?: string | null; logger?: boolean } = {}) {
@@ -161,6 +163,7 @@ const routeCases: RouteCase[] = [
   { method: "POST", url: "/api/runs/run-1/cancel", apiMethod: "cancelRun", args: ["run-1"] },
   { method: "GET", url: "/api/evals", apiMethod: "listEvalFlows" },
   { method: "GET", url: "/api/evals/flow-1", apiMethod: "getEvalFlow", args: ["flow-1"] },
+  { method: "GET", url: "/api/evals/flow-1?swarmId=sw-2", apiMethod: "getEvalFlow", args: ["flow-1", "sw-2"] },
   { method: "POST", url: "/api/evals/flow-1/rounds", apiMethod: "runEvalRounds", args: ["flow-1", {}], body: {} },
   {
     method: "POST",
@@ -168,6 +171,36 @@ const routeCases: RouteCase[] = [
     apiMethod: "promoteEvalVariant",
     args: ["flow-1", { variant: "v1", swarmId: "sw-1" }],
     body: { variant: "v1", swarmId: "sw-1" },
+  },
+  {
+    method: "POST",
+    url: "/api/evals/flow-1/preview",
+    apiMethod: "previewEvalVariant",
+    args: ["flow-1", { variant: "v1", swarmId: "sw-1" }],
+    body: { variant: "v1", swarmId: "sw-1" },
+  },
+  {
+    method: "POST",
+    url: "/api/evals/flow-1/rounds",
+    apiMethod: "runEvalRounds",
+    args: ["flow-1", { rounds: 0, brain: "live", budgetUsd: 2.5 }],
+    body: { rounds: 0, brain: "live", budgetUsd: 2.5 },
+  },
+  { method: "GET", url: "/api/swarms/sw-1/assumptions", apiMethod: "getAssumptions", args: ["sw-1"] },
+  { method: "GET", url: "/api/swarms/sw-1/pools", apiMethod: "getPools", args: ["sw-1"] },
+  {
+    method: "PUT",
+    url: "/api/swarms/sw-1/pools/investigate.background",
+    apiMethod: "setPool",
+    args: ["sw-1", "investigate.background", { members: [{ id: "haiku", route: { provider: "claude-cli", model: "claude-haiku-5-5" }, share: 1 }] }],
+    body: { members: [{ id: "haiku", route: { provider: "claude-cli", model: "claude-haiku-5-5" }, share: 1 }] },
+  },
+  {
+    method: "POST",
+    url: "/api/swarms/sw-1/pools/rebalance",
+    apiMethod: "rebalancePools",
+    args: ["sw-1", { apply: true }],
+    body: { apply: true },
   },
 ];
 
@@ -189,6 +222,41 @@ describe("buildServer routes", () => {
 
     expect(calls).toHaveLength(routeCases.length);
     expect(calls.every((call) => call.actor === "Morgan Operator")).toBe(true);
+  });
+
+  it("starts a manual run without triggering scheduled coaching", async () => {
+    const { service, calls, coach } = fakeService();
+    const app = await serverFor(service);
+
+    const response = await app.inject({ method: "POST", url: "/api/runs", payload: { swarmId: "sw-1" } });
+
+    expect(response.statusCode).toBe(200);
+    expect(calls.map((call) => call.method)).toEqual(["startRun"]);
+    expect(coach).not.toHaveBeenCalled();
+  });
+
+  it("accepts valid autopilot settings and rejects an unsupported mode", async () => {
+    const { service, calls } = fakeService();
+    const app = await serverFor(service);
+
+    const valid = await app.inject({
+      method: "PATCH",
+      url: "/api/settings",
+      payload: { autopilot: { mode: "apply", budgetUsd: 25 } },
+    });
+    const invalid = await app.inject({
+      method: "PATCH",
+      url: "/api/settings",
+      payload: { autopilot: { mode: "automatic" } },
+    });
+
+    expect(valid.statusCode).toBe(200);
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.method).toBe("updateSettings");
+    expect(calls[0]?.args).toEqual([{ autopilot: { mode: "apply", budgetUsd: 25 } }]);
+    expect(invalid.statusCode).toBe(400);
+    expect(invalid.json()).toMatchObject({ error: "Request validation failed", fields: { "autopilot.mode": expect.any(String) } });
+    expect(calls).toHaveLength(1);
   });
 
   it("defaults blank actors and trims before enforcing the 60-character limit", async () => {
@@ -267,6 +335,21 @@ describe("buildServer routes", () => {
     expect(response.statusCode).toBe(400);
     expect(response.json()).toMatchObject({ error: "Request validation failed", fields: { name: expect.any(String) } });
     expect(calls).toHaveLength(0);
+  });
+
+  it("refuses a pool whose share is out of range and an eval budget above the ceiling", async () => {
+    const { service, calls } = fakeService();
+    const app = await serverFor(service);
+    const badShare = await app.inject({
+      method: "PUT",
+      url: "/api/swarms/sw-1/pools/investigate.background",
+      payload: { members: [{ id: "haiku", route: { provider: "claude-cli", model: "claude-haiku-5-5" }, share: 1.5 }] },
+    });
+    expect(badShare.statusCode).toBe(400);
+    const bigBudget = await app.inject({ method: "POST", url: "/api/evals/flow-1/rounds", payload: { budgetUsd: 5000 } });
+    expect(bigBudget.statusCode).toBe(400);
+    expect(calls).toHaveLength(0);
+    await app.close();
   });
 
   it("normalizes malformed JSON bodies into the public 400 shape", async () => {

@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { createQuoteChecker } from "./quote-check";
+import { brotliCompressSync, gzipSync } from "node:zlib";
+import { createServer } from "node:http";
+import { createPinnedLookup, createQuoteChecker, pinnedFetch } from "./quote-check";
 import type { FetchFn } from "./http";
 
 const publicResolver = async () => ["93.184.216.34"];
@@ -46,11 +48,17 @@ describe("createQuoteChecker", () => {
     expect(result.status).toBe("found");
   });
 
-  it("uses five-word shingles to tolerate one changed word", async () => {
+  it("requires exact comparison words when one word changes", async () => {
     const sentence = "Founders often build useful tools for small teams before expanding into larger markets with careful hiring and steady customer feedback from early adopters across several regions over many years while measuring product use and listening closely to customers who share practical needs and advice";
     const changed = sentence.replace("useful", "invented");
     const result = await checker(async () => page(longText(sentence))).check("https://example.test/story", changed);
-    expect(result.status).toBe("found");
+    expect(result.status).toBe("not_found");
+
+    const changedNumber = await checker(async () => page(longText("The company served 12 customers across several regions and continued growing steadily for many years."))).check(
+      "https://example.test/story",
+      "The company served 40 customers across several regions and continued growing steadily for many years.",
+    );
+    expect(changedNumber.status).toBe("not_found");
 
     const invented = await checker(async () => page(longText(sentence))).check(
       "https://example.test/story",
@@ -104,15 +112,28 @@ describe("createQuoteChecker", () => {
     expect(result.status).toBe("found");
   });
 
-  it("reads arXiv PDF addresses from the versioned abstract page", async () => {
+  it("treats the arXiv abstract as a partial stand-in", async () => {
     const fetched: string[] = [];
+    const quote = "This abstract describes a public research paper with detailed methods and important results.";
     const result = await checker(async (url) => {
       fetched.push(url);
-      return page("<p>This abstract describes a public research paper.</p>");
-    }).check("https://arxiv.org/pdf/2401.01234v2.pdf", "The paper presents an extensive result in applied research.");
+      return page(`<p>${"ordinary public research information ".repeat(80)}</p>`);
+    }).check("https://arxiv.org/pdf/2401.01234v2.pdf", quote);
 
     expect(fetched).toEqual(["https://arxiv.org/abs/2401.01234v2"]);
-    expect(result.status).toBe("unreachable");
+    expect(result).toMatchObject({ status: "unreachable", detail: "Only the abstract of this paper could be read." });
+
+    const found = await checker(async () => page(`<p>${quote}</p>`)).check("https://arxiv.org/pdf/2401.01234v2.pdf", quote);
+    expect(found.status).toBe("found");
+  });
+
+  it("keeps missing quotes on complete Hacker News stand-ins as not found", async () => {
+    const body = JSON.stringify({ text: "ordinary public discussion text ".repeat(100) });
+    const result = await checker(async () => page(body, 200, "application/json")).check(
+      "https://news.ycombinator.com/item?id=12345678",
+      "A specific claim that does not appear anywhere in this discussion.",
+    );
+    expect(result.status).toBe("not_found");
   });
 
   it("does not join JSON string fields into a quote across field boundaries", async () => {
@@ -185,13 +206,118 @@ describe("createQuoteChecker", () => {
     ]);
   });
 
-  it("cuts off an oversized response and can still find an early quote", async () => {
+  it("reports truncated pages as unreachable unless the quote was found", async () => {
     const quote = "The quote appears before the body limit is reached.";
-    const result = await checker(async () => page(`<p>${quote}</p>${"extra readable words ".repeat(500)}`), { maxBytes: 1_700 }).check(
+    const found = await checker(async () => page(`<p>${quote}</p>${"extra readable words ".repeat(500)}`), { maxBytes: 1_700 }).check(
       "https://example.test/story",
       quote,
     );
-    expect(result.status).toBe("found");
+    expect(found.status).toBe("found");
+
+    const beyondLimit = "This genuine quote begins only after the source was cut off by the byte limit.";
+    const missing = await checker(async () => page(`<p>${"ordinary public page information ".repeat(100)}</p><p>${beyondLimit}</p>`), {
+      maxBytes: 1_700,
+    }).check("https://example.test/story", beyondLimit);
+    expect(missing).toMatchObject({ status: "unreachable", detail: "The page is too long to check in full." });
+  });
+
+  it("connects to a validated address while keeping the original host name", async (context) => {
+    let hostHeader = "";
+    const server = createServer((_request, response) => {
+      hostHeader = _request.headers.host ?? "";
+      response.writeHead(200, { "content-type": "text/plain" });
+      response.end("served through the pinned address");
+    });
+    try {
+      await new Promise<void>((resolve, reject) => {
+        server.once("error", reject);
+        server.listen(0, "127.0.0.1", resolve);
+      });
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "EPERM") throw error;
+      // A sandbox that forbids listening cannot run this. Say so instead of passing silently.
+      context.skip();
+      return;
+    }
+    try {
+      const address = server.address();
+      if (!address || typeof address === "string") throw new Error("The local server did not bind to a TCP port.");
+      const resolveHost = async () => ["127.0.0.1"];
+      const pinnedAddresses = await resolveHost();
+      const response = await pinnedFetch(`http://public-name.test:${address.port}/`, { method: "GET" }, pinnedAddresses);
+      expect(await response.text()).toBe("served through the pinned address");
+      expect(response.status).toBe(200);
+      expect(hostHeader).toBe(`public-name.test:${address.port}`);
+    } finally {
+      await new Promise<void>((resolve, reject) => {
+        server.close((error) => (error ? reject(error) : resolve()));
+      });
+    }
+  });
+
+  it("reads a page the server compressed without being asked, and refuses a scheme it cannot undo", async (context) => {
+    const text = "A sentence that only makes sense once the compression is undone. ".repeat(20);
+    const server = createServer((request, response) => {
+      if (request.url === "/gzip") {
+        response.writeHead(200, { "content-type": "text/plain", "content-encoding": "gzip" });
+        response.end(gzipSync(text));
+      } else if (request.url === "/brotli") {
+        response.writeHead(200, { "content-type": "text/plain", "content-encoding": "br" });
+        response.end(brotliCompressSync(text));
+      } else {
+        response.writeHead(200, { "content-type": "text/plain", "content-encoding": "zstd" });
+        response.end("opaque bytes");
+      }
+    });
+    try {
+      await new Promise<void>((resolve, reject) => {
+        server.once("error", reject);
+        server.listen(0, "127.0.0.1", resolve);
+      });
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "EPERM") throw error;
+      context.skip();
+      return;
+    }
+    try {
+      const address = server.address();
+      if (!address || typeof address === "string") throw new Error("The local server did not bind to a TCP port.");
+      const get = (path: string) => pinnedFetch(`http://public-name.test:${address.port}${path}`, { method: "GET" }, ["127.0.0.1"]);
+      expect(await (await get("/gzip")).text()).toBe(text);
+      expect(await (await get("/brotli")).text()).toBe(text);
+      await expect(get("/zstd")).rejects.toThrow(/compressed in a form/);
+    } finally {
+      await new Promise<void>((resolve, reject) => {
+        server.close((error) => (error ? reject(error) : resolve()));
+      });
+    }
+  });
+
+  it("uses the first validated DNS answer for both Node lookup callback forms", async () => {
+    let lookups = 0;
+    const resolver = async () => {
+      lookups += 1;
+      return lookups === 1 ? ["93.184.216.34"] : ["169.254.169.254"];
+    };
+    const lookup = createPinnedLookup(await resolver());
+    const single = await new Promise<{ address: string; family: number }>((resolve, reject) => {
+      lookup("public-name.test", { all: false }, (error, address, family) => {
+        if (error) reject(error);
+        else if (typeof address === "string") resolve({ address, family: family ?? 0 });
+        else reject(new Error("Expected a single lookup result."));
+      });
+    });
+    const all = await new Promise<Array<{ address: string; family: number }>>((resolve, reject) => {
+      lookup("public-name.test", { all: true }, (error, addresses) => {
+        if (error) reject(error);
+        else if (Array.isArray(addresses)) resolve(addresses);
+        else reject(new Error("Expected all lookup results."));
+      });
+    });
+
+    expect(single).toEqual({ address: "93.184.216.34", family: 4 });
+    expect(all).toEqual([{ address: "93.184.216.34", family: 4 }]);
+    expect(lookups).toBe(1);
   });
 
   it("rethrows a caller abort", async () => {

@@ -12,6 +12,8 @@ describe("resolveConfig", () => {
       dbPath: resolve(config.repositoryRoot, "data/swarm.db"),
       dataDir: resolve(config.repositoryRoot, "data"),
       flowsDir: resolve(config.repositoryRoot, "evals/flows"),
+      datasetsDir: resolve(config.repositoryRoot, "evals/datasets"),
+      evalJudge: null,
       webDist: resolve(config.repositoryRoot, "apps/web/dist"),
       fundName: "the fund",
       simSeed: 7,
@@ -37,10 +39,21 @@ describe("resolveConfig", () => {
       dbPath: resolve(config.repositoryRoot, "var/state.sqlite"),
       dataDir: "/srv/swarm-data",
       flowsDir: resolve(config.repositoryRoot, "fixtures/flows"),
+      datasetsDir: resolve(config.repositoryRoot, "fixtures/datasets"),
+      evalJudge: null,
       webDist: resolve(config.repositoryRoot, "web/build"),
       fundName: "North Star",
       simSeed: 19,
     });
+  });
+
+  it("keeps datasets where it is told to, and reads the model that judges past cases", () => {
+    const config = resolveConfig({ EVAL_DATASETS_DIR: "/srv/datasets", EVAL_JUDGE: "claude-cli:claude-haiku-5-5" });
+    expect(config.datasetsDir).toBe("/srv/datasets");
+    expect(config.evalJudge).toEqual({ provider: "claude-cli", model: "claude-haiku-5-5" });
+    expect(resolveConfig({ EVAL_JUDGE: "claude-cli:claude-opus-5-5:high" }).evalJudge).toEqual({ provider: "claude-cli", model: "claude-opus-5-5", effort: "high" });
+    expect(() => resolveConfig({ EVAL_JUDGE: "claude-haiku-5-5" })).toThrow(/EVAL_JUDGE must look like/);
+    expect(() => resolveConfig({ EVAL_JUDGE: "claude-cli:claude-haiku-5-5:extreme" })).toThrow(/EVAL_JUDGE must look like/);
   });
 
   it("rejects invalid integer settings", () => {

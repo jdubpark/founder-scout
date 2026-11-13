@@ -130,8 +130,15 @@ export function createHttpClient(options: { baseUrl?: string; getActor: () => st
     cancelRun: (id) => call("POST", `/api/runs/${encodeURIComponent(id)}/cancel`),
 
     listEvalFlows: () => get("/api/evals"),
-    getEvalFlow: (id) => get(`/api/evals/${encodeURIComponent(id)}`),
+    getEvalFlow: (id, swarmId) => get(`/api/evals/${encodeURIComponent(id)}${swarmId ? `?swarmId=${encodeURIComponent(swarmId)}` : ""}`),
     runEvalRounds: (id, input) => call("POST", `/api/evals/${encodeURIComponent(id)}/rounds`, input ?? {}),
     promoteEvalVariant: (id, input) => call("POST", `/api/evals/${encodeURIComponent(id)}/promote`, input),
+    previewEvalVariant: (id, input) => call("POST", `/api/evals/${encodeURIComponent(id)}/preview`, input),
+
+    getAssumptions: (swarmId) => get(`/api/swarms/${encodeURIComponent(swarmId)}/assumptions`),
+
+    getPools: (swarmId) => get(`/api/swarms/${encodeURIComponent(swarmId)}/pools`),
+    setPool: (swarmId, jobId, input) => call("PUT", `/api/swarms/${encodeURIComponent(swarmId)}/pools/${encodeURIComponent(jobId)}`, input),
+    rebalancePools: (swarmId, input) => call("POST", `/api/swarms/${encodeURIComponent(swarmId)}/pools/rebalance`, input ?? {}),
   };
 }

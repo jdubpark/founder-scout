@@ -1,14 +1,33 @@
-import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
-import { createApp, runDoctor, type AppOptions, type DoctorRow, type SwarmService } from "@agentswarm/core";
+import {
+  collectLaunchPosts,
+  createApp,
+  fetchUnicornNames,
+  fetchYcDirectory,
+  firstLaunchEach,
+  labelPastCases,
+  parseLabelsCsv,
+  readPastCases,
+  redactSensitive,
+  runDoctor,
+  summarisePastCases,
+  writePastCases,
+  type AppOptions,
+  type CollectLaunchesOptions,
+  type DoctorRow,
+  type OutcomeLabel,
+  type SwarmService,
+} from "@agentswarm/core";
 import {
   type ApiClient,
   type DemoSnapshot,
   type EvalFlowDTO,
   type FounderRow,
+  type PastCase,
   type Run,
 } from "@agentswarm/shared";
 import { resolveConfig } from "./config";
@@ -16,6 +35,19 @@ import { createCronHelper } from "./cron";
 
 export type OutputWriter = (line: string) => void;
 type DoctorRunner = (options: { live: boolean; env?: NodeJS.ProcessEnv }) => Promise<DoctorRow[]>;
+type PastCollector = (options: CollectLaunchesOptions) => Promise<PastCase[]>;
+type UnicornFetcher = typeof fetchUnicornNames;
+type DirectoryFetcher = typeof fetchYcDirectory;
+
+/** A company still operating counts as a success at this many people, unless --min-team says otherwise. */
+const DEFAULT_MIN_TEAM = 100;
+
+const CLI_HELP = [
+  "Usage: swarm <run|doctor|eval|past|demo-snapshot|seed> [options]",
+  "  swarm eval rounds [--flow <id>] [--rounds <n>] [--budget <usd>]",
+  "  swarm past collect --from <date> --to <date> [--yc] [--min-team <n>] [--unicorns] [--labels <file.csv>] [--controls <n>]",
+  "  swarm past show",
+].join("\n");
 
 function positiveInteger(raw: string | undefined, name: string, fallback: number): number {
   if (raw === undefined) return fallback;
@@ -107,14 +139,127 @@ export async function evalRoundsCommand(
   flowId: string | undefined,
   rounds: number,
   write: OutputWriter,
+  budgetUsd?: number,
 ): Promise<void> {
   const api = service.as("Partner");
   const summaries = await api.listEvalFlows();
   const summary = flowId ? summaries.find((flow) => flow.id === flowId) : summaries[0];
   if (!summary) throw new Error(flowId ? `Eval flow not found: ${flowId}` : "No eval flows are available.");
-  const flow = await api.runEvalRounds(summary.id, { rounds, brain: "sim" });
+  const before = await api.getEvalFlow(summary.id);
+  if (before.ready === false) {
+    write(`${before.id}: not ready. ${before.dataNote}`);
+    return;
+  }
+  // A flow that reads real text cannot run in simulation, and one that calls models is given a ceiling.
+  const flow = await api.runEvalRounds(summary.id, before.callsModels
+    ? { rounds, brain: "live", budgetUsd: budgetUsd ?? 5 }
+    : { rounds, brain: "sim" });
   const newest = flow.variants[flow.variants.length - 1];
-  write(`${flow.id}: ${rounds} round${rounds === 1 ? "" : "s"} complete${newest ? `; ${newest.status}, test=${score(flow, newest.test)}` : ""}`);
+  const spent = typeof flow.spentUsd === "number" && flow.spentUsd > 0 ? `; spent $${flow.spentUsd.toFixed(2)}` : "";
+  write(`${flow.id}: ${rounds} round${rounds === 1 ? "" : "s"} complete${newest ? `; ${newest.status}, test=${score(flow, newest.test)}` : ""}${spent}`);
+  if (flow.narrative) write(flow.narrative);
+}
+
+function stableShuffle<T>(values: readonly T[], seedText: string): T[] {
+  let seed = 2166136261;
+  for (const char of seedText) seed = Math.imul(seed ^ char.charCodeAt(0), 16777619) >>> 0;
+  const next = () => {
+    seed = (seed + 0x6d2b79f5) >>> 0;
+    let value = seed;
+    value = Math.imul(value ^ (value >>> 15), value | 1);
+    value ^= value + Math.imul(value ^ (value >>> 7), value | 61);
+    return ((value ^ (value >>> 14)) >>> 0) / 4294967296;
+  };
+  const result = [...values];
+  for (let index = result.length - 1; index > 0; index -= 1) {
+    const swap = Math.floor(next() * (index + 1));
+    [result[index], result[swap]] = [result[swap] as T, result[index] as T];
+  }
+  return result;
+}
+
+function applyControls(cases: readonly PastCase[], perSuccess: number): PastCase[] {
+  const keep = new Set(cases.filter((pastCase) => pastCase.outcome === 1).map((pastCase) => pastCase.id));
+  const cohorts = new Map<string, PastCase[]>();
+  for (const pastCase of cases.filter((item) => item.outcome === 0)) {
+    const controls = cohorts.get(pastCase.cohort) ?? [];
+    controls.push(pastCase);
+    cohorts.set(pastCase.cohort, controls);
+  }
+  const successes = cases.filter((pastCase) => pastCase.outcome === 1).sort((a, b) => a.id.localeCompare(b.id));
+  for (const success of successes) {
+    const candidates = (cohorts.get(success.cohort) ?? []).sort((a, b) => a.id.localeCompare(b.id));
+    for (const control of stableShuffle(candidates, success.id).slice(0, perSuccess)) keep.add(control.id);
+  }
+  return cases.filter((pastCase) => keep.has(pastCase.id));
+}
+
+function datasetsDirectory(env: NodeJS.ProcessEnv): string {
+  return resolveConfig(env).datasetsDir;
+}
+
+export async function pastShowCommand(datasetsDir: string, write: OutputWriter): Promise<void> {
+  const cases = await readPastCases(datasetsDir);
+  const summary = summarisePastCases(cases);
+  write(`Dataset: ${resolve(datasetsDir, "past-founders", "cases.jsonl")}`);
+  write(`Cases: ${summary.cases}; successes: ${summary.positives}; periods: ${summary.cohorts.length}`);
+  for (const cohort of summary.cohorts) write(`${cohort.cohort}: ${cohort.cases} cases; ${cohort.positives} successes`);
+}
+
+export async function pastCollectCommand(
+  options: { from: string; to: string; labels?: string; unicorns: boolean; yc?: boolean; minTeam?: number; controls?: number },
+  datasetsDir: string,
+  write: OutputWriter,
+  dependencies: { collectLaunchPosts?: PastCollector; fetchUnicornNames?: UnicornFetcher; fetchYcDirectory?: DirectoryFetcher } = {},
+): Promise<void> {
+  // A case is only worth keeping with an outcome, and an outcome nobody can state is left out
+  // instead of being called a failure. So something must be able to state outcomes.
+  if (!options.labels && !options.unicorns && !options.yc) {
+    throw new Error("past collect needs a source of outcomes: --yc, --labels <file.csv>, or --unicorns together with one of those.");
+  }
+  const collect = dependencies.collectLaunchPosts ?? collectLaunchPosts;
+  // The dataset is stored, so it passes the same boundary as everything else stored: a sentence
+  // in which a founder states their age, nationality or the like is removed before it is written.
+  const fetched = (await collect({ from: options.from, to: options.to })).map((pastCase) => ({
+    ...pastCase,
+    evidence: pastCase.evidence.map((item) => ({ ...item, title: redactSensitive(item.title), text: redactSensitive(item.text) })),
+  }));
+  // A reviewed file goes first, so it corrects the public sources: a launch that shares its name
+  // with a listed company can be marked 0 there, and a success they miss or spell differently, 1.
+  const reviewed: OutcomeLabel[] = options.labels ? parseLabelsCsv(await readFile(options.labels, "utf8")) : [];
+  let listed: OutcomeLabel[] = [];
+  if (options.unicorns) {
+    const result = await (dependencies.fetchUnicornNames ?? fetchUnicornNames)();
+    listed = result.names.map((company) => ({ company, outcome: 1 as const, source: result.source }));
+  }
+  const minTeam = options.minTeam ?? DEFAULT_MIN_TEAM;
+  const directory = options.yc
+    ? { ...(await (dependencies.fetchYcDirectory ?? fetchYcDirectory)()), minTeam }
+    : undefined;
+  const labeled = labelPastCases(fetched, { reviewed, listed, directory });
+
+  const merged = new Map((await readPastCases(datasetsDir)).map((pastCase) => [pastCase.id, pastCase]));
+  // A launch read again and now left out for an unknown outcome must not keep an older label.
+  for (const pastCase of fetched) merged.delete(pastCase.id);
+  for (const pastCase of labeled.cases) merged.set(pastCase.id, pastCase);
+  // Two collections over different dates can each hold a launch of the same company.
+  let allCases = firstLaunchEach([...merged.values()]);
+  if (options.controls !== undefined) allCases = applyControls(allCases, options.controls);
+  const path = await writePastCases(datasetsDir, allCases);
+  const summary = summarisePastCases(allCases);
+  const successes = allCases.filter((pastCase) => pastCase.outcome === 1).map((pastCase) => pastCase.subject.company).sort((a, b) => a.localeCompare(b));
+  write(`Dataset: ${path}`);
+  write(`Cases: ${summary.cases}; successes: ${summary.positives}; periods: ${summary.cohorts.length}${summary.cohorts.length ? ` (${summary.cohorts.map((cohort) => cohort.cohort).join(", ")})` : ""}`);
+  write(`Successes: ${successes.join(", ") || "none"}`);
+  if (directory) {
+    write(`Success bar: publicly listed, on the programme's list of top companies, or operating with at least ${minTeam} people${options.unicorns ? ", or on the public list of unicorns" : ""}.`);
+  }
+  write(`Left out, outcome unknown: ${labeled.unknown.length}${labeled.unknown.length ? ` (${labeled.unknown.map((item) => `${item.company}: ${item.reason}`).join("; ")})` : ""}`);
+  if (options.labels) write(`Successes in the labels file with no matching launch: ${labeled.reviewedMisses.join(", ") || "none"}`);
+  if (summary.positives === summary.cases && summary.cases > 0) {
+    write("Every case kept is a success. Add --yc, or companies marked 0 in a labels file, so there is something to compare them with.");
+  }
+  write("Review the labels before trusting the eval.");
 }
 
 async function allFounderRows(api: ApiClient, swarmId: string): Promise<FounderRow[]> {
@@ -241,6 +386,15 @@ async function collectSnapshot(service: SwarmService, days: number, clock: DemoC
   const api = service.as("Partner");
   const swarm = await selectedSwarm(api);
   await addDemoSteering(api, swarm.id);
+  // Two jobs are shared between two models each, so the Pools tab has members to compare.
+  await api.setPool(swarm.id, "investigate.background", { members: [
+    { id: "sonnet", route: { provider: "claude-cli", model: "claude-sonnet-5-5" }, share: 0.5 },
+    { id: "haiku", route: { provider: "claude-cli", model: "claude-haiku-5-5" }, share: 0.5 },
+  ] });
+  await api.setPool(swarm.id, "verify.claims", { members: [
+    { id: "sol", route: { provider: "openai-api", model: "gpt-6.1-sol" }, share: 0.5 },
+    { id: "luna", route: { provider: "codex-cli", model: "gpt-6-luna" }, share: 0.5 },
+  ] });
 
   // One run per day, the last one this morning. The partner's calls come two days before
   // the end, so the next run drafts outreach for the Yes calls and the last one acts on
@@ -262,7 +416,15 @@ async function collectSnapshot(service: SwarmService, days: number, clock: DemoC
 
   // Five rounds: on the synthetic benchmark the first three proposals fall inside the noise and
   // are reverted, and the fourth (hiding school and employer names from the analyst) is kept.
-  for (const flow of await api.listEvalFlows()) await api.runEvalRounds(flow.id, { rounds: 5, brain: "sim" });
+  // A flow built on real past companies is left as it is: it has no cases here, it cannot run
+  // in simulation, and a demo must not call a model.
+  for (const flow of await api.listEvalFlows()) {
+    const detail = await api.getEvalFlow(flow.id);
+    if (detail.ready === false || detail.callsModels) continue;
+    await api.runEvalRounds(flow.id, { rounds: 5, brain: "sim" });
+  }
+  // What the swarm does by itself after a scheduled run, so the home page has its report.
+  await service.coach(swarm.id);
 
   // A snapshot is made to be shared, so it says nothing about this machine: which tools are
   // installed, which keys are set, or which endpoints are configured.
@@ -317,6 +479,13 @@ async function collectSnapshot(service: SwarmService, days: number, clock: DemoC
 
   const evalFlows: EvalFlowDTO[] = [];
   for (const flow of await api.listEvalFlows()) evalFlows.push(await api.getEvalFlow(flow.id));
+  // The demo's swarm switcher shows one swarm, so these three are that swarm's.
+  const assumptions = await api.getAssumptions(swarm.id);
+  const pools = await api.getPools(swarm.id);
+  const winner = evalFlows.find((flow) => flow.bestVariant && flow.bestVariant !== "baseline" && flow.bestVariant !== flow.promotedVariant);
+  const preview = winner?.bestVariant
+    ? await api.previewEvalVariant(winner.id, { variant: winner.bestVariant, swarmId: swarm.id })
+    : undefined;
   return {
     generatedAt: new Date().toISOString(),
     note: "Simulated founders. No real people or companies.",
@@ -334,6 +503,9 @@ async function collectSnapshot(service: SwarmService, days: number, clock: DemoC
     runDetails,
     tasks,
     evalFlows,
+    assumptions,
+    pools,
+    ...(preview ? { preview } : {}),
   };
 }
 
@@ -358,11 +530,22 @@ export async function runCliCommand(
   service: SwarmService,
   argv: string[],
   write: OutputWriter,
-  dependencies: { doctor?: DoctorRunner; clock?: DemoClock | null } = {},
+  dependencies: {
+    doctor?: DoctorRunner;
+    clock?: DemoClock | null;
+    env?: NodeJS.ProcessEnv;
+    collectLaunchPosts?: PastCollector;
+    fetchUnicornNames?: UnicornFetcher;
+    fetchYcDirectory?: DirectoryFetcher;
+  } = {},
 ): Promise<number> {
   try {
     const command = argv[0];
-    if (!command) throw new Error("Usage: swarm <run|doctor|eval|demo-snapshot|seed> [options].");
+    if (command === "help" || command === "--help" || command === "-h") {
+      for (const line of CLI_HELP.split("\n")) write(line);
+      return 0;
+    }
+    if (!command) throw new Error(CLI_HELP);
     if (command === "seed") {
       if (argv.length > 1) throw new Error("seed takes no options.");
       await seedCommand(service, write);
@@ -395,14 +578,60 @@ export async function runCliCommand(
     }
     if (command === "eval") {
       const subcommand = argv[1];
-      if (subcommand !== "show" && subcommand !== "rounds") throw new Error("Usage: swarm eval <show|rounds> [--flow <id>] [--rounds <n>].");
+      if (subcommand !== "show" && subcommand !== "rounds") throw new Error("Usage: swarm eval <show|rounds> [--flow <id>] [--rounds <n>] [--budget <usd>].");
       const { values } = parseArgs({
         args: argv.slice(2),
-        options: { flow: { type: "string" }, rounds: { type: "string" } },
+        options: { flow: { type: "string" }, rounds: { type: "string" }, budget: { type: "string" } },
         strict: true,
       });
       if (subcommand === "show") await evalShowCommand(service, values.flow, write);
-      else await evalRoundsCommand(service, values.flow, positiveInteger(values.rounds, "rounds", 1), write);
+      else {
+        // Zero rounds measures the baseline and tries no change.
+        const rounds = values.rounds === undefined ? 1 : Number(values.rounds);
+        if (!Number.isSafeInteger(rounds) || rounds < 0 || rounds > 20) throw new Error("--rounds must be a whole number from 0 to 20.");
+        let budget: number | undefined;
+        if (values.budget !== undefined) {
+          budget = Number(values.budget);
+          if (!Number.isFinite(budget) || budget < 0 || budget > 1000) throw new Error("--budget must be a number of dollars from 0 to 1000.");
+        }
+        await evalRoundsCommand(service, values.flow, rounds, write, budget);
+      }
+      return 0;
+    }
+    if (command === "past") {
+      const subcommand = argv[1];
+      const env = dependencies.env ?? process.env;
+      const datasetsDir = datasetsDirectory(env);
+      if (subcommand === "show") {
+        if (argv.length > 2) throw new Error("Usage: swarm past show.");
+        await pastShowCommand(datasetsDir, write);
+        return 0;
+      }
+      if (subcommand !== "collect") throw new Error("Usage: swarm past <collect|show>.");
+      const { values } = parseArgs({
+        args: argv.slice(2),
+        options: {
+          from: { type: "string" }, to: { type: "string" }, labels: { type: "string" },
+          unicorns: { type: "boolean" }, controls: { type: "string" },
+          yc: { type: "boolean" }, "min-team": { type: "string" },
+        },
+        strict: true,
+      });
+      if (!values.from || !values.to) throw new Error("past collect requires --from and --to.");
+      let controls: number | undefined;
+      if (values.controls !== undefined) {
+        controls = Number(values.controls);
+        if (!Number.isSafeInteger(controls) || controls < 0) throw new Error("--controls must be a non-negative whole number.");
+      }
+      await pastCollectCommand({
+        from: values.from,
+        to: values.to,
+        labels: values.labels,
+        unicorns: values.unicorns ?? false,
+        yc: values.yc ?? false,
+        minTeam: values["min-team"] === undefined ? undefined : positiveInteger(values["min-team"], "min-team", DEFAULT_MIN_TEAM),
+        controls,
+      }, datasetsDir, write, dependencies);
       return 0;
     }
     if (command === "demo-snapshot") {
@@ -452,6 +681,8 @@ export async function main(): Promise<void> {
           dbPath: config.dbPath,
           dataDir: config.dataDir,
           flowsDir: config.flowsDir,
+          datasetsDir: config.datasetsDir,
+          evalJudge: config.evalJudge,
           cron: createCronHelper(),
           env: process.env,
           simSeed: config.simSeed,

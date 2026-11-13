@@ -28,6 +28,7 @@ import type {
   CompanyMember,
   CompanyQuery,
   CompanyStatus,
+  CoachReport,
   Directive,
   EvalFlowDTO,
   EvalFlowSummary,
@@ -75,6 +76,8 @@ import type {
   Usage,
   Verification,
   DimensionId,
+  MemberStats,
+  OutcomeEvidence,
 } from "@agentswarm/shared";
 
 /* ================================================================== */
@@ -527,6 +530,11 @@ export interface Store {
 
   audit(entry: Omit<AuditEntry, "id" | "at">): AuditEntry;
   recentAudit(limit: number): AuditEntry[];
+  /**
+   * What each pool member did for one job since a date, counted from tasks and from the
+   * evidence those tasks collected. A task with no member recorded is counted under "".
+   */
+  memberStats(swarmId: string, jobId: JobId, sinceIso: string): MemberStats[];
 }
 
 /* ================================================================== */
@@ -642,6 +650,12 @@ export interface EvalService {
   runRounds(id: string, input?: RunEvalRoundInput): Promise<EvalFlowDTO>;
   /** The config of a variant, for promotion into a swarm. */
   variantConfig(id: string, input: PromoteVariantInput): Promise<SwarmConfig>;
+  /**
+   * Judged past cases from the periods used for tuning, reduced to scores and rubric levels,
+   * for testing the assumptions the swarm runs on. The later periods are never included: they
+   * are kept untouched for the headline. null when no past case has been judged yet.
+   */
+  outcomeEvidence?(): Promise<OutcomeEvidence | null>;
 }
 
 /** What the eval subsystem is built from. Implemented by `createEvalService` in src/eval. */
@@ -652,6 +666,21 @@ export interface EvalDeps {
   executeJob: ExecuteJob;
   /** Directory that holds one sub-directory per eval flow. Created when missing. */
   flowsDir: string;
+  /**
+   * Directory that holds eval datasets built from real past data, for example
+   * `past-founders/cases.jsonl`. A flow on past cases is offered only when its dataset is there.
+   */
+  datasetsDir?: string;
+  /**
+   * Needed by flows that ask a model something outside the agents' jobs: the recognition
+   * probe and the proposer of learned guidance. Without it those flows run in simulation only.
+   */
+  providers?: ProviderRegistry;
+  /**
+   * Names the personal attributes a text states, empty when it states none. A learned line
+   * that states one is discarded. Passed in because the check lives with the jobs.
+   */
+  sensitive?: (text: string) => string[];
   now?: () => Date;
   logger?: Logger;
 }
@@ -673,6 +702,12 @@ export interface SwarmService {
    * for those swarms alone, so a catch-up for one swarm does not rerun the others.
    */
   runScheduled(only?: readonly string[]): Promise<Run[]>;
+  /**
+   * Let the swarm try to improve itself, within the autopilot setting: run eval rounds, and in
+   * "apply" mode put a kept change into use when it was measured on real data. Called after
+   * each scheduled run. Never throws for an eval that is busy or not ready.
+   */
+  coach(swarmId: string): Promise<CoachReport>;
   /** Create the first swarm with sensible defaults if the store is empty. */
   ensureSeeded(): Promise<void>;
   close(): void;
@@ -719,6 +754,10 @@ export interface AppOptions {
   dataDir: string;
   /** Directory for eval flows. */
   flowsDir: string;
+  /** Directory for eval datasets built from real past data. Defaults to "datasets" beside `flowsDir`. */
+  datasetsDir?: string;
+  /** The model that judges past cases. null or absent uses the analysts' own routes. */
+  evalJudge?: ModelRoute | null;
   cron: CronHelper;
   env?: NodeJS.ProcessEnv;
   /** Seed of the simulated world that simulated runs draw from. */

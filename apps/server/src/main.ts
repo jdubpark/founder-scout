@@ -44,6 +44,8 @@ export async function startServer(): Promise<void> {
     dbPath: config.dbPath,
     dataDir: config.dataDir,
     flowsDir: config.flowsDir,
+    datasetsDir: config.datasetsDir,
+    evalJudge: config.evalJudge,
     cron,
     env: process.env,
     simSeed: config.simSeed,

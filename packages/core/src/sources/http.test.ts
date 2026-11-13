@@ -77,6 +77,68 @@ describe("httpGet", () => {
     expect(recorder.headers[0]).toMatchObject({ "User-Agent": "agentswarm/0.1", Accept: "application/json" });
   });
 
+  it("follows redirects within an allowed host", async () => {
+    const requested: string[] = [];
+    const sentHeaders: Array<Record<string, string>> = [];
+    const fetchFn = async (url: string, init?: RequestInit) => {
+      requested.push(url);
+      sentHeaders.push(Object.fromEntries(new Headers(init?.headers).entries()));
+      return requested.length === 1
+        ? new Response(null, { status: 302, headers: { location: "/next" } })
+        : textResponse("done");
+    };
+
+    await expect(
+      httpGet(fetchFn, "Test", "https://example.test/start", { headers: { Authorization: "Bearer secret" } }),
+    ).resolves.toMatchObject({ status: 200, body: "done" });
+    expect(requested).toEqual(["https://example.test/start", "https://example.test/next"]);
+    expect(sentHeaders.map((headers) => headers.authorization)).toEqual(["Bearer secret", "Bearer secret"]);
+  });
+
+  it("refuses a redirect to a never-fetch host before requesting it", async () => {
+    const requested: string[] = [];
+    const fetchFn = async (url: string) => {
+      requested.push(url);
+      return new Response(null, { status: 302, headers: { location: "https://www.linkedin.com/in/person" } });
+    };
+
+    await expect(httpGet(fetchFn, "Test source", "https://example.test/start")).rejects.toThrow(
+      "Test source cannot request this address because it is on the never-fetch list; nothing in this system requests it.",
+    );
+    expect(requested).toEqual(["https://example.test/start"]);
+  });
+
+  it("does not send caller headers after a redirect to another host", async () => {
+    const headers: Array<Record<string, string>> = [];
+    const fetchFn = async (url: string, init?: RequestInit) => {
+      headers.push(Object.fromEntries(new Headers(init?.headers).entries()));
+      return url === "https://example.test/start"
+        ? new Response(null, { status: 302, headers: { location: "https://other.test/next" } })
+        : textResponse("done");
+    };
+
+    await httpGet(fetchFn, "Test", "https://example.test/start", { headers: { Authorization: "Bearer secret" } });
+    expect(headers[0]).toMatchObject({ authorization: "Bearer secret", "user-agent": "agentswarm/0.1" });
+    expect(headers[1]).toEqual({ "user-agent": "agentswarm/0.1" });
+  });
+
+  it("fails when a sixth redirect would be followed", async () => {
+    const requested: string[] = [];
+    const fetchFn = async (url: string) => {
+      requested.push(url);
+      const index = Number(new URL(url).pathname.slice(1));
+      return new Response(null, { status: 302, headers: { location: `/${index + 1}` } });
+    };
+
+    await expect(httpGet(fetchFn, "Test", "https://example.test/0")).rejects.toThrow("Test request failed: too many redirects.");
+    expect(requested).toEqual(Array.from({ length: 6 }, (_, index) => `https://example.test/${index}`));
+  });
+
+  it("fails on a redirect loop", async () => {
+    const fetchFn = async () => new Response(null, { status: 302, headers: { location: "/start" } });
+    await expect(httpGet(fetchFn, "Test", "https://example.test/start")).rejects.toThrow("Test request failed: redirect loop.");
+  });
+
   it("rethrows the caller's own abort rather than reporting a timeout", async () => {
     const controller = new AbortController();
     const fetchFn = () =>

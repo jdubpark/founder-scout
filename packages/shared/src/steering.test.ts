@@ -3,6 +3,8 @@ import {
   BASE_CONFIG,
   effectiveParam,
   effectiveRoute,
+  overlayConfig,
+  routeForTask,
   renderSteeringBlock,
   resolveSteering,
   swarmIdentity,
@@ -216,5 +218,91 @@ describe("effective values", () => {
       model: "claude-opus-5-5",
       effort: "high",
     });
+  });
+
+  it("gives a task to a pool member, the same one each time, and records which", () => {
+    const pooled: SwarmConfig = {
+      ...config,
+      pools: {
+        "scout.github": [
+          { id: "sonnet", route: { provider: "claude-cli", model: "claude-sonnet-5-5" }, share: 0.5, status: "active", note: null },
+          { id: "haiku", route: { provider: "claude-cli", model: "claude-haiku-5-5" }, share: 0.5, status: "active", note: null },
+        ],
+      },
+    };
+    const none = resolveSteering([], githubScout, NOW);
+    const first = routeForTask("scout.github", none, pooled, "swm_a:scout.github:fnd_1");
+    expect(["sonnet", "haiku"]).toContain(first.member);
+    expect(first.route.model).toBe(first.member === "sonnet" ? "claude-sonnet-5-5" : "claude-haiku-5-5");
+    expect(routeForTask("scout.github", none, pooled, "swm_a:scout.github:fnd_1")).toEqual(first);
+    // Other subjects reach the other member too.
+    const members = new Set(Array.from({ length: 40 }, (_, index) => routeForTask("scout.github", none, pooled, `swm_a:scout.github:fnd_${index}`).member));
+    expect(members).toEqual(new Set(["sonnet", "haiku"]));
+    // A job with no pool runs on its one route and records no member.
+    expect(routeForTask("screen.fit", none, pooled, "x")).toEqual({ route: effectiveRoute("screen.fit", none, pooled), member: null });
+  });
+
+  it("leaves the pool out when a person pinned a model, and keeps an effort setting on a member", () => {
+    const pooled: SwarmConfig = {
+      ...config,
+      pools: { "scout.github": [{ id: "haiku", route: { provider: "claude-cli", model: "claude-haiku-5-5" }, share: 1, status: "active", note: null }] },
+    };
+    const pinned = resolveSteering([param({ jobId: "scout.github" }, "route.model", "claude-opus-5-5")], githubScout, NOW);
+    expect(routeForTask("scout.github", pinned, pooled, "k")).toEqual({ route: effectiveRoute("scout.github", pinned, pooled), member: null });
+    const effortOnly = resolveSteering([param({ agentId: "agt_gh1" }, "route.effort", "high")], githubScout, NOW);
+    expect(routeForTask("scout.github", effortOnly, pooled, "k")).toEqual({
+      route: { provider: "claude-cli", model: "claude-haiku-5-5", effort: "high" },
+      member: "haiku",
+    });
+  });
+});
+
+describe("overlayConfig", () => {
+  const start: SwarmConfig = { ...BASE_CONFIG, id: "cfg_start", params: { "weights.velocity": 2 }, routes: {}, promptVariants: {} };
+  const winner: SwarmConfig = {
+    ...start,
+    id: "cfg_winner",
+    params: { "weights.velocity": 3, "deal.team_share": 0.7 },
+    promptVariants: { "assess.judgments": "blind-pedigree" },
+    lessons: { "assess.company": ["Weigh paid use over announced intent."] },
+  };
+  const swarm: SwarmConfig = {
+    ...BASE_CONFIG,
+    id: "cfg_swarm",
+    params: { "weights.velocity": 2, "screen.min_fit": 0.7 },
+    routes: { "verify.claims": { provider: "codex-cli", model: "gpt-6-luna" } },
+    promptVariants: {},
+    lessons: { "assess.company": ["An older line."], "assess.judgments": ["Keep this one."] },
+    pools: { "investigate.background": [{ id: "haiku", route: { provider: "claude-cli", model: "claude-haiku-5-5" }, share: 1, status: "active", note: null }] },
+    applied: { "partner-calls": "v2" },
+  };
+
+  it("carries across only what the winner changed, and keeps everything else the swarm has", () => {
+    const next = overlayConfig(start, winner, swarm);
+    expect(next.params).toEqual({ "weights.velocity": 3, "screen.min_fit": 0.7, "deal.team_share": 0.7 });
+    expect(next.promptVariants).toEqual({ "assess.judgments": "blind-pedigree" });
+    expect(next.routes).toEqual(swarm.routes);
+    expect(next.lessons).toEqual({
+      "assess.company": ["An older line.", "Weigh paid use over announced intent."],
+      "assess.judgments": ["Keep this one."],
+    });
+    expect(next.pools).toEqual(swarm.pools);
+    expect(next.applied).toEqual(swarm.applied);
+    // The inputs are left as they were.
+    expect(swarm.params).toEqual({ "weights.velocity": 2, "screen.min_fit": 0.7 });
+    expect(swarm.lessons?.["assess.company"]).toEqual(["An older line."]);
+  });
+
+  it("undoes a change when the two ends are exchanged", () => {
+    const applied = overlayConfig(start, winner, swarm);
+    const undone = overlayConfig(winner, start, applied);
+    expect(undone.params).toEqual(swarm.params);
+    expect(undone.promptVariants).toEqual({});
+    expect(undone.lessons).toEqual(swarm.lessons);
+    expect(undone.pools).toEqual(swarm.pools);
+  });
+
+  it("changes nothing when the two ends are the same", () => {
+    expect(overlayConfig(winner, winner, swarm)).toEqual(swarm);
   });
 });

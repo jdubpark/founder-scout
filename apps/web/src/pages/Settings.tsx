@@ -1,4 +1,5 @@
 import { EmptyState, ErrorNote, PageHeader, Panel, SkeletonRows } from "../components/ui/layout";
+import { AutopilotPanel } from "../features/settings/AutopilotPanel";
 import { DailyRunPanel } from "../features/settings/DailyRunPanel";
 import { EmergencyPanel, OperatorPanel } from "../features/settings/SafetyPanels";
 import { NetworkPanel } from "../features/settings/NetworkPanel";
@@ -24,6 +25,7 @@ export default function SettingsPage() {
         <div className="grid grid-cols-1 gap-x-16 gap-y-12 lg:grid-cols-2">
           <div className="flex min-w-0 flex-col gap-12">
             <DailyRunPanel dto={settings.data} />
+            <AutopilotPanel dto={settings.data} />
             <EmergencyPanel saved={settings.data.settings.killSwitch} />
             <OperatorPanel saved={settings.data.settings.operatorName} />
             <NetworkPanel />

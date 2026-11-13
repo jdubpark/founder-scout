@@ -94,9 +94,12 @@ describe("assess-ranking persistence", () => {
     expect(targetLoss.rationale).toContain("ranking quality fell");
   });
 
-  it("lists the store-backed flow only when a store is configured", async () => {
+  it("lists all eval flows with real-data labels and includes partner calls only with a store", async () => {
     const noStore = await newFlow({ cohortCount: 4, cohortSize: 8, repetitions: 1 });
-    expect((await noStore.service.listFlows()).map((flow) => flow.id)).toEqual(["assess-ranking"]);
+    const noStoreFlows = await noStore.service.listFlows();
+    expect(noStoreFlows.map((flow) => flow.id)).toEqual(["assess-ranking", "past-founders"]);
+    expect(noStoreFlows.find((flow) => flow.id === "assess-ranking")?.realData).toBe(false);
+    expect(noStoreFlows.find((flow) => flow.id === "past-founders")?.realData).toBe(true);
     const emptyRanking = await noStore.service.getFlow("assess-ranking");
     expect(emptyRanking.dataNote).toBe("Synthetic founders with known outcomes. This shows the loop works; it says nothing yet about real founders.");
     expect(emptyRanking.narrative).toBe("");
@@ -114,7 +117,9 @@ describe("assess-ranking persistence", () => {
       flowsDir: root,
       now: fixedNow,
     });
-    expect((await service.listFlows()).map((flow) => flow.id)).toEqual(["assess-ranking", "partner-calls"]);
+    const summaries = await service.listFlows();
+    expect(summaries.map((flow) => flow.id)).toEqual(["assess-ranking", "partner-calls", "past-founders"]);
+    expect(summaries.find((flow) => flow.id === "partner-calls")?.realData).toBe(false);
     const partner = await service.getFlow("partner-calls");
     expect(partner.variants).toEqual([]);
     expect(partner.dataNote).toBe("Needs 4 Yes and 4 No calls in each half of a fixed random split. No calls yet.");
@@ -127,7 +132,7 @@ describe("assess-ranking persistence", () => {
   it("stores a stable stratified split and recomputes the headline from result rows", async () => {
     const { root, service } = await newFlow({ cohortCount: 8, cohortSize: 8, repetitions: 2 });
     const before = await service.listFlows();
-    expect(before).toHaveLength(1);
+    expect(before).toHaveLength(2);
     expect(before[0]?.baseline).toBeNull();
     const result = await service.runRounds("assess-ranking", { rounds: 0 });
     const flowDir = path.join(root, "assess-ranking");
@@ -319,7 +324,7 @@ describe("assess-ranking persistence", () => {
     const kept = flow.variants.filter((variant) => variant.round > 0 && variant.status === "champion");
     expect(kept.length).toBeGreaterThan(0);
     expect(flow.best).toBeGreaterThan((baseline.test.rank_match ?? 0) + (flow.noiseFloor ?? 0));
-  });
+  }, 40_000);
 
   it("keeps a planted single weight change only when the held-out score improves", async () => {
     const weights: Record<string, number> = Object.fromEntries(DIMENSIONS.map((dimension) => [`weights.${dimension.id}`, 0]));

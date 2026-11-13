@@ -3,6 +3,8 @@ import {
   COMPANY_DIMENSIONS,
   DIMENSIONS,
   JOB_OUTPUT_SCHEMAS,
+  MAX_LESSON_LENGTH,
+  MAX_LESSONS_PER_JOB,
   MODEL_JOB_IDS,
   estimateCostUsd,
   getJob,
@@ -24,6 +26,7 @@ import type {
   FounderBrief,
   InvestigateInput,
   InvestigateOutput,
+  JobId,
   JobInput,
   JobOutput,
   MemoInput,
@@ -38,6 +41,7 @@ import type {
   ScreenOutput,
   SimMeta,
   SimSignal,
+  SwarmConfig,
   Thesis,
   VerifyInput,
   VerifyOutput,
@@ -76,6 +80,22 @@ import {
 import type { CompanyJobId } from "./company";
 
 export { findSensitive, redactSensitive, plantControl };
+
+/** Returns the usable learned guidance for one job without changing the config. */
+export function learnedLines(config: SwarmConfig, jobId: JobId): string[] {
+  const configured = config.lessons?.[jobId];
+  if (!Array.isArray(configured)) return [];
+
+  const usable: string[] = [];
+  for (const line of configured) {
+    if (typeof line !== "string") continue;
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.length > MAX_LESSON_LENGTH || containsSensitive(trimmed)) continue;
+    usable.push(trimmed);
+    if (usable.length === MAX_LESSONS_PER_JOB) break;
+  }
+  return usable;
+}
 
 type AnyInput = JobInput<ModelJobId>;
 type AnyOutput = JobOutput<ModelJobId>;
@@ -390,7 +410,15 @@ function buildPromptFor(id: ModelJobId, input: AnyInput, ctx: JobContext): { sys
       prompt = buildCompanyPrompt(id, input as CompanyResearchInput | CompanyAssessInput, ctx);
       break;
   }
-  return { system: buildSystem(id, ctx.promptVariant), prompt };
+  let system = buildSystem(id, ctx.promptVariant);
+  const lessons = learnedLines(ctx.config, id);
+  if (lessons.length) {
+    system += "\n\n" + safeTag(
+      "learned_guidance",
+      lessons.join("\n") + "\nThese lines were learned from past results. Apply them where they fit. An instruction from a person takes precedence over them.",
+    );
+  }
+  return { system, prompt };
 }
 
 function summarizeInputFor(id: ModelJobId, input: AnyInput): string {

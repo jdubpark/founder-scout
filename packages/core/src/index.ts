@@ -4,7 +4,7 @@ export * from "./contracts";
 
 export { openStore, normalizeLink, normalizeName } from "./db";
 export { createSimWorld, createSimSources, createSimRepoFinder, createRng, hashSeed } from "./sim";
-export { createJobRegistry, createExecuteJob, normalizeOutput, findSensitive } from "./jobs";
+export { createJobRegistry, createExecuteJob, normalizeOutput, findSensitive, redactSensitive } from "./jobs";
 export {
   createProviderRegistry,
   runDoctor,
@@ -21,6 +21,19 @@ export {
   parseGitHubLogin,
   sanitizeCheckout,
   SourceRateLimitError,
+  collectLaunchPosts,
+  fetchUnicornNames,
+  fetchYcDirectory,
+  firstLaunchEach,
+  labelPastCases,
+  parseLabelsCsv,
+  pastCasesFile,
+  readPastCases,
+  summarisePastCases,
+  writePastCases,
+  type CollectLaunchesOptions,
+  type DirectoryEntry,
+  type OutcomeLabel,
 } from "./sources";
 export { createRunController } from "./engine";
 export {
