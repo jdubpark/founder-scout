@@ -867,4 +867,26 @@ describe("hunt engine stage", () => {
     // The built-in navigator's first turn is shown the wave the earlier run left on the notebook.
     expect(navigatorInputs[0]?.lastWave).toEqual(afterFirst.lastWave);
   });
+
+  it("leaves out a pool member that is down, so a dead model cannot stall the hunt", async () => {
+    // Found on a live run: every call to one provider failed, the pool kept sending it work,
+    // and the hunt read nothing.
+    const pool: Pools = { "hunt.sift": [
+      { id: "dead", route: { provider: "openai-api", model: "dead-model" }, share: 0.9, status: "active", note: null },
+      { id: "alive", route: { provider: "openai-api", model: "alive-model" }, share: 0.1, status: "active", note: null },
+    ] };
+    const { store, controller } = harness({ "hunt.turns": 2, "hunt.wave_size": 8, "hunt.budget_share": 0.5, "hunt.planted_every": 100, "run.concurrency": 1 }, {
+      defaultPools: async () => pool,
+      wrapExecuteJob: (delegate) => async (jobId, input, ctx, options) => {
+        if (jobId === "hunt.sift" && ctx.route.model === "dead-model") throw new ProviderError("transport", "The provider is down.");
+        return delegate(jobId, input, ctx, options);
+      },
+    });
+    const run = await controller.wait((await controller.start({ swarmId: SWARM_ID, trigger: "manual", scope: "hunt", brain: "sim", sources: "sim", budgetUsd: 40 })).id);
+    const sifts = store.listTasks({ runId: run.id }).filter((task) => task.jobId === "hunt.sift");
+    expect(sifts.filter((task) => task.status === "failed")).toHaveLength(2);
+    expect(sifts.filter((task) => task.status === "succeeded").length).toBeGreaterThan(0);
+    expect(sifts.filter((task) => task.status === "succeeded").every((task) => task.model === "alive-model")).toBe(true);
+    expect(store.listTasks({ runId: run.id }).some((task) => task.jobId === "hunt.look")).toBe(true);
+  });
 });

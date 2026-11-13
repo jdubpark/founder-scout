@@ -1,3 +1,5 @@
+import { realpathSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { describe, expect, it } from "vitest";
 import { findOnPath, runProcess } from "./subprocess";
 
@@ -14,6 +16,14 @@ describe("runProcess", () => {
   it("passes arguments as an array, never through a shell", async () => {
     const out = await runProcess({ ...base, command: "printf", args: ["%s", "$HOME;rm"], timeoutMs: 10_000 });
     expect(out.stdout).toBe("$HOME;rm");
+  });
+
+  it("tells the child the directory it really runs in, not the parent's", async () => {
+    // A tool that reads PWD for its project directory (opencode does) must not be pointed at
+    // this repository when it was started in a scratch directory.
+    const cwd = realpathSync(tmpdir());
+    const out = await runProcess({ ...base, cwd, env: { ...process.env, PWD: "/somewhere/else", OLDPWD: "/before" }, command: "sh", args: ["-c", 'printf "%s|%s" "$PWD" "${OLDPWD-unset}"'], timeoutMs: 10_000 });
+    expect(out.stdout).toBe(`${cwd}|unset`);
   });
 
   it("kills the process and reports a timeout", async () => {

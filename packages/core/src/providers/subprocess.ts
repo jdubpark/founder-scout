@@ -44,9 +44,14 @@ export const runProcess: ProcessRunner = (req) =>
     const posix = process.platform !== "win32";
     let child: ReturnType<typeof spawn>;
     try {
+      // spawn() changes the directory but leaves PWD as the parent's. Some tools take their
+      // project directory from PWD (opencode does: found by running it, 2026-11-13), and would
+      // then read this repository's own instructions and miss the generated agent. So PWD
+      // always names the directory the child really runs in, and OLDPWD is not passed on.
+      const { OLDPWD: _oldPwd, ...childEnv } = req.env;
       child = spawn(req.command, [...req.args], {
         cwd: req.cwd,
-        env: req.env,
+        env: { ...childEnv, PWD: req.cwd },
         shell: false,
         stdio: ["pipe", "pipe", "pipe"],
         detached: posix,

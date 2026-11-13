@@ -117,6 +117,8 @@ export function createRunController(deps: EngineDeps): RunController {
     let budgetStopped = false;
     let modelTaskStarted = false;
     let activeRun = active;
+    // Failures in a row for each pool member in this run, by job. See `noteMemberResult`.
+    const memberFailures = new Map<string, number>();
     let semaphore = new Semaphore(1);
     let context: EngineRuntime | null = null;
     const sim = run.brain === "sim" || run.sources === "sim" ? deps.simWorld : null;
@@ -192,6 +194,31 @@ export function createRunController(deps: EngineDeps): RunController {
       config,
       `${run.swarmId}:${jobId}:${routeKey ?? companyId ?? founderId ?? agent.id}`,
     );
+
+    /**
+     * A pool member that cannot be reached must not take a run down with it. When a member's
+     * calls fail twice in a row because the provider is down, unsupported or not set up, the
+     * member is left out for the rest of this run and its share goes to the others, or to the
+     * job's one route when none is left. Nothing is saved: the next run tries it again, and the
+     * shares themselves still move only on the checks counted after runs.
+     */
+    const MEMBER_DOWN_KINDS = new Set(["transport", "not_configured", "unsupported", "timeout", "rate_limited"]);
+    const noteMemberResult = (jobId: ModelJobId, member: string | null, succeeded: boolean, error: unknown): void => {
+      if (!member) return;
+      const key = `${jobId}:${member}`;
+      if (succeeded) {
+        memberFailures.delete(key);
+        return;
+      }
+      if (!(error instanceof ProviderError) || !MEMBER_DOWN_KINDS.has(error.kind)) return;
+      const failures = (memberFailures.get(key) ?? 0) + 1;
+      memberFailures.set(key, failures);
+      const members = config.pools?.[jobId];
+      if (failures < 2 || !members?.some((item) => item.id === member && item.status === "active")) return;
+      config = { ...config, pools: { ...config.pools, [jobId]: members.map((item) => item.id === member ? { ...item, status: "benched" as const } : item) } };
+      if (context) context.config = config;
+      deps.logger?.warn("A pool member failed twice in a row and is left out for the rest of this run.", { runId: run.id, jobId, member, error: error.message });
+    };
 
     const makeRecord = (input: Omit<TaskRun, "id" | "runId" | "swarmId" | "trace">): TaskRun => {
       const task: TaskRun = {
@@ -469,6 +496,7 @@ export function createRunController(deps: EngineDeps): RunController {
           deps.store.updateTask(steeringTask.id, patch);
           const updated = deps.store.getTask(steeringTask.id, { withTrace: true }) ?? { ...steeringTask, ...patch };
           if (!succeeded) stats.failures += 1;
+          noteMemberResult(jobId, selected.member, succeeded, finalError);
           persist();
           return { task: updated, output: finalOutput };
         } finally {
