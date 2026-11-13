@@ -46,6 +46,9 @@ import { forEachConcurrent, type EngineRuntime } from "./runtime";
 /** Pages of one live site read in one wave. The rest of that site's pages wait for a later wave. */
 const PAGES_PER_HOST_PER_WAVE = 3;
 
+/** Results asked of a search engine for one search. A runner sifts them by number. */
+const SEARCH_RESULTS = 10;
+
 const ZERO_STATS: TrailStats = { searches: 0, pages: 0, leads: 0, kept: 0, dropped: 0, tooLate: 0, blocked: 0, costUsd: 0 };
 
 /** What a change to the notebook needs: where it is kept, the time, and who is asking. */
@@ -626,7 +629,7 @@ export async function runHunt(runtime: EngineRuntime, simIdsByLead: Map<string, 
             return;
           }
           const searched = await withinBudget("search", (allowance) =>
-            runtime.runJob({ agent: searcher, stage: "hunt", jobId: "hunt.search", input: { query: item.target, limit: pagesPerSearch }, routeKey: item.target, maxBudgetUsd: allowance }));
+            runtime.runJob({ agent: searcher, stage: "hunt", jobId: "hunt.search", input: { query: item.target, limit: SEARCH_RESULTS }, routeKey: item.target, maxBudgetUsd: allowance }));
           if (searched === "spent" || !searched) {
             runtime.deps.store.setFrontierState(item.id, "queued");
             stopWave = true;
@@ -643,10 +646,11 @@ export async function runHunt(runtime: EngineRuntime, simIdsByLead: Map<string, 
             waveBlocked += 1;
             return;
           }
-          hits = searched.output.hits;
+          // The provider is asked for this many; code holds it to that whatever came back.
+          hits = searched.output.hits.slice(0, SEARCH_RESULTS);
         } else {
           try {
-            hits = await engine.search(item.target, 10, { simDay: runtime.run.simDay, signal: runtime.signal });
+            hits = await engine.search(item.target, SEARCH_RESULTS, { simDay: runtime.run.simDay, signal: runtime.signal });
           } catch (error) {
             runtime.deps.store.setFrontierState(item.id, "done", { at: runtime.now().toISOString(), runId: asker });
             const detail = error instanceof Error ? redactSensitive(error.message) : "Search failed.";

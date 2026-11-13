@@ -174,7 +174,7 @@ describe("hunt engine stage", () => {
     const searchTask = store.listTasks({ runId: run.id }).find((task) => task.jobId === "hunt.search");
     expect(searchTask).toMatchObject({ status: "succeeded" });
     expect(searchTask!.costUsd).toBeGreaterThan(0);
-    expect(searchInputs[0]?.limit).toBe(3);
+    expect(searchInputs[0]?.limit).toBe(10);
     expect(siftInputs[0]?.hits).toEqual([
       expect.objectContaining({ index: 0, title: "Early developer tool founder" }),
     ]);
