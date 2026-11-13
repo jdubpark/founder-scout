@@ -1204,11 +1204,8 @@ export function createJobRegistry(library: readonly Skill[] = []): JobRegistry {
   const definitions = new Map<ModelJobId, JobDefinition<ModelJobId>>(
     MODEL_JOB_IDS.map((id) => [
       id,
-      id === "hunt.navigate" || id === "hunt.search" || id === "hunt.look" || id === "hunt.sift"
-        ? withLearnedGuidance(huntJobs[id] as JobDefinition<ModelJobId>)
-        : createDefinition(id),
       (() => {
-        const base = id === "hunt.navigate" || id === "hunt.look" || id === "hunt.sift"
+        const base = id === "hunt.navigate" || id === "hunt.search" || id === "hunt.look" || id === "hunt.sift"
           ? withLearnedGuidance(huntJobs[id] as JobDefinition<ModelJobId>)
           : createDefinition(id);
         return library.length ? withProjectSkills(base, library) : base;
