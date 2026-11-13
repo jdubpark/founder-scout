@@ -16,7 +16,6 @@ import { createWebReader } from "./web";
 import { createGitHubSearchEngine, createHnSearchEngine, createHuggingFaceSearchEngine, createModelSearchEngine } from "./search";
 import { createLiveTranscriber } from "./transcribe";
 import { createMediaFetcher } from "./media";
-import { createGitHubSearchEngine, createHnSearchEngine, createHuggingFaceSearchEngine } from "./search";
 
 export { createArxivAdapter } from "./arxiv";
 export { createGitHubAdapter } from "./github";

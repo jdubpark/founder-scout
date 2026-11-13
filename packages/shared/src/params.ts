@@ -82,6 +82,9 @@ export const PARAM_DEFS: readonly ParamDef[] = [
     default: "",
     group: "checks",
     appliesTo: ["navigator", "scout", "runner", "resolver", "screener", "investigator", "company", "verifier", "analyst", "outreach"],
+    tunable: false,
+  },
+  {
     key: "media.enabled",
     label: "Read recordings",
     help: "Whether a run fetches and transcribes queued recordings.",
