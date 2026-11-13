@@ -8,7 +8,7 @@ const NOBODY_LINK_COUNT = 3;
 const STOP_WORDS = new Set(["a", "an", "and", "at", "by", "for", "from", "in", "into", "of", "on", "or", "the", "to", "with"]);
 
 type GroundId = "strong-early" | "decent" | "later-stage" | "job-board" | "small-team" | "mixed";
-type SimWeb = Pick<SimWorld, "page" | "search" | "engines">;
+type SimWeb = Pick<SimWorld, "page" | "search" | "engines" | "strongEarlyFounders">;
 
 interface CreateSimWebOptions {
   seed: number;
@@ -402,5 +402,10 @@ export function createSimWeb(options: CreateSimWebOptions): SimWeb {
     { id: "github", label: "GitHub", searches: "Projects visible on GitHub" },
   ];
 
-  return { page, search, engines };
+  const strongEarlyFounders = (requestedDay: number) => {
+    const day = safeDay(requestedDay);
+    return (groundById.get("strong-early")?.founders ?? []).filter((founder) => isVisible(founder, day));
+  };
+
+  return { page, search, engines, strongEarlyFounders };
 }

@@ -375,6 +375,8 @@ export interface SimWorld {
   search(engine: string, query: string, day: number, limit: number): SearchHit[];
   /** The search engines the simulated web has: the same ids as the live ones. */
   engines(): Array<{ id: string; label: string; searches: string }>;
+  /** Strong early founders visible on the simulated web by this day. Hidden from prompts. */
+  strongEarlyFounders(day: number): SimFounder[];
 }
 
 /* ================================================================== */
@@ -824,6 +826,8 @@ export interface EvalDeps {
    * probe and the proposer of learned guidance. Without it those flows run in simulation only.
    */
   providers?: ProviderRegistry;
+  /** Runs one isolated hunt trial; ground truth is joined inside the service. */
+  huntTrial?: HuntTrial;
   /**
    * Names the personal attributes a text states, empty when it states none. A learned line
    * that states one is discarded. Passed in because the check lives with the jobs.
@@ -832,6 +836,46 @@ export interface EvalDeps {
   now?: () => Date;
   logger?: Logger;
 }
+
+export interface HuntTrialInput {
+  seed: number;
+  days: number;
+  config: SwarmConfig;
+  brain: Brain;
+  budgetUsd: number;
+  signal?: AbortSignal;
+}
+
+export interface HuntTrialPerson {
+  simFounderId: string;
+  quality: number;
+  early: boolean;
+}
+
+export interface HuntTrialModelStats {
+  pages: number;
+  peopleKept: number;
+  peopleRefused: number;
+  plantedFailed: number;
+  medianLatencyMs: number | null;
+}
+
+export interface HuntTrialResult {
+  kept: HuntTrialPerson[];
+  strongEarlyAvailable: number;
+  strongEarlyFounderIds: string[];
+  runnerCalls: number;
+  pages: number;
+  searches: number;
+  plantedRead: number;
+  plantedFailed: number;
+  lateKept: number;
+  costUsd: number;
+  unpricedCalls: number;
+  models: Record<string, HuntTrialModelStats>;
+}
+
+export type HuntTrial = (input: HuntTrialInput) => Promise<HuntTrialResult>;
 
 /* ================================================================== */
 /* Service                                                              */

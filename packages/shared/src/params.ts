@@ -147,7 +147,7 @@ export const PARAM_DEFS: readonly ParamDef[] = [
     step: 1,
     group: "volume",
     appliesTo: ["runner"],
-    tunable: false,
+    tunable: true,
   },
   {
     key: "hunt.budget_share",

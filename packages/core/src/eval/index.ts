@@ -38,6 +38,7 @@ import {
 import { ndcg5, pedigreeLeak, precision5, rankMatch, recall5, top5Match } from "./metrics";
 import { createPartnerEval, PARTNER_CALLS_FLOW_ID } from "./partner";
 import { createPastEval, PAST_FOUNDERS_FLOW_ID } from "./past";
+import { createHuntEval, HUNT_YIELD_FLOW_ID } from "./hunt";
 import { serializeEvalFlow } from "./lock";
 import { appendJsonLine, readJsonLines, writeAtomicFile } from "./persistence";
 
@@ -77,6 +78,8 @@ export interface EvalOptions {
   propose?: typeof proposeTrainChange;
   /** The model that judges past cases. null or absent uses the analysts' own routes. */
   pastJudge?: ModelRoute | null;
+  /** Controlled proposer for hunt yield experiments. */
+  huntPropose?: Parameters<typeof createHuntEval>[1]["propose"];
 }
 
 interface TriedChange {
@@ -201,6 +204,12 @@ export interface CandidateDecision {
   keep: boolean;
   rationale: string;
   rule: "ranking" | "guardrail" | "reverted";
+}
+
+export interface CandidateDecisionGoal {
+  target: string;
+  hold: readonly string[];
+  labels?: Readonly<Record<string, string>>;
 }
 
 // With no clock supplied, use the real one. A fixed fallback stamped every round "1970" on the server.
@@ -508,8 +517,10 @@ export function decideCandidate(
   noiseFloors: Readonly<Record<string, number>>,
   complete: boolean,
   baseline: Means = current,
+  goalOverride?: CandidateDecisionGoal,
 ): CandidateDecision {
-  const target = GOAL.target;
+  const goal = goalOverride ?? GOAL;
+  const target = goal.target;
   const currentTarget = current[target] ?? 0;
   const candidateTarget = candidate[target] ?? 0;
   const targetNoise = noiseFloors[target] ?? 0;
@@ -519,17 +530,17 @@ export function decideCandidate(
     noiseFloors[metric] ?? 0,
     Math.abs(current[metric] ?? 0) * 0.01,
   );
-  const worseHold = GOAL.hold.find((metric) =>
+  const worseHold = goal.hold.find((metric) =>
     (candidate[metric] ?? 0) > (current[metric] ?? 0) + holdTolerance(metric));
   const baselineCostLimit = (baseline.cost_usd ?? 0) * 1.25;
-  const exceedsCostLimit = (candidate.cost_usd ?? 0) > baselineCostLimit;
-  const improvedHolds = GOAL.hold.filter((metric) =>
+  const exceedsCostLimit = !goalOverride && (candidate.cost_usd ?? 0) > baselineCostLimit;
+  const improvedHolds = goal.hold.filter((metric) =>
     (current[metric] ?? 0) - (candidate[metric] ?? 0) > holdTolerance(metric));
   const targetRise = candidateTarget - currentTarget;
   if (targetRise > targetNoise && !worseHold && !exceedsCostLimit) {
     return {
       keep: true,
-      rationale: `Kept: ranking quality rose from ${currentTarget.toFixed(3)} to ${candidateTarget.toFixed(3)}, beyond its noise of ${targetNoise.toFixed(3)}.`,
+      rationale: `Kept: ${goalOverride?.labels?.[target] ?? "ranking quality"} rose from ${currentTarget.toFixed(3)} to ${candidateTarget.toFixed(3)}, beyond its noise of ${targetNoise.toFixed(3)}.`,
       rule: "ranking",
     };
   }
@@ -539,8 +550,9 @@ export function decideCandidate(
       const rightGain = ((current[right] ?? 0) - (candidate[right] ?? 0)) / Math.max(Math.abs(current[right] ?? 0), 1e-9);
       return rightGain - leftGain;
     })[0]!;
-    const metricLabel = bestMetric === "pedigree_leak" ? "pedigree leak" : "cost";
-    const targetNote = candidateTarget === currentTarget ? "ranking quality unchanged" : "ranking quality no lower";
+    const metricLabel = goalOverride?.labels?.[bestMetric] ?? (bestMetric === "pedigree_leak" ? "pedigree leak" : "cost");
+    const targetLabel = goalOverride?.labels?.[target] ?? "ranking quality";
+    const targetNote = candidateTarget === currentTarget ? `${targetLabel} unchanged` : `${targetLabel} no lower`;
     return {
       keep: true,
       rationale: `Kept: ${metricLabel} fell from ${readableValue(bestMetric, current[bestMetric] ?? 0)} to ${readableValue(bestMetric, candidate[bestMetric] ?? 0)} with ${targetNote}.`,
@@ -551,7 +563,7 @@ export function decideCandidate(
   if (worseHold) {
     const before = current[worseHold] ?? 0;
     const after = candidate[worseHold] ?? 0;
-    const label = worseHold === "pedigree_leak" ? "pedigree leak" : "cost";
+    const label = goalOverride?.labels?.[worseHold] ?? (worseHold === "pedigree_leak" ? "pedigree leak" : "cost");
     return {
       keep: false,
       rationale: `Reverted: ${label} rose from ${readableValue(worseHold, before)} to ${readableValue(worseHold, after)}, beyond its tolerance of ${readableValue(worseHold, holdTolerance(worseHold))}.`,
@@ -566,11 +578,11 @@ export function decideCandidate(
     };
   }
   if (targetRise < 0) {
-    return { keep: false, rationale: `Reverted: ranking quality fell from ${currentTarget.toFixed(3)} to ${candidateTarget.toFixed(3)}.`, rule: "reverted" };
+    return { keep: false, rationale: `Reverted: ${goalOverride?.labels?.[target] ?? "ranking quality"} fell from ${currentTarget.toFixed(3)} to ${candidateTarget.toFixed(3)}.`, rule: "reverted" };
   }
   return {
     keep: false,
-    rationale: `Reverted: the ranking quality gain of ${Math.max(0, targetRise).toFixed(3)} is inside the noise of ${targetNoise.toFixed(3)}.`,
+    rationale: `Reverted: the ${goalOverride?.labels?.[target] ?? "ranking quality"} gain of ${Math.max(0, targetRise).toFixed(3)} is inside the noise of ${targetNoise.toFixed(3)}.`,
     rule: "reverted",
   };
 }
@@ -914,6 +926,7 @@ export function createEvalService(deps: EvalDeps, options: EvalOptions = {}): Ev
       ? { initialConfig: { ...BASE_CONFIG, routes: { ...BASE_CONFIG.routes, "assess.judgments": options.pastJudge, "assess.company": options.pastJudge } } }
       : {}),
   });
+  const huntFlow = createHuntEval(deps, { decideCandidate, propose: options.huntPropose });
   const knownFlow = (id: string): void => {
     if (id !== ASSESS_RANKING_ID) throw new ServiceError(404, `Unknown eval flow: ${id}`);
   };
@@ -979,10 +992,11 @@ export function createEvalService(deps: EvalDeps, options: EvalOptions = {}): Ev
         const { state, variants } = await getStateOrEmpty();
         return summarize(ASSESS_RANKING_ID, variants, state, state?.updated_at ?? null);
       });
-      return [summary, ...(partnerFlow ? await partnerFlow.listFlows() : []), ...(await pastFlow.listFlows())];
+      return [summary, ...(partnerFlow ? await partnerFlow.listFlows() : []), ...(await pastFlow.listFlows()), ...(await huntFlow.listFlows())];
     },
 
     async getFlow(id: string): Promise<EvalFlowDTO> {
+      if (id === HUNT_YIELD_FLOW_ID) return huntFlow.getFlow(id);
       if (id === PARTNER_CALLS_FLOW_ID) {
         if (!partnerFlow) throw new ServiceError(404, `Unknown eval flow: ${id}`);
         return partnerFlow.getFlow(id);
@@ -993,6 +1007,7 @@ export function createEvalService(deps: EvalDeps, options: EvalOptions = {}): Ev
     },
 
     async runRounds(id: string, input: RunEvalRoundInput = {}): Promise<EvalFlowDTO> {
+      if (id === HUNT_YIELD_FLOW_ID) return huntFlow.runRounds(id, input);
       if (id === PARTNER_CALLS_FLOW_ID) {
         if (!partnerFlow) throw new ServiceError(404, `Unknown eval flow: ${id}`);
         return partnerFlow.runRounds(id, input);
@@ -1143,6 +1158,7 @@ export function createEvalService(deps: EvalDeps, options: EvalOptions = {}): Ev
     },
 
     async variantConfig(id: string, input: PromoteVariantInput): Promise<SwarmConfig> {
+      if (id === HUNT_YIELD_FLOW_ID) return huntFlow.variantConfig(id, input);
       if (id === PARTNER_CALLS_FLOW_ID) {
         if (!partnerFlow) throw new ServiceError(404, `Unknown eval flow: ${id}`);
         return partnerFlow.variantConfig(id, input);

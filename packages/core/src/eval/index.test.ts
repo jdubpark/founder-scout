@@ -97,7 +97,7 @@ describe("assess-ranking persistence", () => {
   it("lists all eval flows with real-data labels and includes partner calls only with a store", async () => {
     const noStore = await newFlow({ cohortCount: 4, cohortSize: 8, repetitions: 1 });
     const noStoreFlows = await noStore.service.listFlows();
-    expect(noStoreFlows.map((flow) => flow.id)).toEqual(["assess-ranking", "past-founders"]);
+    expect(noStoreFlows.map((flow) => flow.id)).toEqual(["assess-ranking", "past-founders", "hunt-yield"]);
     expect(noStoreFlows.find((flow) => flow.id === "assess-ranking")?.realData).toBe(false);
     expect(noStoreFlows.find((flow) => flow.id === "past-founders")?.realData).toBe(true);
     const emptyRanking = await noStore.service.getFlow("assess-ranking");
@@ -118,7 +118,7 @@ describe("assess-ranking persistence", () => {
       now: fixedNow,
     });
     const summaries = await service.listFlows();
-    expect(summaries.map((flow) => flow.id)).toEqual(["assess-ranking", "partner-calls", "past-founders"]);
+    expect(summaries.map((flow) => flow.id)).toEqual(["assess-ranking", "partner-calls", "past-founders", "hunt-yield"]);
     expect(summaries.find((flow) => flow.id === "partner-calls")?.realData).toBe(false);
     const partner = await service.getFlow("partner-calls");
     expect(partner.variants).toEqual([]);
@@ -129,10 +129,48 @@ describe("assess-ranking persistence", () => {
     ]);
   });
 
+  it("reverts train-only hunt gains and keeps a held-out gain beyond the world bootstrap noise", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "agentswarm-hunt-eval-"));
+    roots.push(root);
+    const jobs = createJobRegistry();
+    let proposalIndex = 0;
+    const service = createEvalService({
+      store: null, jobs, executeJob: createExecuteJob({ jobs, providers: createProviderRegistry({}) }), flowsDir: root,
+      huntTrial: async ({ seed, config }) => {
+        const strongEarlyFounderIds = Array.from({ length: 10 }, (_, index) => `f${index}`);
+        const train = seed < 929;
+        const depth = Number(config.params["hunt.max_depth"]);
+        const count = train ? (depth >= 3 ? 10 : 2) : (depth >= 4 ? 10 : 5);
+        return {
+          kept: strongEarlyFounderIds.slice(0, count).map((simFounderId) => ({ simFounderId, quality: 0.9, early: true })),
+          strongEarlyAvailable: 10, strongEarlyFounderIds, runnerCalls: 1, pages: 1, searches: 0,
+          plantedRead: 1, plantedFailed: 0, lateKept: 0, costUsd: 0, unpricedCalls: 0, models: {},
+        };
+      },
+    }, {
+      huntPropose: async ({ currentConfig, evaluate }) => {
+        proposalIndex += 1;
+        const value = proposalIndex === 1 ? 3 : 4;
+        const config = { ...currentConfig, params: { ...currentConfig.params, "hunt.max_depth": value } };
+        return { key: `hunt.max_depth:${value}`, description: `set max depth to ${value}`, config, train: await evaluate(config) };
+      },
+    });
+    const result = await service.runRounds("hunt-yield", { rounds: 2, brain: "sim" });
+    expect(result.variants.map(({ id, status }) => [id, status])).toEqual([
+      ["baseline", "baseline"], ["v1", "reverted"], ["v2", "champion"],
+    ]);
+    expect(result.variants[1]?.train.strong_early_found).toBeGreaterThan(result.variants[0]?.train.strong_early_found ?? 0);
+    expect(result.variants[1]?.test.strong_early_found).toBe(result.variants[0]?.test.strong_early_found);
+    expect(result.variants[2]?.test.strong_early_found).toBeGreaterThan((result.variants[0]?.test.strong_early_found ?? 0) + (result.noiseFloor ?? 0));
+    const liveBaseline = await service.runRounds("hunt-yield", { rounds: 0, brain: "live", budgetUsd: 2 });
+    expect(liveBaseline.callsModels).toBe(true);
+    await expect(service.runRounds("hunt-yield", { rounds: 1, brain: "live" })).rejects.toMatchObject({ status: 409 });
+  });
+
   it("stores a stable stratified split and recomputes the headline from result rows", async () => {
     const { root, service } = await newFlow({ cohortCount: 8, cohortSize: 8, repetitions: 2 });
     const before = await service.listFlows();
-    expect(before).toHaveLength(2);
+    expect(before).toHaveLength(3);
     expect(before[0]?.baseline).toBeNull();
     const result = await service.runRounds("assess-ranking", { rounds: 0 });
     const flowDir = path.join(root, "assess-ranking");

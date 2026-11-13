@@ -27,6 +27,7 @@ import { addHuntNote, addHuntTrail, huntView, removeHuntNote, updateHuntTrail } 
 import { getHuntSeat as readHuntSeat, runHuntWave as startHuntWave, takeHuntTurn as applyHuntTurn } from "./seat";
 import { assumptionsFor } from "./assumptions";
 import { previewConfig } from "./preview";
+import { createHuntTrial } from "./hunt-trial";
 
 const iso = (date: Date): string => date.toISOString();
 const messageOf = (error: unknown): string => error instanceof Error ? error.message : String(error);
@@ -1291,6 +1292,7 @@ export function createApp(options: AppOptions): App {
     flowsDir: options.flowsDir,
     datasetsDir: options.datasetsDir ?? join(options.flowsDir, "..", "datasets"),
     providers,
+    huntTrial: createHuntTrial(options.env),
     sensitive: findSensitive,
     now: options.now,
     logger: options.logger,

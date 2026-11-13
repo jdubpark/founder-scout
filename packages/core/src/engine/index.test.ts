@@ -434,6 +434,7 @@ function timelineWorld(): SimWorld {
     page: (url, day) => base.page(url, day),
     search: (engine, query, day, limit) => base.search(engine, query, day, limit),
     engines: () => base.engines(),
+    strongEarlyFounders: (day) => base.strongEarlyFounders(day),
   };
 }
 
