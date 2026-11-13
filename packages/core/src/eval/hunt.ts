@@ -19,6 +19,9 @@ const METRICS: EvalMetricDef[] = [
   { id: "calls", label: "Runner calls", better: "lower", description: "Runner model calls used by one case." },
 ];
 const SEEDS = [17, 83, 191, 307, 419, 557, 683, 809, 929, 1049, 1181, 1301, 1427, 1543, 1667, 1783];
+/** Days in one trial, and what a simulated trial may pretend to spend: enough that the settings, not the money, decide what it reads. */
+const TRIAL_DAYS = 3;
+const SIM_TRIAL_BUDGET_USD = 40 * TRIAL_DAYS;
 const round3 = (value: number) => Math.round(value * 1000) / 1000;
 const avg = (values: number[]) => values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : 0;
 const clone = <T>(value: T): T => JSON.parse(JSON.stringify(value)) as T;
@@ -90,7 +93,12 @@ export function createHuntEval(deps: EvalDeps, options: HuntEvalOptions) {
     if (!deps.huntTrial) throw new ServiceError(503, "Hunt yield needs a service trial runner.");
     return Promise.all(ids.map(async (id) => {
       const seed = Number(id.slice(5));
-      const result = await deps.huntTrial!({ seed, days: 3, config, brain, budgetUsd: budgetUsd / ids.length });
+      // A simulated call costs nothing real, but it is priced as its model would be so that
+      // budgets behave. The trial must not be cut short by that pretend money: with the caller's
+      // few dollars split over sixteen worlds and three days, the hunt could not afford one
+      // navigator turn and every variant scored zero. Real money still limits a live measurement.
+      const trialBudgetUsd = brain === "sim" ? SIM_TRIAL_BUDGET_USD : budgetUsd / ids.length;
+      const result = await deps.huntTrial!({ seed, days: TRIAL_DAYS, config, brain, budgetUsd: trialBudgetUsd });
       return { id, seed, metrics: caseMetrics(result), result };
     }));
   };
