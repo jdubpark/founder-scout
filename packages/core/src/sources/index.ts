@@ -17,7 +17,6 @@ import { createGitHubSearchEngine, createHnSearchEngine, createHuggingFaceSearch
 import { createLiveTranscriber } from "./transcribe";
 import { createMediaFetcher } from "./media";
 import type { Dialler } from "../contracts";
-import { createGitHubSearchEngine, createHnSearchEngine, createHuggingFaceSearchEngine } from "./search";
 
 export { createArxivAdapter } from "./arxiv";
 export { createGitHubAdapter } from "./github";

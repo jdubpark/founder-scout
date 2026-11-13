@@ -17,10 +17,8 @@ import type {
 } from "../contracts";
 import { ServiceError } from "../contracts";
 import { openStore } from "../db";
-import { createSimRepoFinder, createSimSources, createSimWorld } from "../sim";
-import { createLivePeopleLookup, createLiveRepoFinder, createLiveSources, createQuoteChecker, createLiveWebAccess, createModelSearchEngine, createSimWebAccess, createLiveTranscriber, createMediaFetcher, looksLikeFounder, parseConnectionsCsv } from "../sources";
 import { createSimDialler, createSimRepoFinder, createSimSources, createSimWorld } from "../sim";
-import { createLiveDialler, createLivePeopleLookup, createLiveRepoFinder, createLiveSources, createQuoteChecker, createLiveWebAccess, createSimWebAccess, looksLikeFounder, parseConnectionsCsv } from "../sources";
+import { createLiveDialler, createLivePeopleLookup, createLiveRepoFinder, createLiveSources, createQuoteChecker, createLiveWebAccess, createModelSearchEngine, createSimWebAccess, createLiveTranscriber, createMediaFetcher, looksLikeFounder, parseConnectionsCsv } from "../sources";
 import { createProviderRegistry } from "../providers";
 import { createJobRegistry, createExecuteJob, findSensitive, loadSkillLibrary, redactSensitive } from "../jobs";
 import { createRunController } from "../engine";
@@ -1328,7 +1326,6 @@ export function createApp(options: AppOptions): App {
     now: options.now,
     logger: options.logger,
   }, { pastJudge: options.evalJudge ?? null });
-  const service = createSwarmService({ store, runs, evals, providers, liveSources, web, defaultPools, skillLibrary, cron: options.cron, now: options.now, logger: options.logger });
-  const service = createSwarmService({ store, runs, evals, providers, liveSources, dialler: { sim: createSimDialler(world), live: createLiveDialler(options.env) }, web, defaultPools, cron: options.cron, now: options.now, logger: options.logger });
+  const service = createSwarmService({ store, runs, evals, providers, liveSources, dialler: { sim: createSimDialler(world), live: createLiveDialler(options.env) }, web, defaultPools, skillLibrary, cron: options.cron, now: options.now, logger: options.logger });
   return { service, store, providers, close: () => store.close() };
 }
