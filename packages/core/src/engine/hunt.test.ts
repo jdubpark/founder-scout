@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { BASE_CONFIG, JOBS, isPlantedUrl, pickMember, runnerPools, SIM_WEB_HOST, type Agent, type JobInput, type JobOutput, type ModelJobId, type NavigateInput, type NavigateOutput, type LookInput, type LookOutput, type Pools, type Swarm, type SwarmConfig } from "@agentswarm/shared";
+import { BASE_CONFIG, JOBS, isPlantedUrl, pickMember, runnerPools, SEAT_ASKER, SIM_WEB_HOST, type Agent, type JobInput, type JobOutput, type ModelJobId, type NavigateInput, type NavigateOutput, type LookInput, type LookOutput, type Pools, type Swarm, type SwarmConfig } from "@agentswarm/shared";
 import { createExecuteJob, createJobRegistry } from "../jobs";
 import { openStore } from "../db";
 import { createSimRepoFinder, createSimSources, createSimWorld } from "../sim";
@@ -7,6 +7,7 @@ import { createSimWebAccess } from "../sources";
 import type { ExecuteJob, JobContext, JobExecution, ModelProvider, ProviderRegistry, SearchEngine, WebReader } from "../contracts";
 import { ProviderError } from "../contracts";
 import { createRunController } from "./index";
+import { applyNavigatorTurn } from "./hunt";
 
 const NOW = new Date("2026-11-12T18:00:00.000Z");
 const SWARM_ID = "swm_hunt_engine";
@@ -752,5 +753,53 @@ describe("hunt engine stage", () => {
       expect(task?.poolMember).toBe(pickMember(lookPool, `${SWARM_ID}:hunt.look:${call.target}`)?.id);
     }
     expect([...byAddress.values()].every((used) => used.size <= 1)).toBe(true);
+  });
+
+  it("runs an outside agent's wave as the hunt alone, and does not run its search twice in a day", async () => {
+    const { store, controller } = harness({ "hunt.wave_size": 6, "hunt.budget_share": 0.5, "hunt.planted_every": 100 });
+    const started = await controller.start({ swarmId: SWARM_ID, trigger: "agent", scope: "hunt", waves: 1, brain: "sim", sources: "sim", budgetUsd: 40 });
+    const run = await controller.wait(started.id);
+    expect(run.status).toBe("succeeded");
+
+    // Nothing after the fit screen ran, and the built-in navigator was not called.
+    const tasks = store.listTasks({ runId: run.id });
+    expect(tasks.filter((task) => !["hunt", "resolve", "screen"].includes(task.stage))).toEqual([]);
+    expect(tasks.some((task) => task.jobId === "hunt.navigate")).toBe(false);
+    expect(tasks.filter((task) => task.jobId === "hunt.sift" || task.jobId === "hunt.look").length).toBeGreaterThan(0);
+    expect(store.listOutreach({ swarmId: SWARM_ID })).toEqual([]);
+
+    // The search it ran is recorded as the seat's, so asking again the same day queues nothing.
+    const hunt = store.getHunt(SWARM_ID)!;
+    const ran = store.listFrontier(hunt.id, { state: "done" }).find((item) => item.kind === "search")!;
+    expect(ran.ranBy).toBe(SEAT_ASKER);
+    applyNavigatorTurn(
+      { store, now: () => new Date(NOW), asker: SEAT_ASKER },
+      hunt,
+      { open: [], extend: [{ trailId: ran.trailId, searches: [{ engine: ran.engine!, query: ran.target }], pages: [] }], close: [], focus: [], notes: [], done: false },
+      [ran.engine!],
+    );
+    expect(store.getFrontierItem(ran.id)?.state).toBe("done");
+  });
+
+  it("leaves the steering to an outside agent that sat lately, and steps back in when it has gone quiet", async () => {
+    const navigatorInputs: NavigateInput[] = [];
+    const { store, controller } = harness({ "hunt.navigator": "outside", "hunt.turns": 1, "hunt.wave_size": 6, "hunt.budget_share": 0.5 }, {
+      wrapExecuteJob: (delegate) => wrapJob(delegate, { navigate: (input, output) => { navigatorInputs.push(input); return output; } }),
+    });
+    const at = NOW.toISOString();
+    store.saveHunt({ id: "hnt_seat", swarmId: SWARM_ID, turn: 0, looks: 0, seatAt: at, createdAt: at, updatedAt: at });
+
+    const first = await controller.wait((await controller.start({ swarmId: SWARM_ID, trigger: "schedule", brain: "sim", sources: "sim", budgetUsd: 40 })).id);
+    expect(store.listTasks({ runId: first.id }).some((task) => task.jobId === "hunt.navigate")).toBe(false);
+    const afterFirst = store.getHunt(SWARM_ID)!;
+    expect(afterFirst.seatAt).toBe(at);
+    expect(afterFirst.lastWave?.calls).toBeGreaterThan(0);
+
+    // Eleven days without a turn: past the two the setting allows.
+    store.saveHunt({ ...afterFirst, seatAt: "2026-11-01T18:00:00.000Z" });
+    const second = await controller.wait((await controller.start({ swarmId: SWARM_ID, trigger: "schedule", brain: "sim", sources: "sim", budgetUsd: 40 })).id);
+    expect(store.listTasks({ runId: second.id }).some((task) => task.jobId === "hunt.navigate")).toBe(true);
+    // The built-in navigator's first turn is shown the wave the earlier run left on the notebook.
+    expect(navigatorInputs[0]?.lastWave).toEqual(afterFirst.lastWave);
   });
 });

@@ -517,7 +517,7 @@ export function createRunController(deps: EngineDeps): RunController {
         stats = { ...ZERO_STATS };
         persist();
         if (!stopped()) await runPipelineStages(context!);
-        if (!stopped()) await runFinalStages(context!);
+        if (!stopped() && run.scope !== "hunt") await runFinalStages(context!);
         return finish("succeeded", null);
       } catch (error) {
         deps.logger?.error("Run failed unexpectedly.", { runId: run.id, error: errorMessage(error) });
@@ -562,6 +562,9 @@ export function createRunController(deps: EngineDeps): RunController {
         stats: { ...ZERO_STATS },
         error: null,
         simDay,
+        ...(input.scope === "hunt"
+          ? { scope: "hunt" as const, waves: typeof input.waves === "number" && Number.isFinite(input.waves) ? Math.max(1, Math.floor(input.waves)) : null }
+          : {}),
         startedAt: iso(at),
         finishedAt: null,
       };

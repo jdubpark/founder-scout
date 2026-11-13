@@ -34,6 +34,10 @@ export interface Hunt {
   turn: number;
   /** Pages runners have read since the hunt began. Decides when the next planted page is due. */
   looks: number;
+  /** What the most recent wave did, kept so the next turn sees it: in a later run, or from an outside agent. */
+  lastWave?: WaveDigest | null;
+  /** When an outside agent last took a turn in the navigator's seat. */
+  seatAt?: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -730,6 +734,8 @@ export interface WaveOptions {
   size: number;
   /** Links further than this from a starting point are not opened. */
   maxDepth: number;
+  /** Pages a trail reads for each search it runs, while both are waiting. Default `PAGES_PER_SEARCH`. */
+  pagesPerSearch?: number;
 }
 
 /** While both are waiting on a trail, it reads this many pages for each search it runs. */
@@ -743,7 +749,7 @@ export const PAGES_PER_SEARCH = 3;
  * pages for ever and never search again, and one handed new searches every turn would search
  * for ever and read nothing. With only one kind waiting, that kind is taken.
  */
-function trailOrder(items: readonly FrontierItem[], stats: Pick<TrailStats, "pages" | "searches">): FrontierItem[] {
+function trailOrder(items: readonly FrontierItem[], stats: Pick<TrailStats, "pages" | "searches">, pagesPerSearch: number): FrontierItem[] {
   const byRank = (a: FrontierItem, b: FrontierItem) =>
     a.priority - b.priority || a.depth - b.depth || a.addedAt.localeCompare(b.addedAt) || a.id.localeCompare(b.id);
   const pages = items.filter((item) => item.kind === "page").sort(byRank);
@@ -752,7 +758,7 @@ function trailOrder(items: readonly FrontierItem[], stats: Pick<TrailStats, "pag
   let read = stats.pages;
   let searched = stats.searches;
   while (pages.length || searches.length) {
-    const searchDue = searched * PAGES_PER_SEARCH < read;
+    const searchDue = searched * pagesPerSearch < read;
     if (searches.length && (searchDue || !pages.length)) {
       order.push(searches.shift() as FrontierItem);
       searched += 1;
@@ -785,7 +791,8 @@ export function planWave(trails: readonly Trail[], frontier: readonly FrontierIt
     .sort((a, b) => trailScore(b) - trailScore(a) || a.openedAt.localeCompare(b.openedAt) || a.id.localeCompare(b.id));
   if (!live.length) return [];
   const statsOf = new Map(trails.map((trail) => [trail.id, trail.stats]));
-  for (const [trailId, queue] of queues) queues.set(trailId, trailOrder(queue, statsOf.get(trailId) ?? ZERO_TRAIL_STATS));
+  const pagesPerSearch = Math.max(1, Math.floor(options.pagesPerSearch ?? PAGES_PER_SEARCH));
+  for (const [trailId, queue] of queues) queues.set(trailId, trailOrder(queue, statsOf.get(trailId) ?? ZERO_TRAIL_STATS, pagesPerSearch));
 
   // One call each first, best trail first, then the rest in proportion to score.
   const slots = new Map<string, number>(live.map((trail) => [trail.id, 0]));
@@ -848,6 +855,32 @@ export const STALE_AFTER_PAGES = 30;
 /** Open trails that have read enough and found nobody. A pinned trail is never one. */
 export function staleTrails(trails: readonly Trail[], afterPages: number = STALE_AFTER_PAGES): Trail[] {
   return trails.filter((trail) => trail.status === "open" && !trail.pinned && trail.stats.pages >= afterPages && trail.stats.leads === 0);
+}
+
+/* ------------------------------------------------------------------ */
+/* The navigator's seat                                                 */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Who steers the hunt. "built_in" is the navigator job, one model call a turn. "outside" is a
+ * long-running agent of the owner's (a Claude Code or Codex session, say) that connects to the
+ * swarm and takes the same seat: it is shown what the navigator is shown, and what it asks for
+ * passes the same checks.
+ */
+export type SeatHolder = "built_in" | "outside";
+
+/** Recorded as the asker of what an outside agent queues, and as the runner of its waves. */
+export const SEAT_ASKER = "seat";
+
+/**
+ * Who steers a run that an outside agent did not start. The outside agent keeps the seat only
+ * while it has taken a turn within `idleDays`: an agent that has gone away must not stall the
+ * hunt, so after that the built-in navigator steers until it comes back.
+ */
+export function seatHolder(setting: string, seatAt: string | null | undefined, now: string, idleDays: number): SeatHolder {
+  if (setting !== "outside" || !seatAt) return "built_in";
+  const idleMs = Date.parse(now) - Date.parse(seatAt);
+  return Number.isFinite(idleMs) && idleMs <= Math.max(0, idleDays) * 86_400_000 ? "outside" : "built_in";
 }
 
 /* ------------------------------------------------------------------ */

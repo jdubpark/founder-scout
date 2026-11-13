@@ -1161,6 +1161,19 @@ async function runAssess(runtime: EngineRuntime, candidateIds: Set<string>): Pro
 export async function runPipelineStages(runtime: EngineRuntime): Promise<void> {
   const assessmentCandidates = new Set<string>();
 
+  if (runtime.run.scope === "hunt") {
+    // The hunt alone: what an outside agent's wave and an eval's trial ask for. The people found
+    // are matched and screened so the trails learn who was kept. Everything that costs real
+    // money (research, fact-checking, assessment, outreach) waits for a full run.
+    const found = new Map<string, string>();
+    await runHunt(runtime, found);
+    if (runtime.stopped()) return;
+    await runResolve(runtime, found);
+    if (runtime.stopped()) return;
+    await runScreen(runtime);
+    return;
+  }
+
   if (!(await runDebrief(runtime, assessmentCandidates))) return;
   if (runtime.stopped()) return;
   const simIdsByLead = await runScout(runtime);

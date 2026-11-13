@@ -28,6 +28,7 @@ import type {
   OutreachDraft,
   OutreachStatus,
   Run,
+  RunScope,
   Settings,
   SourceMode,
   StageId,
@@ -448,6 +449,10 @@ export interface StartRunInput {
   sources?: SourceMode;
   /** Overrides the spend cap for this run only. */
   budgetUsd?: number;
+  /** "hunt" runs only the hunt, matching and the fit screen. Default: the whole pipeline. */
+  scope?: RunScope;
+  /** For a hunt-only run: the most waves of runners it may send. */
+  waves?: number;
 }
 
 export interface StageProgress {

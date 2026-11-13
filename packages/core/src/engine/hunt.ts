@@ -15,6 +15,8 @@ import {
   plantedDue,
   plantedPage,
   plantedVerdict,
+  SEAT_ASKER,
+  seatHolder,
   seedTrails,
   stableId,
   staleTrails,
@@ -28,15 +30,17 @@ import {
   type LatestStage,
   type LookInput,
   type NavigateInput,
+  type NavigateTurn,
   type SiftInput,
   type Trail,
   type TrailStats,
+  type TurnPlan,
   type WaveDigest,
 } from "@agentswarm/shared";
 import type { Agent, Lead, ProfileLinks } from "@agentswarm/shared";
 import { normalizeName } from "../db";
 import { redactSensitive } from "../jobs/common";
-import type { PageRead, SearchEngine, SearchHit } from "../contracts";
+import type { PageRead, SearchEngine, SearchHit, Store } from "../contracts";
 import { forEachConcurrent, type EngineRuntime } from "./runtime";
 
 /** Pages of one live site read in one wave. The rest of that site's pages wait for a later wave. */
@@ -44,23 +48,31 @@ const PAGES_PER_HOST_PER_WAVE = 3;
 
 const ZERO_STATS: TrailStats = { searches: 0, pages: 0, leads: 0, kept: 0, dropped: 0, tooLate: 0, blocked: 0, costUsd: 0 };
 
-function makeNote(runtime: EngineRuntime, hunt: Hunt, by: HuntNote["by"], text: string, turn: number): void {
+/** What a change to the notebook needs: where it is kept, the time, and who is asking. */
+export interface NotebookWriter {
+  store: Pick<Store, "listTrails" | "getTrail" | "saveTrail" | "addFrontier" | "insertHuntNote">;
+  now(): Date;
+  /** The run that asks, or `SEAT_ASKER` for an outside agent. Decides when a search may run again. */
+  asker: string;
+}
+
+function makeNote(writer: NotebookWriter, hunt: Hunt, by: HuntNote["by"], text: string, turn: number): void {
   const safe = redactSensitive(text).replace(/\s+/g, " ").trim().slice(0, 240);
   if (!safe) return;
-  runtime.deps.store.insertHuntNote({
-    id: stableId("hnn", `${hunt.id}:${runtime.run.id}:${turn}:${by}:${safe}`),
+  writer.store.insertHuntNote({
+    id: stableId("hnn", `${hunt.id}:${writer.asker}:${turn}:${by}:${safe}`),
     huntId: hunt.id,
     swarmId: hunt.swarmId,
     by,
     text: safe,
     turn,
-    createdAt: runtime.now().toISOString(),
+    createdAt: writer.now().toISOString(),
   });
 }
 
-function queueStarts(runtime: EngineRuntime, hunt: Hunt, trailId: string, starts: ReturnType<typeof checkTurn>["open"][number]["starts"], from: FrontierItem["from"]): void {
-  const at = runtime.now().toISOString();
-  runtime.deps.store.addFrontier(starts.map((start, index) => ({
+function queueStarts(writer: NotebookWriter, hunt: Hunt, trailId: string, starts: ReturnType<typeof checkTurn>["open"][number]["starts"], from: FrontierItem["from"]): void {
+  const at = writer.now().toISOString();
+  writer.store.addFrontier(starts.map((start, index) => ({
     id: stableId("frn", `${hunt.id}:${trailId}:${from}:${at}:${index}:${start.kind}:${start.kind === "page" ? start.url : `${start.engine}:${start.query}`}`),
     huntId: hunt.id,
     trailId,
@@ -73,8 +85,60 @@ function queueStarts(runtime: EngineRuntime, hunt: Hunt, trailId: string, starts
     from,
     state: "queued",
     addedAt: at,
-    runId: runtime.run.id,
+    runId: writer.asker,
   })));
+}
+
+/** What an open trail may be given in one turn. The same for the built-in navigator and an outside agent. */
+const TURN_LIMITS = { maxOpenTrails: 8, maxStarts: 6, maxNotes: 3 } as const;
+
+/**
+ * Check one navigator's turn against the trails as they are now and make each accepted change.
+ * The built-in navigator's answer and an outside agent's request both come through here, so
+ * both pass the same checks. A call to a model takes seconds, and a person may have pinned,
+ * paused or closed a trail meanwhile: every change is made to the record as it is now, so a
+ * turn never undoes what a person did. The caller saves the returned hunt.
+ */
+export function applyNavigatorTurn(writer: NotebookWriter, hunt: Hunt, turn: NavigateTurn, engines: readonly string[]): { hunt: Hunt; plan: TurnPlan; openedOrExtended: boolean } {
+  const plan = checkTurn(turn, writer.store.listTrails(hunt.id), { engines, ...TURN_LIMITS });
+  const turnNumber = hunt.turn + 1;
+  let openedOrExtended = false;
+  for (const item of plan.close) {
+    const trail = writer.store.getTrail(item.trailId);
+    if (!trail || trail.pinned || trail.status !== "open") continue;
+    writer.store.saveTrail({ ...trail, status: "closed", closedAt: writer.now().toISOString(), closedWhy: redactSensitive(item.why) });
+  }
+  for (const item of plan.open) {
+    const trail: Trail = {
+      id: stableId("trl", `${hunt.id}:nav:${turnNumber}:${item.name}`),
+      huntId: hunt.id,
+      swarmId: hunt.swarmId,
+      name: redactSensitive(item.name).slice(0, 60),
+      intent: redactSensitive(item.intent).slice(0, 200),
+      status: "open",
+      openedBy: "navigator",
+      weight: 3,
+      pinned: false,
+      stats: { ...ZERO_STATS },
+      openedAt: writer.now().toISOString(),
+      closedAt: null,
+      closedWhy: null,
+    };
+    writer.store.saveTrail(trail);
+    queueStarts(writer, hunt, trail.id, item.starts, "navigator");
+    openedOrExtended = true;
+  }
+  for (const item of plan.extend) {
+    if (writer.store.getTrail(item.trailId)?.status !== "open") continue;
+    queueStarts(writer, hunt, item.trailId, item.starts, "navigator");
+    openedOrExtended = true;
+  }
+  for (const item of plan.focus) {
+    const trail = writer.store.getTrail(item.trailId);
+    if (trail && trail.status === "open") writer.store.saveTrail({ ...trail, weight: item.weight });
+  }
+  for (const text of plan.notes) makeNote(writer, hunt, "navigator", text, turnNumber);
+  return { hunt: { ...hunt, turn: turnNumber, updatedAt: writer.now().toISOString() }, plan, openedOrExtended };
 }
 
 function resolvedLatestStage(runtime: EngineRuntime): LatestStage {
@@ -207,13 +271,27 @@ function shortFound(lead: Lead): string {
 /** Run one persistent hunt notebook between scouting and matching. */
 export async function runHunt(runtime: EngineRuntime, simIdsByLead: Map<string, string>): Promise<void> {
   const webAccess = runtime.deps.web?.[runtime.run.sources];
-  if (!webAccess || !booleanParam("hunt.enabled", runtime.resolve(null, "hunt.enabled"), runtime.config)) return;
+  const settings = runtime.resolve(null, "hunt.enabled");
+  if (!webAccess || !booleanParam("hunt.enabled", settings, runtime.config)) return;
 
   const navigator = runtime.agents.find((agent) => agent.jobId === "hunt.navigate");
   const looker = runtime.agents.find((agent) => agent.jobId === "hunt.look");
   const sifter = runtime.agents.find((agent) => agent.jobId === "hunt.sift");
   if (!navigator || !looker || !sifter) return;
-  const selectedAgents = [navigator, looker, sifter] as const;
+
+  const now = runtime.now().toISOString();
+  const storedHunt = runtime.deps.store.getHunt(runtime.swarm.id);
+  // Who steers. An outside agent's own wave never calls the built-in navigator. In any other
+  // run the outside agent keeps the seat only while it has taken a turn lately (`seatHolder`).
+  const outside = runtime.run.trigger === "agent" || seatHolder(
+    stringParam("hunt.navigator", settings, runtime.config),
+    storedHunt?.seatAt,
+    now,
+    numberParam("hunt.outside_idle_days", settings, runtime.config),
+  ) === "outside";
+  const asker = runtime.run.trigger === "agent" ? SEAT_ASKER : runtime.run.id;
+  const writer: NotebookWriter = { store: runtime.deps.store, now: runtime.now, asker };
+  const selectedAgents = outside ? [looker, sifter] as const : [navigator, looker, sifter] as const;
   const disabled = selectedAgents.filter((agent) => agent.status === "paused" || !getJob(agent.jobId).enabled);
   if (disabled.length) {
     for (const agent of disabled) {
@@ -232,8 +310,11 @@ export async function runHunt(runtime: EngineRuntime, simIdsByLead: Map<string, 
   }
 
   runtime.setStage("hunt");
-  const settings = runtime.resolve(null, "hunt.enabled");
   const turnsMax = Math.max(0, Math.floor(numberParam("hunt.turns", runtime.resolve(navigator, "hunt.turns"), runtime.config)));
+  // A turn and the wave after it are one round. A hunt-only run may ask for fewer.
+  const rounds = Math.max(0, Math.min(20, Math.floor(runtime.run.waves ?? turnsMax)));
+  const pagesPerSearch = Math.max(1, Math.floor(numberParam("hunt.pages_per_search", runtime.resolve(looker, "hunt.pages_per_search"), runtime.config)));
+  const staleAfter = Math.max(1, Math.floor(numberParam("hunt.stale_after", runtime.resolve(looker, "hunt.stale_after"), runtime.config)));
   const waveSize = Math.max(0, Math.floor(numberParam("hunt.wave_size", runtime.resolve(looker, "hunt.wave_size"), runtime.config)));
   const maxDepth = Math.max(0, Math.floor(numberParam("hunt.max_depth", runtime.resolve(looker, "hunt.max_depth"), runtime.config)));
   const plantedEvery = Math.max(1, Math.floor(numberParam("hunt.planted_every", runtime.resolve(looker, "hunt.planted_every"), runtime.config)));
@@ -250,12 +331,22 @@ export async function runHunt(runtime: EngineRuntime, simIdsByLead: Map<string, 
   const usable = engineStatuses.filter(({ status }) => status.configured).map(({ engine }) => engine);
   const engineById = new Map<string, SearchEngine>(webAccess.engines.map((engine) => [engine.id, engine]));
 
-  const now = runtime.now().toISOString();
-  const storedHunt = runtime.deps.store.getHunt(runtime.swarm.id);
   let hunt: Hunt = storedHunt ?? { id: stableId("hnt", runtime.swarm.id), swarmId: runtime.swarm.id, turn: 0, looks: 0, createdAt: now, updatedAt: now };
   if (!storedHunt) {
     runtime.deps.store.saveHunt(hunt);
   }
+  // An outside agent may take a turn while this run works. The run owns only the counts it
+  // advances itself, so what the agent wrote (its turn, when it last sat) is kept on every save.
+  const saveHunt = (): void => {
+    const stored = runtime.deps.store.getHunt(runtime.swarm.id);
+    hunt = {
+      ...hunt,
+      turn: Math.max(hunt.turn, stored?.turn ?? 0),
+      seatAt: stored?.seatAt ?? hunt.seatAt ?? null,
+      updatedAt: runtime.now().toISOString(),
+    };
+    runtime.deps.store.saveHunt(hunt);
+  };
   const kept = runtime.deps.store.keptByTrail(hunt.id);
   let trails = runtime.deps.store.listTrails(hunt.id).map((trail) => ({
     ...trail,
@@ -282,14 +373,14 @@ export async function runHunt(runtime: EngineRuntime, simIdsByLead: Map<string, 
         closedWhy: null,
       };
       runtime.deps.store.saveTrail(trail);
-      queueStarts(runtime, hunt, trail.id, seed.starts, "code");
+      queueStarts(writer, hunt, trail.id, seed.starts, "code");
       trails.push(trail);
     }
   }
 
   let ownSpend = 0;
   let failedTurns = 0;
-  let lastWave: WaveDigest | null = null;
+  let lastWave: WaveDigest | null = hunt.lastWave ?? null;
   // People kept in this run, so the same person on two pages is one lead.
   const keptThisRun = new Set<string>();
   // Hosts that asked for a pause. They are left alone for the rest of the run, not just the wave.
@@ -359,8 +450,12 @@ export async function runHunt(runtime: EngineRuntime, simIdsByLead: Map<string, 
     }
   };
 
-  for (let turnIndex = 0; turnIndex < turnsMax && canStart(); turnIndex += 1) {
+  for (let turnIndex = 0; turnIndex < rounds && canStart(); turnIndex += 1) {
     if (runtime.stopped()) break;
+    let plan: TurnPlan = { open: [], extend: [], close: [], focus: [], notes: [], done: false, refused: [] };
+    let openedOrExtended = false;
+    // With an outside agent in the seat there is no model call here: this round is its wave.
+    if (!outside) {
     const frontier = runtime.deps.store.listFrontier(hunt.id);
     trails = runtime.deps.store.listTrails(hunt.id);
     const notes = runtime.deps.store.listHuntNotes(hunt.id, 12);
@@ -373,71 +468,31 @@ export async function runHunt(runtime: EngineRuntime, simIdsByLead: Map<string, 
       notes: notes.map(({ by, text }) => ({ by, text })),
       lastWave,
       budget: {
-        turnsLeft: Math.max(0, turnsMax - turnIndex),
+        turnsLeft: Math.max(0, rounds - turnIndex),
         // Waves left times their size, or what the money left would buy at what a runner call has cost.
-        callsLeft: Math.max(0, Math.min((turnsMax - turnIndex) * waveSize, Math.floor(Math.max(0, maxSpend - ownSpend) / typical("runner")))),
+        callsLeft: Math.max(0, Math.min((rounds - turnIndex) * waveSize, Math.floor(Math.max(0, maxSpend - ownSpend) / typical("runner")))),
       },
     };
     const navResult = await withinBudget("navigator", (allowance) =>
       runtime.runJob({ agent: navigator, stage: "hunt", jobId: "hunt.navigate", input, maxBudgetUsd: allowance }));
     if (navResult === "spent" || !navResult) break;
-    const failed = navResult.task.status !== "succeeded" || !navResult.output;
-    let plan: ReturnType<typeof checkTurn> = { open: [], extend: [], close: [], focus: [], notes: [], done: false, refused: [] };
-    let openedOrExtended = false;
-    if (failed) {
+    if (navResult.task.status !== "succeeded" || !navResult.output) {
       failedTurns += 1;
     } else {
       failedTurns = 0;
-      // The call took seconds, and a person may have pinned, paused or closed a trail meanwhile.
-      // The request is checked against the trails as they are now, and each change is made to
-      // the record as it is now, so the navigator never undoes what a person did.
-      const current = () => runtime.deps.store.listTrails(hunt.id);
-      plan = checkTurn(navResult.output!, current(), { engines: usable.map((engine) => engine.id), maxOpenTrails: 8, maxStarts: 6, maxNotes: 3 });
-      for (const item of plan.close) {
-        const trail = runtime.deps.store.getTrail(item.trailId);
-        if (!trail || trail.pinned || trail.status !== "open") continue;
-        runtime.deps.store.saveTrail({ ...trail, status: "closed", closedAt: runtime.now().toISOString(), closedWhy: redactSensitive(item.why) });
-      }
-      for (const item of plan.open) {
-        const trailId = stableId("trl", `${hunt.id}:nav:${hunt.turn + 1}:${item.name}`);
-        const trail: Trail = {
-          id: trailId,
-          huntId: hunt.id,
-          swarmId: hunt.swarmId,
-          name: redactSensitive(item.name).slice(0, 60),
-          intent: redactSensitive(item.intent).slice(0, 200),
-          status: "open",
-          openedBy: "navigator",
-          weight: 3,
-          pinned: false,
-          stats: { ...ZERO_STATS },
-          openedAt: runtime.now().toISOString(),
-          closedAt: null,
-          closedWhy: null,
-        };
-        runtime.deps.store.saveTrail(trail);
-        queueStarts(runtime, hunt, trail.id, item.starts, "navigator");
-        openedOrExtended = true;
-      }
-      for (const item of plan.extend) {
-        if (runtime.deps.store.getTrail(item.trailId)?.status !== "open") continue;
-        queueStarts(runtime, hunt, item.trailId, item.starts, "navigator");
-        openedOrExtended = true;
-      }
-      for (const item of plan.focus) {
-        const trail = runtime.deps.store.getTrail(item.trailId);
-        if (trail && trail.status === "open") runtime.deps.store.saveTrail({ ...trail, weight: item.weight });
-      }
-      for (const text of plan.notes) makeNote(runtime, hunt, "navigator", text, hunt.turn + 1);
-      hunt = { ...hunt, turn: hunt.turn + 1, updatedAt: runtime.now().toISOString() };
+      const applied = applyNavigatorTurn(writer, hunt, navResult.output, usable.map((engine) => engine.id));
+      hunt = applied.hunt;
+      plan = applied.plan;
+      openedOrExtended = applied.openedOrExtended;
+    }
     }
 
-    for (const stale of staleTrails(runtime.deps.store.listTrails(hunt.id))) {
+    for (const stale of staleTrails(runtime.deps.store.listTrails(hunt.id), staleAfter)) {
       const why = `Read ${stale.stats.pages} pages and found nobody.`;
       runtime.deps.store.saveTrail({ ...stale, status: "closed", closedAt: runtime.now().toISOString(), closedWhy: why });
-      makeNote(runtime, hunt, "code", `${stale.name}: ${why}`, hunt.turn);
+      makeNote(writer, hunt, "code", `${stale.name}: ${why}`, hunt.turn);
     }
-    runtime.deps.store.saveHunt(hunt);
+    saveHunt();
 
     if (failedTurns >= 2) break;
     const currentTrails = runtime.deps.store.listTrails(hunt.id);
@@ -454,7 +509,7 @@ export async function runHunt(runtime: EngineRuntime, simIdsByLead: Map<string, 
     }
     let wave: FrontierItem[] = [];
     for (let pass = 0; pass < 6; pass += 1) {
-      wave = planWave(currentTrails, queued.filter((item) => !setAside.has(item.id)), { size: waveSize, maxDepth });
+      wave = planWave(currentTrails, queued.filter((item) => !setAside.has(item.id)), { size: waveSize, maxDepth, pagesPerSearch });
       const hostCounts = new Map<string, number>();
       const over = wave.filter((item) => {
         if (item.kind !== "page") return false;
@@ -533,7 +588,7 @@ export async function runHunt(runtime: EngineRuntime, simIdsByLead: Map<string, 
         try {
           hits = await engine.search(item.target, 10, { simDay: runtime.run.simDay, signal: runtime.signal });
         } catch (error) {
-          runtime.deps.store.setFrontierState(item.id, "done", { at: runtime.now().toISOString(), runId: runtime.run.id });
+          runtime.deps.store.setFrontierState(item.id, "done", { at: runtime.now().toISOString(), runId: asker });
           const detail = error instanceof Error ? redactSensitive(error.message) : "Search failed.";
           const afterSearch = runtime.deps.store.getTrail(trail.id) ?? trailNow;
           runtime.deps.store.saveTrail({ ...afterSearch, stats: { ...afterSearch.stats, searches: afterSearch.stats.searches + 1, blocked: afterSearch.stats.blocked + 1 } });
@@ -541,7 +596,7 @@ export async function runHunt(runtime: EngineRuntime, simIdsByLead: Map<string, 
           waveBlocked += 1;
           return;
         }
-        runtime.deps.store.setFrontierState(item.id, "done", { at: runtime.now().toISOString(), runId: runtime.run.id });
+        runtime.deps.store.setFrontierState(item.id, "done", { at: runtime.now().toISOString(), runId: asker });
         const safe = safeHits(hits);
         let added = 0;
         let taskId: string | null = null;
@@ -714,12 +769,11 @@ export async function runHunt(runtime: EngineRuntime, simIdsByLead: Map<string, 
       recordTrailCall(trail.id, "look", target, taskId, result, detail, { leads: itemLeads, dropped: trailDropped, tooLate: trailTooLate, queued: queuedCount, ...taskMeta });
     });
 
-    for (const stale of staleTrails(runtime.deps.store.listTrails(hunt.id))) {
+    for (const stale of staleTrails(runtime.deps.store.listTrails(hunt.id), staleAfter)) {
       const why = `Read ${stale.stats.pages} pages and found nobody.`;
       runtime.deps.store.saveTrail({ ...stale, status: "closed", closedAt: runtime.now().toISOString(), closedWhy: why });
-      makeNote(runtime, hunt, "code", `${stale.name}: ${why}`, hunt.turn);
+      makeNote(writer, hunt, "code", `${stale.name}: ${why}`, hunt.turn);
     }
-    runtime.deps.store.saveHunt({ ...hunt, updatedAt: runtime.now().toISOString() });
     runtime.addStats({ rawItems: pagesRead, leads: leadsKept });
     lastWave = {
       turn: hunt.turn,
@@ -730,8 +784,10 @@ export async function runHunt(runtime: EngineRuntime, simIdsByLead: Map<string, 
       byTrail: [...byTrail.entries()].map(([trailId, values]) => ({ trailId, calls: values.calls, leads: values.leads, found: values.found.slice(0, 3) })),
       refused: [...newRefused, ...plan.refused].slice(0, 30),
     };
-    runtime.deps.store.saveHunt({ ...hunt, updatedAt: runtime.now().toISOString() });
+    // Kept on the notebook, so the next turn sees this wave: in a later run, or from an outside agent.
+    hunt = { ...hunt, lastWave };
+    saveHunt();
     if (plan.done || (!wave.length && !openedOrExtended) || !canStart() || stopWave || runtime.stopped()) break;
   }
-  runtime.deps.store.saveHunt({ ...hunt, updatedAt: runtime.now().toISOString() });
+  saveHunt();
 }

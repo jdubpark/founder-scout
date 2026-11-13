@@ -1,3 +1,4 @@
+import { existsSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import { resolveConfig } from "./config";
@@ -18,7 +19,8 @@ describe("resolveConfig", () => {
       fundName: "the fund",
       simSeed: 7,
     });
-    expect(config.repositoryRoot).toMatch(/\/agentswarm$/);
+    // The root is the workspace, whatever the checkout directory is called.
+    expect(existsSync(resolve(config.repositoryRoot, "pnpm-workspace.yaml"))).toBe(true);
   });
 
   it("resolves relative path overrides from the repository root and preserves absolute paths", () => {

@@ -531,7 +531,14 @@ export interface OutreachAction {
 
 export type Brain = "sim" | "live";
 export type SourceMode = "sim" | "live";
-export type RunTrigger = "schedule" | "manual" | "eval";
+/** "agent" = started by an outside agent holding the navigator's seat, for one wave of runners. */
+export type RunTrigger = "schedule" | "manual" | "eval" | "agent";
+
+/**
+ * How much of the pipeline a run does. "hunt" is the hunt alone, then matching and the fit
+ * screen so the trails learn who was kept; everything that costs real money waits for a full run.
+ */
+export type RunScope = "full" | "hunt";
 
 export type RunStatus =
   | "queued"
@@ -634,6 +641,10 @@ export interface Run {
   error: string | null;
   /** Day number in the simulated world, for simulated sources. */
   simDay: number | null;
+  /** Absent on a full run. */
+  scope?: RunScope;
+  /** For a hunt-only run: the most waves of runners it may send. Absent: as many as the navigator has turns. */
+  waves?: number | null;
   startedAt: string;
   finishedAt: string | null;
 }

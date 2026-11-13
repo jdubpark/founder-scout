@@ -1,4 +1,4 @@
-import { CalendarClock, FlaskConical, Hand, type LucideIcon } from "lucide-react";
+import { Bot, CalendarClock, FlaskConical, Hand, type LucideIcon } from "lucide-react";
 import type { Run, RunStatus, RunTrigger, TaskStatus } from "@agentswarm/shared";
 import type { MarkState } from "../../components/ui/marks";
 import { duration } from "../../lib/format";
@@ -16,6 +16,7 @@ export const TRIGGER: Record<RunTrigger, { label: string; icon: LucideIcon }> = 
   schedule: { label: "Schedule", icon: CalendarClock },
   manual: { label: "Manual", icon: Hand },
   eval: { label: "Eval", icon: FlaskConical },
+  agent: { label: "Outside agent", icon: Bot },
 };
 
 export const TASK_STATUS: Record<TaskStatus, { label: string; mark: MarkState }> = {
