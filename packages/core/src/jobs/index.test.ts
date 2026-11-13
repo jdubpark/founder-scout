@@ -285,6 +285,7 @@ function inputFor(id: ModelJobId): AnyInput {
       budget: { turnsLeft: 5, callsLeft: 24 },
     } as AnyInput;
   }
+  if (id === "hunt.search") return { query: "developer infrastructure", limit: 10 } as AnyInput;
   if (id === "hunt.look") {
     return {
       thesis,
@@ -487,7 +488,8 @@ describe("job registry and prompt contracts", () => {
     expect(definition.outputSchema.safeParse(output).success).toBe(true);
     expect(definition.summarizeInput(input)).not.toBe("");
     expect(definition.summarizeOutput(output)).not.toBe("");
-    expect(definition.countItems(output)).toBeGreaterThanOrEqual(1);
+    if (id === "hunt.search") expect(definition.countItems(output)).toBe(0);
+    else expect(definition.countItems(output)).toBeGreaterThanOrEqual(1);
   });
 
   it.each(MODEL_JOB_IDS)("keeps every input text marker inside a user-data fence for %s", (id) => {

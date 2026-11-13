@@ -207,6 +207,7 @@ const PIPELINE_ROLES: Record<ModelJobId, { role: string; contribution: string }>
   "company.traction": { role: "a Traction researcher", contribution: "research dated company milestones, customers, usage, funding, and hiring" },
   "company.team": { role: "a Team researcher", contribution: "research the company's public professional team" },
   "hunt.navigate": { role: "the hunt navigator", contribution: "decide where the open-web runners should look next" },
+  "hunt.search": { role: "a web search tool caller", contribution: "run one web search for the hunt" },
   "hunt.look": { role: "a page reader for the hunt", contribution: "read one public page and report what its own words support" },
   "hunt.sift": { role: "a search-result sifter for the hunt", contribution: "pick the search results most worth opening" },
   "assess.company": { role: "a Company analyst", contribution: "answer the company rubric from verified evidence" },
@@ -278,6 +279,7 @@ function buildPromptFor(id: ModelJobId, input: AnyInput, ctx: JobContext): { sys
   let prompt: string;
   switch (id) {
     case "hunt.navigate":
+    case "hunt.search":
     case "hunt.look":
     case "hunt.sift":
       throw new Error("Hunt jobs must use their registered job definitions.");
@@ -1104,7 +1106,7 @@ export function createJobRegistry(): JobRegistry {
   const definitions = new Map<ModelJobId, JobDefinition<ModelJobId>>(
     MODEL_JOB_IDS.map((id) => [
       id,
-      id === "hunt.navigate" || id === "hunt.look" || id === "hunt.sift"
+      id === "hunt.navigate" || id === "hunt.search" || id === "hunt.look" || id === "hunt.sift"
         ? withLearnedGuidance(huntJobs[id] as JobDefinition<ModelJobId>)
         : createDefinition(id),
     ]),
@@ -1138,7 +1140,7 @@ function estimateSimUsage(
 ): { inputTokens: number; outputTokens: number; webSearches: number } {
   const promptTokens = Math.ceil((prompt.system.length + prompt.prompt.length) / 4);
   const overhead = definition.kind === "research" ? 40_000 : definition.kind === "repo_review" ? 120_000 : 0;
-  const webSearches = definition.kind === "research" ? 6 : 0;
+  const webSearches = definition.kind === "research" ? 6 : definition.kind === "search" ? 1 : 0;
   const visibleOutput = JSON.stringify(removeHiddenSimulationFields(output));
   return {
     inputTokens: promptTokens + overhead,

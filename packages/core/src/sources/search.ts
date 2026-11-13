@@ -103,6 +103,22 @@ export function createHnSearchEngine(options: SearchOptions = {}): SearchEngine 
   };
 }
 
+/** Search through a model provider's native WebSearch tool inside a budgeted hunt job. */
+export function createModelSearchEngine(options: {
+  status: () => Promise<{ configured: boolean; detail: string }>;
+}): SearchEngine {
+  return {
+    id: "web",
+    label: "Web search",
+    searches: "The open web. Use plain words and quoted phrases.",
+    job: "hunt.search",
+    status: options.status,
+    async search() {
+      throw new Error("Model-backed web search must run through hunt.search.");
+    },
+  };
+}
+
 export function createGitHubSearchEngine(options: SearchOptions = {}): SearchEngine {
   const fetchFn = options.fetch ?? defaultFetch;
   const env = options.env ?? process.env;

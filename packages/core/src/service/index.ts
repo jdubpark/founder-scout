@@ -17,7 +17,7 @@ import type {
 import { ServiceError } from "../contracts";
 import { openStore } from "../db";
 import { createSimRepoFinder, createSimSources, createSimWorld } from "../sim";
-import { createLivePeopleLookup, createLiveRepoFinder, createLiveSources, createQuoteChecker, createLiveWebAccess, createSimWebAccess, looksLikeFounder, parseConnectionsCsv } from "../sources";
+import { createLivePeopleLookup, createLiveRepoFinder, createLiveSources, createQuoteChecker, createLiveWebAccess, createModelSearchEngine, createSimWebAccess, looksLikeFounder, parseConnectionsCsv } from "../sources";
 import { createProviderRegistry } from "../providers";
 import { createJobRegistry, createExecuteJob, findSensitive, redactSensitive } from "../jobs";
 import { createRunController } from "../engine";
@@ -1232,7 +1232,15 @@ export function createApp(options: AppOptions): App {
   const simRepos = createSimRepoFinder(world);
   const liveRepos = createLiveRepoFinder({ env: options.env, workDir: join(options.dataDir, "repos") });
   const providers = createProviderRegistry(options.env);
-  const web = { sim: createSimWebAccess(world), live: createLiveWebAccess({ env: options.env }) };
+  const web = {
+    sim: createSimWebAccess(world),
+    live: createLiveWebAccess({
+      env: options.env,
+      extraEngines: (options.env ?? process.env).HUNT_WEB_SEARCH === "off"
+        ? []
+        : [createModelSearchEngine({ status: () => providers.get("claude-cli").status() })],
+    }),
+  };
   let defaultPoolsPromise: Promise<Pools> | null = null;
   const defaultPools = (): Promise<Pools> => {
     defaultPoolsPromise ??= providers.statuses().then((statuses) => {

@@ -58,6 +58,7 @@ const JOB_SHORT: Record<JobId, string> = {
   "scout.talent": "Talent moves",
   "hunt.navigate": "Navigate",
   "hunt.look": "Page reader",
+  "hunt.search": "Web searcher",
   "hunt.sift": "Result sifter",
   "resolve.identity": "Identity",
   "screen.fit": "Thesis fit",

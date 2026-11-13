@@ -13,6 +13,7 @@ export type JobKindName = ProviderRequest<unknown>["kind"];
 export const DEFAULT_TIMEOUT_MS: Record<JobKindName, number> = {
   structured: 180_000,
   research: 600_000,
+  search: 120_000,
   repo_review: 900_000,
 };
 

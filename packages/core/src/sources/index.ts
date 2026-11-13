@@ -13,7 +13,7 @@ import { createPeopleDataAdapter } from "./people_data";
 import { createPdlVendor, createRecordAllowance, type RecordAllowance } from "./pdl";
 import { createLiveRepoFinder as buildRepoFinder, type RepoFinderOptions } from "./repo-finder";
 import { createWebReader } from "./web";
-import { createGitHubSearchEngine, createHnSearchEngine, createHuggingFaceSearchEngine } from "./search";
+import { createGitHubSearchEngine, createHnSearchEngine, createHuggingFaceSearchEngine, createModelSearchEngine } from "./search";
 
 export { createArxivAdapter } from "./arxiv";
 export { createGitHubAdapter } from "./github";
@@ -23,6 +23,7 @@ export { createPdlVendor, createRecordAllowance, type PdlOptions, type RecordAll
 export { createQuoteChecker } from "./quote-check";
 export { createWebReader, type WebReaderOptions } from "./web";
 export { createGitHubSearchEngine, createHnSearchEngine, createHuggingFaceSearchEngine, type SearchOptions } from "./search";
+export { createModelSearchEngine } from "./search";
 export { looksLikeFounder, parseConnectionsCsv, type ParsedContact } from "./connections";
 export { sanitizeCheckout, type SanitizeResult } from "./sanitize";
 export { parseRepoUrl, parseGitHubLogin, type RepoFinderOptions } from "./repo-finder";

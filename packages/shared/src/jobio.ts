@@ -582,6 +582,19 @@ export interface SiftInput {
   latestStage: LatestStage;
 }
 
+export interface SearchInput {
+  query: string;
+  limit: number;
+}
+
+export interface SearchOutput {
+  hits: Array<{ url: string; title: string; snippet: string }>;
+}
+
+export const SearchOutputSchema = z.object({
+  hits: z.array(z.object({ url: z.string(), title: z.string(), snippet: z.string() })),
+}) satisfies z.ZodType<SearchOutput>;
+
 export const SiftOutputSchema = z.object({ open: z.array(PickSchema) }) satisfies z.ZodType<SiftResult>;
 export type SiftOutput = z.infer<typeof SiftOutputSchema>;
 
@@ -594,6 +607,7 @@ export interface JobIO {
   "scout.research": { input: ScoutInput; output: ScoutOutput };
   "scout.talent": { input: ScoutInput; output: ScoutOutput };
   "hunt.navigate": { input: NavigateInput; output: NavigateOutput };
+  "hunt.search": { input: SearchInput; output: SearchOutput };
   "hunt.look": { input: LookInput; output: LookOutput };
   "hunt.sift": { input: SiftInput; output: SiftOutput };
   "screen.fit": { input: ScreenInput; output: ScreenOutput };
@@ -624,6 +638,7 @@ export const MODEL_JOB_IDS = [
   "scout.research",
   "scout.talent",
   "hunt.navigate",
+  "hunt.search",
   "hunt.look",
   "hunt.sift",
   "screen.fit",
@@ -650,6 +665,7 @@ export const JOB_OUTPUT_SCHEMAS = {
   "scout.research": ScoutOutputSchema,
   "scout.talent": ScoutOutputSchema,
   "hunt.navigate": NavigateOutputSchema,
+  "hunt.search": SearchOutputSchema,
   "hunt.look": LookOutputSchema,
   "hunt.sift": SiftOutputSchema,
   "screen.fit": ScreenOutputSchema,

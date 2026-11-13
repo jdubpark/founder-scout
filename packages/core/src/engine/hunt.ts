@@ -275,6 +275,7 @@ export async function runHunt(runtime: EngineRuntime, simIdsByLead: Map<string, 
   if (!webAccess || !booleanParam("hunt.enabled", settings, runtime.config)) return;
 
   const navigator = runtime.agents.find((agent) => agent.jobId === "hunt.navigate");
+  const searcher = runtime.agents.find((agent) => agent.jobId === "hunt.search");
   const looker = runtime.agents.find((agent) => agent.jobId === "hunt.look");
   const sifter = runtime.agents.find((agent) => agent.jobId === "hunt.sift");
   if (!navigator || !looker || !sifter) return;
@@ -397,14 +398,15 @@ export async function runHunt(runtime: EngineRuntime, simIdsByLead: Map<string, 
    */
   const taskCap = {
     navigator: numberParam("budget.task_usd", runtime.resolve(navigator, "budget.task_usd"), runtime.config),
+    search: numberParam("budget.task_usd", runtime.resolve(searcher ?? looker, "budget.task_usd"), runtime.config),
     runner: numberParam("budget.task_usd", runtime.resolve(looker, "budget.task_usd"), runtime.config),
   };
-  const seenCost = { navigator: 0, runner: 0 };
+  const seenCost = { navigator: 0, search: 0, runner: 0 };
   let held = 0;
   let inFlight = 0;
-  const typical = (kind: "navigator" | "runner") => Math.max(seenCost[kind], kind === "navigator" ? 0.01 : 0.0005);
+  const typical = (kind: "navigator" | "search" | "runner") => Math.max(seenCost[kind], kind === "navigator" ? 0.01 : 0.0005);
   const canStart = () => !runtime.stopped() && ownSpend + held < maxSpend;
-  const reserve = (kind: "navigator" | "runner"): number | null => {
+  const reserve = (kind: "navigator" | "search" | "runner"): number | null => {
     if (!canStart()) return null;
     const free = maxSpend - ownSpend - held;
     const need = typical(kind);
@@ -417,7 +419,7 @@ export async function runHunt(runtime: EngineRuntime, simIdsByLead: Map<string, 
     return allowance;
   };
   const waiting: Array<() => void> = [];
-  const release = (kind: "navigator" | "runner", allowance: number, taskCost: number | null): void => {
+  const release = (kind: "navigator" | "search" | "runner", allowance: number, taskCost: number | null): void => {
     held = Math.max(0, held - allowance);
     inFlight = Math.max(0, inFlight - 1);
     ownSpend += taskCost ?? 0;
@@ -431,7 +433,7 @@ export async function runHunt(runtime: EngineRuntime, simIdsByLead: Map<string, 
    * given back whatever happens, including a call that throws.
    */
   const withinBudget = async <T extends { task: { costUsd: number | null } }>(
-    kind: "navigator" | "runner",
+    kind: "navigator" | "search" | "runner",
     call: (allowance: number) => Promise<T | null>,
   ): Promise<T | null | "spent"> => {
     let allowance = reserve(kind);
@@ -585,23 +587,60 @@ export async function runHunt(runtime: EngineRuntime, simIdsByLead: Map<string, 
           return;
         }
         let hits: SearchHit[];
-        try {
-          hits = await engine.search(item.target, 10, { simDay: runtime.run.simDay, signal: runtime.signal });
-        } catch (error) {
-          runtime.deps.store.setFrontierState(item.id, "done", { at: runtime.now().toISOString(), runId: asker });
-          const detail = error instanceof Error ? redactSensitive(error.message) : "Search failed.";
-          const afterSearch = runtime.deps.store.getTrail(trail.id) ?? trailNow;
-          runtime.deps.store.saveTrail({ ...afterSearch, stats: { ...afterSearch.stats, searches: afterSearch.stats.searches + 1, blocked: afterSearch.stats.blocked + 1 } });
-          recordTrailCall(trail.id, "search", item.target, null, "blocked", detail);
-          waveBlocked += 1;
-          return;
+        let searchTaskId: string | null = null;
+        let searchTaskFields: Partial<Pick<HuntCall, "model" | "costUsd" | "latencyMs">> = {};
+        if (engine.job === "hunt.search") {
+          if (!searcher) {
+            runtime.deps.store.setFrontierState(item.id, "done", { at: runtime.now().toISOString(), runId: asker });
+            const afterSearch = runtime.deps.store.getTrail(trail.id) ?? trailNow;
+            runtime.deps.store.saveTrail({ ...afterSearch, stats: { ...afterSearch.stats, searches: afterSearch.stats.searches + 1, blocked: afterSearch.stats.blocked + 1 } });
+            recordTrailCall(trail.id, "search", item.target, null, "blocked", "The web search job is unavailable.");
+            waveBlocked += 1;
+            return;
+          }
+          const searched = await withinBudget("search", (allowance) =>
+            runtime.runJob({ agent: searcher, stage: "hunt", jobId: "hunt.search", input: { query: item.target, limit: pagesPerSearch }, routeKey: item.target, maxBudgetUsd: allowance }));
+          if (searched === "spent" || !searched) {
+            runtime.deps.store.setFrontierState(item.id, "queued");
+            stopWave = true;
+            return;
+          }
+          searchTaskId = searched.task.id;
+          searchTaskFields = { model: searched.task.model, costUsd: searched.task.costUsd, latencyMs: searched.task.latencyMs };
+          if (searched.task.status !== "succeeded" || !searched.output) {
+            runtime.deps.store.setFrontierState(item.id, "done", { at: runtime.now().toISOString(), runId: asker });
+            const detail = searched.task.error ?? "Search failed.";
+            const afterSearch = runtime.deps.store.getTrail(trail.id) ?? trailNow;
+            runtime.deps.store.saveTrail({ ...afterSearch, stats: { ...afterSearch.stats, searches: afterSearch.stats.searches + 1, blocked: afterSearch.stats.blocked + 1, costUsd: afterSearch.stats.costUsd + (searched.task.costUsd ?? 0) } });
+            recordTrailCall(trail.id, "search", item.target, searchTaskId, "blocked", detail, searchTaskFields);
+            waveBlocked += 1;
+            return;
+          }
+          hits = searched.output.hits;
+        } else {
+          try {
+            hits = await engine.search(item.target, 10, { simDay: runtime.run.simDay, signal: runtime.signal });
+          } catch (error) {
+            runtime.deps.store.setFrontierState(item.id, "done", { at: runtime.now().toISOString(), runId: asker });
+            const detail = error instanceof Error ? redactSensitive(error.message) : "Search failed.";
+            const afterSearch = runtime.deps.store.getTrail(trail.id) ?? trailNow;
+            runtime.deps.store.saveTrail({ ...afterSearch, stats: { ...afterSearch.stats, searches: afterSearch.stats.searches + 1, blocked: afterSearch.stats.blocked + 1 } });
+            recordTrailCall(trail.id, "search", item.target, null, "blocked", detail);
+            waveBlocked += 1;
+            return;
+          }
         }
         runtime.deps.store.setFrontierState(item.id, "done", { at: runtime.now().toISOString(), runId: asker });
+        const searchCost = searchTaskFields.costUsd ?? 0;
+        if (searchTaskId && searchCost > 0) {
+          const afterSearch = runtime.deps.store.getTrail(trail.id) ?? trailNow;
+          runtime.deps.store.saveTrail({ ...afterSearch, stats: { ...afterSearch.stats, costUsd: afterSearch.stats.costUsd + searchCost } });
+        }
         const safe = safeHits(hits);
         let added = 0;
-        let taskId: string | null = null;
+        let taskId: string | null = searchTaskId;
         let result: HuntCall["result"] = "empty";
-        let taskFields: Partial<Pick<HuntCall, "model" | "costUsd" | "latencyMs">> = {};
+        let taskFields: Partial<Pick<HuntCall, "model" | "costUsd" | "latencyMs">> = searchTaskFields;
         let detail: string | null = null;
         if (safe.length) {
           const siftInput = {
@@ -615,8 +654,12 @@ export async function runHunt(runtime: EngineRuntime, simIdsByLead: Map<string, 
           const siftResult = await withinBudget("runner", (allowance) =>
             runtime.runJob({ agent: sifter, stage: "hunt", jobId: "hunt.sift", input: siftInput, routeKey: item.target, maxBudgetUsd: allowance }));
           if (siftResult === "spent" || !siftResult) { runtime.deps.store.setFrontierState(item.id, "queued"); stopWave = true; return; }
-          taskId = siftResult.task.id;
-          taskFields = { model: siftResult.task.model, costUsd: siftResult.task.costUsd, latencyMs: siftResult.task.latencyMs };
+          if (!taskId) taskId = siftResult.task.id;
+          taskFields = {
+            model: searchTaskFields.model ?? siftResult.task.model,
+            costUsd: searchCost + (siftResult.task.costUsd ?? 0),
+            latencyMs: (searchTaskFields.latencyMs ?? 0) + (siftResult.task.latencyMs ?? 0),
+          };
           if (siftResult.task.status !== "succeeded" || !siftResult.output) {
             result = "failed";
             detail = siftResult.task.error;
@@ -626,7 +669,7 @@ export async function runHunt(runtime: EngineRuntime, simIdsByLead: Map<string, 
             result = added > 0 ? "ok" : "empty";
           }
         }
-        const cost = taskFields.costUsd ?? 0;
+        const cost = Math.max(0, (taskFields.costUsd ?? searchCost) - searchCost);
         const latest = runtime.deps.store.getTrail(trail.id) ?? trailNow;
         runtime.deps.store.saveTrail({ ...latest, stats: { ...latest.stats, searches: latest.stats.searches + 1, costUsd: latest.stats.costUsd + cost } });
         recordTrailCall(trail.id, "search", item.target, taskId, result, detail, { queued: added, ...taskFields });

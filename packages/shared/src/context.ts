@@ -90,6 +90,7 @@ export const JOB_INPUT_POOLS: InputPools = {
   // The navigator is shown the notebook and nothing a page said: `lastWave` is counts and
   // labels of a few words that runners wrote.
   "hunt.navigate": { thesis: "objective", brief: "steering", turn: "hunt", trails: "hunt", notes: "hunt", lastWave: "hunt", budget: "steering" },
+  "hunt.search": { query: "hunt", limit: "steering" },
   "hunt.look": { ...RUNNER, page: "sources" },
   "hunt.sift": { ...RUNNER, query: "hunt", hits: "sources" },
   "screen.fit": { founder: "lead", thesis: "objective" },

@@ -1,6 +1,6 @@
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-import { ScreenOutputSchema, type ScreenOutput } from "@agentswarm/shared";
+import { ScreenOutputSchema, SearchOutputSchema, type ScreenOutput, type SearchOutput } from "@agentswarm/shared";
 import { ProviderError, type ProviderRequest } from "../contracts";
 import { claudeFetchDenyRules, NEVER_FETCH_HOSTS } from "@agentswarm/shared";
 import {
@@ -197,6 +197,50 @@ describe("buildClaudeArgs", () => {
 
   it("refuses a repo review without a checkout", () => {
     expect(() => buildClaudeArgs({ ...base, kind: "repo_review", streaming: true, repoDir: null })).toThrow();
+  });
+});
+
+describe("Claude native web search", () => {
+  it("returns only links from the WebSearch tool result and ignores an address in model prose", async () => {
+    const fixture = readFileSync(new URL("./__fixtures__/claude-websearch.stream.jsonl", import.meta.url), "utf8");
+    const stream = fixture.split("\n").map((line) => {
+      try {
+        const event = JSON.parse(line) as Record<string, unknown>;
+        if (event.type === "result") event.result = "I found https://invented-by-the-model.example/";
+        return JSON.stringify(event);
+      } catch {
+        return line;
+      }
+    }).join("\n");
+    const calls: ProcessRequest[] = [];
+    const provider = new ClaudeCliProvider({ runner: fakeRunner({ stdout: stream }, calls) });
+    const req: ProviderRequest<SearchOutput> = {
+      jobId: "hunt.search",
+      kind: "search",
+      route: { provider: "claude-cli", model: "claude-haiku-5-5", effort: "low" },
+      system: "Search once.",
+      prompt: "open source vector database launched this month",
+      schema: SearchOutputSchema,
+      schemaName: "SearchOutput",
+    };
+    const result = await provider.run(req);
+    expect(result.output.hits.map(({ title, url }) => ({ title, url }))).toEqual([
+      { title: "THE LINUX FOUNDATION PROJECTS", url: "https://opensearch.org/platform/vector-engine/" },
+      { title: "blocksandfiles.com", url: "https://blocksandfiles.com/ai-ml/2026/07/16/zilliz-launches-milvus-vector-lakebase/5273617" },
+      { title: "Endee.io Launches Open Source Vector Database", url: "https://letsdatascience.com/news/endeeio-launches-open-source-vector-database-f566b7a8" },
+      { title: "Zilliz Releases Milvus 30 Making its Open Source Vector Database Lake Native 176040", url: "https://dbta.com/Editorial/News-Flashes/Zilliz-Releases-Milvus-30-Making-its-Open-Source-Vector-Database-Lake-Native-176040.aspx" },
+    ]);
+    expect(result.output.hits.some((hit) => hit.url.includes("invented-by-the-model"))).toBe(false);
+    expect(argValue(calls[0]!.args, "--tools")).toBe("WebSearch");
+    expect(argValue(calls[0]!.args, "--allowedTools")).toBe("WebSearch");
+    expect(calls[0]!.args).not.toContain("--json-schema");
+
+    const limitedProvider = new ClaudeCliProvider({ runner: fakeRunner({ stdout: stream }) });
+    expect((await limitedProvider.run({ ...req, prompt: "query\n<result_limit>2</result_limit>" })).output.hits).toHaveLength(2);
+
+    const withoutToolResult = fixture.split("\n").filter((line) => !line.includes('"type": "user"')).join("\n");
+    const noResultsProvider = new ClaudeCliProvider({ runner: fakeRunner({ stdout: withoutToolResult }) });
+    expect((await noResultsProvider.run(req)).output.hits).toEqual([]);
   });
 });
 

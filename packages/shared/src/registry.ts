@@ -90,7 +90,7 @@ export type ClassMeta = (typeof AGENT_CLASSES)[number];
  * - repo_review: an agent harness reading a cloned repository in a read-only sandbox.
  * - voice:       a realtime phone conversation (not enabled in v0).
  */
-export type JobKind = "code" | "structured" | "research" | "repo_review" | "voice";
+export type JobKind = "code" | "structured" | "research" | "search" | "repo_review" | "voice";
 
 export type SourceId =
   | "hackernews"
@@ -218,6 +218,15 @@ export const JOBS = [
     enabled: true,
     description:
       "Reads one public page and reports the people starting something, in the page's own words, how early the company is, and which links are worth opening.",
+  },
+  {
+    id: "hunt.search",
+    classId: "runner",
+    label: "Web searcher",
+    kind: "search",
+    source: "web",
+    enabled: true,
+    description: "Searches the open web through the model provider's search tool and returns its links.",
   },
   {
     id: "hunt.sift",
@@ -461,56 +470,56 @@ export const PROVIDERS = [
     id: "sim",
     vendor: "none",
     label: "Simulation",
-    capabilities: { structured: true, research: true, repoReview: true },
+    capabilities: { structured: true, research: true, search: true, repoReview: true },
     note: "Deterministic stand-in used for tests, demos and free eval rounds. Makes no network calls.",
   },
   {
     id: "claude-cli",
     vendor: "anthropic",
     label: "Claude (headless Claude Code)",
-    capabilities: { structured: true, research: true, repoReview: true },
+    capabilities: { structured: true, research: true, search: true, repoReview: true },
     note: "Uses the Claude Code login or ANTHROPIC_API_KEY. Brings its own web search and read-only file tools.",
   },
   {
     id: "codex-cli",
     vendor: "openai",
     label: "Codex (headless)",
-    capabilities: { structured: true, research: false, repoReview: true },
+    capabilities: { structured: true, research: false, search: false, repoReview: true },
     note: "Uses the Codex login or OPENAI_API_KEY. Reads repositories in a read-only sandbox.",
   },
   {
     id: "anthropic-api",
     vendor: "anthropic",
     label: "Claude API",
-    capabilities: { structured: true, research: false, repoReview: false },
+    capabilities: { structured: true, research: false, search: false, repoReview: false },
     note: "Direct Messages API calls with structured outputs. Needs ANTHROPIC_API_KEY.",
   },
   {
     id: "openai-api",
     vendor: "openai",
     label: "OpenAI API",
-    capabilities: { structured: true, research: false, repoReview: false },
+    capabilities: { structured: true, research: false, search: false, repoReview: false },
     note: "Direct API calls with structured outputs. Needs OPENAI_API_KEY.",
   },
   {
     id: "deepseek-api",
     vendor: "deepseek",
     label: "DeepSeek API",
-    capabilities: { structured: true, research: false, repoReview: false },
+    capabilities: { structured: true, research: false, search: false, repoReview: false },
     note: "OpenAI-compatible endpoint. Point DEEPSEEK_BASE_URL at a US-hosted provider of the open weights when founder data must not leave the US.",
   },
   {
     id: "meta-api",
     vendor: "meta",
     label: "Meta Model API",
-    capabilities: { structured: true, research: false, repoReview: false },
+    capabilities: { structured: true, research: false, search: false, repoReview: false },
     note: "Muse models through an OpenAI-compatible endpoint, first-party or a hosted provider, set with META_BASE_URL.",
   },
 ] as const satisfies ReadonlyArray<{
   id: string;
   vendor: Vendor;
   label: string;
-  capabilities: { structured: boolean; research: boolean; repoReview: boolean };
+  capabilities: { structured: boolean; research: boolean; search: boolean; repoReview: boolean };
   note: string;
 }>;
 
@@ -544,6 +553,8 @@ export function providerSupports(provider: ProviderId, kind: JobKind): boolean {
       return caps.structured;
     case "research":
       return caps.research;
+    case "search":
+      return caps.search;
     case "repo_review":
       return caps.repoReview;
     case "voice":

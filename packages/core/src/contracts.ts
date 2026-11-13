@@ -94,7 +94,7 @@ import type {
 export interface ProviderRequest<T> {
   jobId: ModelJobId;
   /** structured = no tools; research = web search and fetch; repo_review = read-only files in repoDir. */
-  kind: Extract<JobKind, "structured" | "research" | "repo_review">;
+  kind: Extract<JobKind, "structured" | "research" | "search" | "repo_review">;
   route: ModelRoute;
   system: string;
   prompt: string;
@@ -258,6 +258,8 @@ export interface SearchEngine {
   readonly label: string;
   /** What it searches, in a line, shown to the navigator so it can write a query for it. */
   readonly searches: string;
+  /** The search is done by a model with a search tool, so the hunt runs this job and reads its hits. */
+  readonly job?: "hunt.search";
   status(): Promise<{ configured: boolean; detail: string }>;
   search(query: string, limit: number, options?: { simDay?: number | null; signal?: AbortSignal }): Promise<SearchHit[]>;
 }
@@ -397,7 +399,7 @@ export interface JobContext {
 
 export interface JobDefinition<J extends ModelJobId = ModelJobId> {
   readonly id: J;
-  readonly kind: Extract<JobKind, "structured" | "research" | "repo_review">;
+  readonly kind: Extract<JobKind, "structured" | "research" | "search" | "repo_review">;
   readonly outputSchema: z.ZodType<unknown>;
   /** Names of the prompt variants this job has. Always includes "base". */
   readonly promptVariants: readonly string[];

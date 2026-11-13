@@ -19,7 +19,7 @@ import {
   type SwarmConfig,
 } from "./steering";
 
-const MODEL_KINDS: readonly JobKind[] = ["structured", "research", "repo_review"];
+const MODEL_KINDS: readonly JobKind[] = ["structured", "research", "search", "repo_review"];
 
 /** Parameters that are meaningful at this point in the swarm → class → job → agent tree. */
 export function paramsFor(identity: AgentIdentity): ParamDef[] {

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { BASE_CONFIG, JOBS, isPlantedUrl, pickMember, runnerPools, SEAT_ASKER, SIM_WEB_HOST, type Agent, type JobInput, type JobOutput, type ModelJobId, type NavigateInput, type NavigateOutput, type LookInput, type LookOutput, type Pools, type Swarm, type SwarmConfig } from "@agentswarm/shared";
+import { BASE_CONFIG, JOBS, isPlantedUrl, pickMember, runnerPools, SEAT_ASKER, SIM_WEB_HOST, type Agent, type JobInput, type JobOutput, type ModelJobId, type NavigateInput, type NavigateOutput, type LookInput, type LookOutput, type Pools, type SearchInput, type SearchOutput, type SiftInput, type SiftOutput, type Swarm, type SwarmConfig } from "@agentswarm/shared";
 import { createExecuteJob, createJobRegistry } from "../jobs";
 import { openStore } from "../db";
 import { createSimRepoFinder, createSimSources, createSimWorld } from "../sim";
@@ -104,21 +104,86 @@ function harness(configParams: Record<string, number | boolean | string> = {}, o
 
 function wrapJob(delegate: ExecuteJob, options: {
   navigate?: (input: NavigateInput, output: NavigateOutput) => NavigateOutput;
+  search?: (input: SearchInput, output: SearchOutput) => SearchOutput;
   look?: (input: LookInput, output: LookOutput) => LookOutput;
+  sift?: (input: SiftInput, output: SiftOutput) => SiftOutput;
 }): ExecuteJob {
   return async <J extends ModelJobId>(jobId: J, input: JobInput<J>, ctx: JobContext, execOptions: Parameters<ExecuteJob>[3]): Promise<JobExecution<J>> => {
     const result = await delegate(jobId, input, ctx, execOptions);
     if (jobId === "hunt.navigate" && options.navigate) {
       return { ...result, output: options.navigate(input as NavigateInput, result.output as NavigateOutput) as JobOutput<J> };
     }
+    if (jobId === "hunt.search" && options.search) {
+      return { ...result, output: options.search(input as SearchInput, result.output as SearchOutput) as JobOutput<J> };
+    }
     if (jobId === "hunt.look" && options.look) {
       return { ...result, output: options.look(input as LookInput, result.output as LookOutput) as JobOutput<J> };
+    }
+    if (jobId === "hunt.sift" && options.sift) {
+      return { ...result, output: options.sift(input as SiftInput, result.output as SiftOutput) as JobOutput<J> };
     }
     return result;
   };
 }
 
 describe("hunt engine stage", () => {
+  it("runs model-backed web search as a budgeted task and passes numbered hits to the sifter", async () => {
+    const query = '"first launch" developer tools';
+    const searchInputs: SearchInput[] = [];
+    const siftInputs: SiftInput[] = [];
+    const engine: SearchEngine = {
+      id: "web",
+      label: "Web search",
+      searches: "Plain words and quoted phrases.",
+      job: "hunt.search",
+      status: async () => ({ configured: true, detail: "Ready." }),
+      search: async () => { throw new Error("Model-backed search must use its job."); },
+    };
+    const { store, world, controller } = harness({
+      "hunt.turns": 1,
+      "hunt.wave_size": 1,
+      "hunt.max_depth": 0,
+      "hunt.budget_share": 0.5,
+    }, {
+      engines: [engine],
+      wrapExecuteJob: (delegate) => wrapJob(delegate, {
+        navigate: (_input, output) => ({
+          ...output,
+          open: [{ name: "Web search test", intent: "Find early builders.", searches: [{ engine: "web", query }], pages: [] }],
+          extend: [],
+          close: [],
+          done: false,
+        }),
+        search: (input, output) => {
+          searchInputs.push(input);
+          return {
+            ...output,
+            hits: [{ url: `https://${SIM_WEB_HOST}/p/${encodeURIComponent(world.founders()[0]!.simId)}`, title: "Early developer tool founder", snippet: "A first public launch." }],
+          };
+        },
+        sift: (input, output) => {
+          siftInputs.push(input);
+          return { ...output, open: [{ index: 0, label: "Founder page", priority: 1 }] };
+        },
+      }),
+    });
+    const started = await controller.start({ swarmId: SWARM_ID, trigger: "manual", brain: "sim", sources: "live", budgetUsd: 20 });
+    const run = await controller.wait(started.id);
+    expect(run.status).toBe("succeeded");
+
+    const searchTask = store.listTasks({ runId: run.id }).find((task) => task.jobId === "hunt.search");
+    expect(searchTask).toMatchObject({ status: "succeeded" });
+    expect(searchTask!.costUsd).toBeGreaterThan(0);
+    expect(searchInputs[0]?.limit).toBe(3);
+    expect(siftInputs[0]?.hits).toEqual([
+      expect.objectContaining({ index: 0, title: "Early developer tool founder" }),
+    ]);
+    const trail = store.listTrails(store.getHunt(SWARM_ID)!.id).find((item) => item.name === "Web search test")!;
+    expect(trail.stats.costUsd).toBeGreaterThanOrEqual(searchTask!.costUsd!);
+    const huntCosts = store.listTasks({ runId: run.id }).filter((task) => task.stage === "hunt").map((task) => task.costUsd ?? 0);
+    expect(huntCosts.reduce((sum, cost) => sum + cost, 0)).toBeLessThanOrEqual(10 + Math.max(...huntCosts));
+  });
+
   it("finds sourced simulated web leads and sends them through matching and screening", async () => {
     const captureSecondRunInputs = { current: false };
     const navigatorInputs: NavigateInput[] = [];
