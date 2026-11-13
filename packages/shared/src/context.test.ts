@@ -25,7 +25,7 @@ describe("pools of context", () => {
   });
 
   it("lets the fact-checker read the items under check and nothing else about the subject", () => {
-    expect(poolsReadBy("verify.claims")).toEqual(["steering", "lessons", "founder", "company"]);
+    expect(poolsReadBy("verify.claims")).toEqual(["steering", "lessons", "skills", "founder", "company"]);
     expect(Object.keys(JOB_INPUT_POOLS["verify.claims"])).toEqual(["founder", "evidence"]);
   });
 

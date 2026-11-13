@@ -238,6 +238,8 @@ export interface EffectiveSteeringDTO {
   }>;
   /** Guidance the swarm wrote for itself for this job, from the config in use. Empty for other scopes. */
   lessons?: string[];
+  /** Reviewed skills that may apply to this job or class and whether this scope disables them. */
+  skills?: Array<{ id: string; name: string; description: string; off: boolean }>;
 }
 
 /* ------------------------------ Founders --------------------------- */

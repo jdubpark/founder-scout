@@ -6,10 +6,12 @@ import {
   MAX_LESSON_LENGTH,
   MAX_LESSONS_PER_JOB,
   MODEL_JOB_IDS,
+  effectiveParam,
   estimateCostUsd,
   getJob,
   getModel,
   providerSupports,
+  pickSkills,
 } from "@agentswarm/shared";
 import type {
   AssessInput,
@@ -41,6 +43,8 @@ import type {
   ScreenOutput,
   SimMeta,
   SimSignal,
+  Skill,
+  SkillTask,
   SwarmConfig,
   Thesis,
   VerifyInput,
@@ -79,6 +83,7 @@ import {
 } from "./company";
 import type { CompanyJobId } from "./company";
 import { huntJobs } from "./hunt";
+export { loadSkillLibrary, parseSkillFile } from "./skill-library";
 
 export { findSensitive, redactSensitive, plantControl };
 
@@ -273,6 +278,70 @@ function buildScoutPrompt(id: ModelJobId, input: ScoutInput, ctx: JobContext): s
   parts.push(safeTag("items", renderItems(input.items)));
   if (ctx.steeringBlock) parts.push(ctx.steeringBlock);
   return parts.join("\n\n");
+}
+
+function hostsIn(values: Array<string | null | undefined>): string[] {
+  const hosts = new Set<string>();
+  for (const value of values) {
+    if (!value) continue;
+    try { hosts.add(new URL(value).hostname.toLowerCase()); } catch { /* Not a page address. */ }
+  }
+  return [...hosts];
+}
+
+function scoutSkillTask(input: ScoutInput): Pick<SkillTask, "hosts" | "text"> {
+  return { hosts: hostsIn(input.items.map((item) => item.ref)), text: input.items.map((item) => `${item.title}\n${item.text}\n${item.author ?? ""}`).join("\n") };
+}
+
+function huntSkillTask(jobId: ModelJobId, input: JobInput<ModelJobId>): Pick<SkillTask, "hosts" | "text"> {
+  if (jobId === "hunt.look") {
+    const page = (input as JobInput<"hunt.look">).page;
+    return { hosts: hostsIn([page.url]), text: `${page.title}\n${page.text}` };
+  }
+  if (jobId === "hunt.sift") {
+    const sift = input as JobInput<"hunt.sift">;
+    return { hosts: hostsIn(sift.hits.map((hit) => hit.url)), text: `${sift.query}\n${sift.hits.map((hit) => `${hit.title}\n${hit.snippet}`).join("\n")}` };
+  }
+  return { hosts: [], text: "" };
+}
+
+function evidenceSkillTask(values: Array<{ url: string | null; title: string; excerpt: string }>): Pick<SkillTask, "hosts" | "text"> {
+  return { hosts: hostsIn(values.map((value) => value.url)), text: values.map((value) => `${value.title}\n${value.excerpt}`).join("\n") };
+}
+
+/** The material each job family actually receives, used only to match reviewed notes. */
+function skillTaskFor(jobId: ModelJobId, input: JobInput<ModelJobId>): SkillTask {
+  let material: Pick<SkillTask, "hosts" | "text"> = { hosts: [], text: "" };
+  if (jobId.startsWith("scout.")) material = scoutSkillTask(input as ScoutInput);
+  else if (jobId.startsWith("hunt.")) material = huntSkillTask(jobId, input);
+  else if (jobId === "investigate.code") {
+    const investigation = input as InvestigateInput;
+    material = { hosts: hostsIn([investigation.repo?.url]), text: `${investigation.repo?.name ?? ""}\n${investigation.repo?.description ?? ""}\n${investigation.known.map((item) => item.title + "\n" + item.excerpt).join("\n")}` };
+  } else if (jobId.startsWith("investigate.")) {
+    const investigation = input as InvestigateInput;
+    material = evidenceSkillTask(investigation.known.map((item) => ({ url: item.url, title: item.title, excerpt: item.excerpt })));
+  } else if (jobId === "verify.claims") {
+    material = evidenceSkillTask((input as JobInput<"verify.claims">).evidence.map((item) => ({ url: item.url, title: item.title, excerpt: item.excerpt })));
+  } else if (jobId === "assess.judgments") {
+    const assessment = input as AssessInput;
+    material = evidenceSkillTask(assessment.evidence.map((item) => ({ url: item.url, title: item.title, excerpt: item.excerpt })));
+  } else if (jobId === "assess.memo") {
+    const memo = input as MemoInput;
+    material = evidenceSkillTask(memo.evidence.map((item) => ({ url: item.url, title: item.title, excerpt: item.excerpt })));
+  } else if (jobId === "assess.company") {
+    const assessment = input as CompanyAssessInput;
+    material = evidenceSkillTask(assessment.evidence.map((item) => ({ url: item.url, title: item.title, excerpt: item.excerpt })));
+  } else if (jobId.startsWith("company.")) {
+    const company = input as CompanyResearchInput;
+    material = { hosts: hostsIn([company.company.url]), text: `${company.company.name}\n${company.company.oneLiner}\n${company.known.map((item) => item.title + "\n" + item.excerpt).join("\n")}` };
+  } else if (jobId === "call.debrief") {
+    const debrief = input as DebriefInput;
+    material = { hosts: [], text: `${debrief.kind}\n${debrief.transcript}` };
+  } else if (jobId === "outreach.plan") {
+    const outreach = input as OutreachPlanInput;
+    material = evidenceSkillTask(outreach.evidence.map((item) => ({ url: item.url, title: item.title, excerpt: item.excerpt })));
+  }
+  return { jobId, classId: getJob(jobId).classId, ...material };
 }
 
 function buildPromptFor(id: ModelJobId, input: AnyInput, ctx: JobContext): { system: string; prompt: string } {
@@ -1101,14 +1170,49 @@ function withLearnedGuidance(definition: JobDefinition<ModelJobId>): JobDefiniti
   };
 }
 
+function withProjectSkills(definition: JobDefinition<ModelJobId>, library: readonly Skill[]): JobDefinition<ModelJobId> {
+  const selected = (input: JobInput<ModelJobId>, ctx: JobContext): Skill[] => {
+    const off = String(effectiveParam("skills.off", ctx.steering, ctx.config).value ?? "")
+      .split(",").map((id) => id.trim()).filter(Boolean);
+    return pickSkills(library, skillTaskFor(definition.id, input), undefined, off);
+  };
+  return {
+    ...definition,
+    selectedSkills: (input, ctx) => selected(input, ctx).map((skill) => skill.id),
+    buildPrompt: (input, ctx) => {
+      const built = definition.buildPrompt(input, ctx);
+      const skills = selected(input, ctx);
+      if (skills.length === 0) return built;
+      const skillBlock = skills.length ? safeTag(
+        "project_skills",
+        "These are the project's own reviewed notes. A person's instruction takes precedence over these notes.\n\n" +
+          skills.map((skill) => `## ${skill.name}\n${skill.body}`).join("\n\n"),
+      ) : "";
+      const marker = built.system.indexOf("<learned_guidance>");
+      return {
+        ...built,
+        system: marker < 0
+          ? built.system + "\n\n" + skillBlock
+          : built.system.slice(0, marker) + skillBlock + "\n\n" + built.system.slice(marker),
+      };
+    },
+  };
+}
+
 /** Registry for every model-backed job in the shared contract. */
-export function createJobRegistry(): JobRegistry {
+export function createJobRegistry(library: readonly Skill[] = []): JobRegistry {
   const definitions = new Map<ModelJobId, JobDefinition<ModelJobId>>(
     MODEL_JOB_IDS.map((id) => [
       id,
       id === "hunt.navigate" || id === "hunt.search" || id === "hunt.look" || id === "hunt.sift"
         ? withLearnedGuidance(huntJobs[id] as JobDefinition<ModelJobId>)
         : createDefinition(id),
+      (() => {
+        const base = id === "hunt.navigate" || id === "hunt.look" || id === "hunt.sift"
+          ? withLearnedGuidance(huntJobs[id] as JobDefinition<ModelJobId>)
+          : createDefinition(id);
+        return library.length ? withProjectSkills(base, library) : base;
+      })(),
     ]),
   );
   return {
@@ -1173,6 +1277,7 @@ function simulatedExecution<J extends ModelJobId>(
   );
   return {
     promptHash: createHash("sha256").update(prompt.system).digest("hex").slice(0, 12),
+    skills: definition.selectedSkills?.(input, ctx) ?? [],
     output,
     provider: "sim",
     model: ctx.route.model,
@@ -1223,6 +1328,7 @@ function liveExecution<J extends ModelJobId>(
     signal: options.signal,
   }).then((result) => ({
     promptHash: createHash("sha256").update(prompt.system).digest("hex").slice(0, 12),
+    skills: definition.selectedSkills?.(input, ctx) ?? [],
     output: normalizeOutput(definition.id, input, result.output as JobOutput<J>),
     provider: result.provider,
     model: result.model,

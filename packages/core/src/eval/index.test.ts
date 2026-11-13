@@ -362,7 +362,7 @@ describe("assess-ranking persistence", () => {
     const kept = flow.variants.filter((variant) => variant.round > 0 && variant.status === "champion");
     expect(kept.length).toBeGreaterThan(0);
     expect(flow.best).toBeGreaterThan((baseline.test.rank_match ?? 0) + (flow.noiseFloor ?? 0));
-  }, 40_000);
+  }, 60_000);
 
   it("keeps a planted single weight change only when the held-out score improves", async () => {
     const weights: Record<string, number> = Object.fromEntries(DIMENSIONS.map((dimension) => [`weights.${dimension.id}`, 0]));

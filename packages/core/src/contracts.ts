@@ -85,6 +85,7 @@ import type {
   PageLink,
   Pools,
   Trail,
+  Skill,
 } from "@agentswarm/shared";
 
 /* ================================================================== */
@@ -411,6 +412,8 @@ export interface JobDefinition<J extends ModelJobId = ModelJobId> {
    * outside content as untrusted data, and never include simulator fields.
    */
   buildPrompt(input: JobInput<J>, ctx: JobContext): { system: string; prompt: string };
+  /** Ids of reviewed notes inserted into this task's system prompt. */
+  selectedSkills?(input: JobInput<J>, ctx: JobContext): string[];
   /**
    * Deterministic stand-in for the model. Reads only what a model could see
    * plus the simulator's hidden signals, and must respond to the route and to
@@ -430,6 +433,8 @@ export interface JobRegistry {
 export interface JobExecution<J extends ModelJobId> {
   /** A short hash of the instructions sent, so a silent change of wording shows up on the task. */
   promptHash?: string;
+  /** Reviewed skill ids included in this task's system prompt. */
+  skills?: string[];
   output: JobOutput<J>;
   provider: ProviderId;
   model: string;
@@ -935,6 +940,8 @@ export interface ServiceDeps {
   liveSources: SourceRegistry;
   /** The hunt's search engines in each mode, for the Hunt page. */
   web?: { sim: WebAccess; live: WebAccess };
+  /** Reviewed playbooks shown in the steering preview and used by the job registry. */
+  skillLibrary?: readonly Skill[];
   /** The same defaults the engine uses, so the pools a person sees are the pools that run. */
   defaultPools?: () => Promise<Pools>;
   cron: CronHelper;

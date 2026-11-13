@@ -34,6 +34,7 @@ export const CONTEXT_POOLS = [
   { id: "steering", label: "Steering", holds: "Rules, preferences, context and settings people attached to a scope.", per: "One scope", sealed: false },
   { id: "calls", label: "Partner calls", holds: "Recent Yes and No calls with their reasons, shown as examples of taste.", per: "One swarm", sealed: false },
   { id: "lessons", label: "Learned lines", holds: "One-line guidance that an eval round kept, for one job.", per: "One job", sealed: false },
+  { id: "skills", label: "Project skills", holds: "Reviewed playbooks selected by code for the task material.", per: "One task", sealed: false },
   { id: "sources", label: "Source items", holds: "New items from one source since the last run.", per: "One scout", sealed: false },
   { id: "hunt", label: "Hunt notebook", holds: "The navigator's trails and notes, and what each wave found, as counts and short labels.", per: "One swarm", sealed: false },
   { id: "lead", label: "Lead", holds: "One person a scout or a runner proposed: name, role, company and why.", per: "One lead", sealed: false },
@@ -117,6 +118,7 @@ export const JOB_INPUT_POOLS: InputPools = {
 export function poolsReadBy(jobId: ModelJobId): PoolId[] {
   const read = new Set<PoolId>((Object.values(JOB_INPUT_POOLS[jobId]) as Reads[]).flat());
   read.add("steering");
+  read.add("skills");
   read.add("lessons");
   if (CLASSES_SHOWN_CALLS.includes(getJob(jobId).classId)) read.add("calls");
   return CONTEXT_POOLS.map((pool) => pool.id).filter((id) => read.has(id));

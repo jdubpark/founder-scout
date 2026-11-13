@@ -1,4 +1,5 @@
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import {
   AGENT_CLASSES, BASE_CONFIG, JOBS, SOURCES, STAGES, runnerPools,
   buildEffectiveSteering, coerceParam, effectiveRoute, getParamDef, isClassId, isCompanyReasonFor, isJobId,
@@ -19,7 +20,7 @@ import { openStore } from "../db";
 import { createSimRepoFinder, createSimSources, createSimWorld } from "../sim";
 import { createLivePeopleLookup, createLiveRepoFinder, createLiveSources, createQuoteChecker, createLiveWebAccess, createModelSearchEngine, createSimWebAccess, looksLikeFounder, parseConnectionsCsv } from "../sources";
 import { createProviderRegistry } from "../providers";
-import { createJobRegistry, createExecuteJob, findSensitive, redactSensitive } from "../jobs";
+import { createJobRegistry, createExecuteJob, findSensitive, loadSkillLibrary, redactSensitive } from "../jobs";
 import { createRunController } from "../engine";
 import { createEvalService } from "../eval";
 import { poolsView, rebalancePools, setPool } from "./pools";
@@ -273,7 +274,7 @@ export function createSwarmService(deps: ServiceDeps): SwarmService {
     const names = { swarms: swarmNames(), agents: agentNames() };
     const resolved = buildEffectiveSteering({
       directives: store.listDirectives(), identity, config, names, label,
-      calls: feedbackExamples(swarm.id), now: now(),
+      calls: feedbackExamples(swarm.id), now: now(), skillLibrary: deps.skillLibrary,
     });
     return { ...resolved, lessons: identity.jobId ? config.lessons?.[identity.jobId] ?? [] : [] };
   };
@@ -1282,7 +1283,8 @@ export function createApp(options: AppOptions): App {
     });
     return defaultPoolsPromise;
   };
-  const jobs = createJobRegistry();
+  const skillLibrary = loadSkillLibrary(join(dirname(fileURLToPath(import.meta.url)), "../../../../skills"));
+  const jobs = createJobRegistry(skillLibrary);
   const executeJob = createExecuteJob({ jobs, providers });
   const runs = createRunController({ store, jobs, executeJob, quotes: createQuoteChecker(), people: createLivePeopleLookup(options.env ?? process.env), sources: { sim: simSources, live: liveSources }, repos: { sim: simRepos, live: liveRepos }, web, defaultPools, simWorld: world, fundName: options.fundName ?? "the fund", now: options.now, logger: options.logger });
   const evals = createEvalService({
@@ -1297,6 +1299,6 @@ export function createApp(options: AppOptions): App {
     now: options.now,
     logger: options.logger,
   }, { pastJudge: options.evalJudge ?? null });
-  const service = createSwarmService({ store, runs, evals, providers, liveSources, web, defaultPools, cron: options.cron, now: options.now, logger: options.logger });
+  const service = createSwarmService({ store, runs, evals, providers, liveSources, web, defaultPools, skillLibrary, cron: options.cron, now: options.now, logger: options.logger });
   return { service, store, providers, close: () => store.close() };
 }

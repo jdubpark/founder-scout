@@ -434,11 +434,21 @@ export function createDemoClient(snapshot: DemoSnapshot, getActor: () => string)
         label,
         calls: callExamples(query.swarmId),
       });
+      const skillOff = String(steering.resolved.params["skills.off"]?.value ?? t.config.params["skills.off"] ?? "")
+        .split(",").map((id) => id.trim()).includes("github-authorship");
+      const skills = identity.jobId === "scout.github" || identity.classId === "scout"
+        ? [{
+            id: "github-authorship",
+            name: "Repository authorship",
+            description: "Read repository signals without assuming who owns an organization project.",
+            off: skillOff,
+          }]
+        : [];
       // One sample job carries a line the swarm wrote for itself, so the Told tab shows it.
       if (identity.jobId === "scout.github") {
-        return { ...steering, lessons: ["Repositories with fast star growth from several unrelated accounts were often paid for."] };
+        return { ...steering, skills, lessons: ["Repositories with fast star growth from several unrelated accounts were often paid for."] };
       }
-      return steering;
+      return { ...steering, skills };
     },
     async listSuggestions(swarmId) {
       return suggestions(swarmId);

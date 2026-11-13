@@ -349,6 +349,7 @@ export function createRunController(deps: EngineDeps): RunController {
           const traces: NonNullable<TaskRun["trace"]> = [];
           let finalOutput: JobOutput<J> | null = null;
           let finalPromptHash: string | null = null;
+          let finalSkills: string[] = [];
           let finalError: unknown = null;
           let attempts = 0;
           let repairAttempted = false;
@@ -383,6 +384,7 @@ export function createRunController(deps: EngineDeps): RunController {
               // One agent does a runner job many times in a run; the thing it works on tells the calls apart.
               rng: taskSeed(agent, founderId ?? routeKey ?? null, attempt),
             };
+            finalSkills = job.selectedSkills?.(input, taskContext) ?? [];
             try {
               const execution: JobExecution<J> = await deps.executeJob(jobId, input, taskContext, {
                 brain: run.brain,
@@ -393,6 +395,7 @@ export function createRunController(deps: EngineDeps): RunController {
               });
               finalOutput = execution.output;
               finalPromptHash = execution.promptHash ?? null;
+              finalSkills = execution.skills ?? finalSkills;
               totalUsage = addUsage(totalUsage, execution.usage);
               hasReportedUsage = true;
               if (execution.costUsd !== null) {
@@ -459,6 +462,7 @@ export function createRunController(deps: EngineDeps): RunController {
             // A provider's refusal or parse error can quote what it was reading.
             error: succeeded ? null : redactSensitive(errorMessage(finalError ?? "Job failed.")),
             promptHash: finalPromptHash,
+            skills: finalSkills,
             finishedAt,
             trace: traces,
           };

@@ -4,7 +4,7 @@ import { getJob, type TaskRun, type TraceTurn } from "@agentswarm/shared";
 import { Button } from "../../components/ui/Button";
 import { ErrorNote, SkeletonRows } from "../../components/ui/layout";
 import { Sheet } from "../../components/ui/overlay";
-import { Caution, Status } from "../../components/ui/marks";
+import { Caution, Chip, Status } from "../../components/ui/marks";
 import { plural } from "../../lib/format";
 import { useTask } from "../../lib/queries";
 import { TASK_STATUS } from "./labels";
@@ -66,6 +66,15 @@ export function TaskSheet({
               <div className="bg-sunk p-3 font-mono text-sm leading-relaxed whitespace-pre-wrap break-words text-ink">
                 {task.steering.block}
               </div>
+            ) : (
+              <p className="m-0 text-base text-ink-3">None</p>
+            )}
+          </section>
+
+          <section className="flex flex-col gap-2">
+            <h3 className="name-caps m-0 text-sm text-ink">Skills</h3>
+            {task.skills?.length ? (
+              <div className="flex flex-wrap gap-1.5">{task.skills.map((id) => <Chip key={id}>{id}</Chip>)}</div>
             ) : (
               <p className="m-0 text-base text-ink-3">None</p>
             )}

@@ -706,6 +706,8 @@ export interface TaskRun {
   promptVariant?: string | null;
   /** A short hash of the instructions this task was given, so a silent change of wording shows up. */
   promptHash?: string | null;
+  /** Reviewed skill ids included in this task's system prompt. */
+  skills?: string[];
   /** For a fact-check call that carried a planted false claim: whether the checker rejected it. */
   control?: "passed" | "failed" | null;
   /** The pool member this task was sent to, when the job has a pool. */

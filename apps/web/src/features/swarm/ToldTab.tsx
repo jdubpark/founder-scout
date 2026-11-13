@@ -13,11 +13,12 @@ export function ToldTab({ node, swarmId }: { node: NodeRef; swarmId: string }) {
 
   const data = eff.data;
   const lessons = data.lessons ?? [];
+  const skills = data.skills ?? [];
   const scopeById = new Map<string, ScopeSelector>(data.resolved.guidance.map((g) => [g.directiveId, g.scope]));
 
   return (
     <div className="flex flex-col gap-4">
-      {data.guidance.length === 0 && lessons.length === 0 ? (
+      {data.guidance.length === 0 && lessons.length === 0 && skills.length === 0 ? (
         <EmptyState title="Nothing yet" />
       ) : null}
       {data.guidance.length > 0 ? (
@@ -53,6 +54,23 @@ export function ToldTab({ node, swarmId }: { node: NodeRef; swarmId: string }) {
             </li>
           ))}
         </ol>
+      ) : null}
+
+      {skills.length > 0 ? (
+        <section className="flex flex-col gap-1">
+          <h3 className="name-caps m-0 px-3 text-sm text-ink-2">Skills</h3>
+          <ol className="m-0 flex list-none flex-col p-0">
+            {skills.map((skill) => (
+              <li key={skill.id} className="flex flex-col gap-1.5 rounded-md px-3 py-2.5 hover:bg-sunk">
+                <div className="flex flex-wrap items-center gap-2">
+                  <p className="m-0 text-base font-semibold text-ink">{skill.name}</p>
+                  <Chip>{skill.off ? "Off here" : "Available"}</Chip>
+                </div>
+                <p className="m-0 text-sm text-ink-2">{skill.description}</p>
+              </li>
+            ))}
+          </ol>
+        </section>
       ) : null}
 
       {data.block || data.callsBlock ? (

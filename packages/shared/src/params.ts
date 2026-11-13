@@ -75,6 +75,16 @@ const companyWeightParams: ParamDef[] = COMPANY_DIMENSIONS.map((d) => ({
 
 export const PARAM_DEFS: readonly ParamDef[] = [
   {
+    key: "skills.off",
+    label: "Skills switched off",
+    help: "Comma-separated skill ids to leave out of prompts at this scope.",
+    type: "string",
+    default: "",
+    group: "checks",
+    appliesTo: ["navigator", "scout", "runner", "resolver", "screener", "investigator", "company", "verifier", "analyst", "outreach"],
+    tunable: false,
+  },
+  {
     key: "scout.max_items",
     label: "Items scanned per scout",
     help: "The most raw items (posts, repositories, papers, profiles) one scout reads in a run.",
@@ -536,6 +546,7 @@ export function coerceParam(key: string, raw: unknown): ParamCheck {
     return { ok: true, value: n };
   }
 
+  if (key === "skills.off" && typeof raw === "string") return { ok: true, value: raw.trim() };
   if (typeof raw !== "string" || raw.trim() === "") {
     return { ok: false, error: `${def.label} must be text.` };
   }

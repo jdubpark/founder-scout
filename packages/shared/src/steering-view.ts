@@ -7,6 +7,7 @@ import type { EffectiveSteeringDTO } from "./api";
 import { CLASSES_SHOWN_CALLS, renderCallsBlock, type CallExample } from "./feedback";
 import { PARAM_DEFS, paramAppliesTo, type ParamDef } from "./params";
 import { getJob, type JobKind } from "./registry";
+import { skillsForScope, type Skill } from "./skills";
 import {
   effectiveParam,
   effectiveRoute,
@@ -46,6 +47,7 @@ export function buildEffectiveSteering(args: {
   /** Recent partner calls for this swarm. Shown only to the classes that receive them. */
   calls?: readonly CallExample[];
   now?: Date;
+  skillLibrary?: readonly Skill[];
 }): EffectiveSteeringDTO {
   const { directives, identity, config, names, label } = args;
   const resolved = resolveSteering(directives, identity, args.now ?? new Date());
@@ -77,6 +79,12 @@ export function buildEffectiveSteering(args: {
       text: g.text,
       directiveId: g.directiveId,
       scopeLabel: scopeLabel(g.scope, names),
+    })),
+    skills: skillsForScope(args.skillLibrary ?? [], identity.jobId, identity.classId).map((skill) => ({
+      id: skill.id,
+      name: skill.name,
+      description: skill.description,
+      off: String(effectiveParam("skills.off", resolved, config).value ?? "").split(",").map((id) => id.trim()).includes(skill.id),
     })),
   };
 }

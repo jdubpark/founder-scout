@@ -47,6 +47,7 @@ import {
   createExecuteJob,
   createJobRegistry,
   findSensitive,
+  loadSkillLibrary,
   learnedLines,
   normalizeOutput,
   plantControl,
@@ -1544,5 +1545,52 @@ describe("job executor", () => {
     await expect(execute("investigate.background", inputFor("investigate.background") as InvestigateInput, context({
       route: { provider: "codex-cli", model: "gpt-6-luna", effort: "medium" },
     }), { brain: "live" })).rejects.toMatchObject<Partial<ProviderError>>({ kind: "unsupported" });
+  });
+
+  it("loads reviewed skills and places only a host-matched note before learned guidance", async () => {
+    const library = loadSkillLibrary(`${process.cwd()}/skills`);
+    expect(library).toHaveLength(9);
+    for (const skill of library) {
+      expect(skill.body.length).toBeLessThanOrEqual(900);
+      expect(skill.jobs.length + skill.classes.length).toBeGreaterThan(0);
+      expect(findSensitive(skill.body), skill.id).toEqual([]);
+      expect(skill.body).not.toMatch(/\b(?:simId|simFounderId|sim)\b/i);
+    }
+
+    const systems: string[] = [];
+    const provider = {
+      id: "claude-cli" as const,
+      status: async () => ({ configured: true, detail: "ready" }),
+      run: async (request: ProviderRequest<unknown>) => {
+        systems.push(request.system);
+        return {
+          output: { kind: "article", people: [], aboutCompany: false, stage: { funding: "none_stated", fundingQuote: null, team: "unknown", teamQuote: null, progress: "unknown", progressQuote: null }, follow: [] },
+          provider: "claude-cli" as const,
+          model: request.route.model,
+          usage: { inputTokens: 10, outputTokens: 5, cachedInputTokens: 0, cacheWriteTokens: 0, webSearches: 0 },
+          costUsd: 0.001,
+          latencyMs: 5,
+          trace: [],
+        };
+      },
+    };
+    const jobs = createJobRegistry(library);
+    const execute = createExecuteJob({ jobs, providers: { get: () => provider, statuses: async () => [] } as never });
+    const pageInput = inputFor("hunt.look") as Extract<AnyInput, { page: unknown }>;
+    const learned = { ...context(), config: { ...context().config, lessons: { "hunt.look": ["Keep the cited page in view."] } } };
+    const github = { ...pageInput, page: { ...pageInput.page, url: "https://github.com/example/project", title: "Repository", text: "A public software project." } };
+    const other = { ...pageInput, page: { ...pageInput.page, url: "https://example.org/project", title: "Repository", text: "A public software project." } };
+    const ghRun = await execute("hunt.look", github, learned, { brain: "live" });
+    const otherRun = await execute("hunt.look", other, learned, { brain: "live" });
+    const disabled = { ...learned, config: { ...learned.config, params: { "skills.off": "github-authorship" } } };
+    const disabledRun = await execute("hunt.look", github, disabled, { brain: "live" });
+
+    expect(ghRun.skills).toContain("github-authorship");
+    expect(systems[0]).toContain("Repository authorship");
+    expect(systems[0]!.indexOf("project_skills")).toBeLessThan(systems[0]!.indexOf("learned_guidance"));
+    expect(otherRun.skills).not.toContain("github-authorship");
+    expect(systems[1]).not.toContain("Repository authorship");
+    expect(disabledRun.skills).not.toContain("github-authorship");
+    expect(systems[2]).not.toContain("Repository authorship");
   });
 });

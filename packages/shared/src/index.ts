@@ -4,6 +4,7 @@ export * from "./company";
 export * from "./params";
 export * from "./models";
 export * from "./steering";
+export * from "./skills";
 export * from "./scoring";
 export * from "./domain";
 export * from "./jobio";
