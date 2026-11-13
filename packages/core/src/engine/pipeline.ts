@@ -340,7 +340,7 @@ async function runDebrief(runtime: EngineRuntime, assessmentCandidates: Set<stri
         url: null,
         title: `Conversation with ${action.target.name}`,
         excerpt,
-        claim: "Call transcript awaiting debrief",
+        claim: "Transcript of this conversation.",
         publishedAt: null,
         capturedAt: runtime.now().toISOString(),
         collectedByTaskId: null,
@@ -358,7 +358,7 @@ async function runDebrief(runtime: EngineRuntime, assessmentCandidates: Set<stri
       if (!stored) continue;
       runtime.deps.store.updateOutreach(action.id, {
         status: "completed",
-        resultSummary: "Simulated call completed; transcript awaiting debrief.",
+        resultSummary: "Simulated call completed.",
         transcriptEvidenceId: stored.id,
         updatedAt: runtime.now().toISOString(),
       });

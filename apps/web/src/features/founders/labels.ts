@@ -52,7 +52,7 @@ export const EVIDENCE_KIND_LABEL: Record<EvidenceKind, string> = {
   article: "Article",
   funding: "Funding",
   reference: "Reference",
-  call_transcript: "Call transcript",
+  call_transcript: "Conversation",
   filing: "Filing",
   other: "Other",
 };

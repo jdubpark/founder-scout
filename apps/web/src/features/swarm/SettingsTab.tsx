@@ -155,7 +155,7 @@ function ParamRow({
               Save
             </Button>
             {overriddenHere ? (
-              <Button size="sm" variant="quiet" onClick={onReset} disabled={busy}>
+              <Button size="sm" variant="quiet" onClick={() => { onReset(); setEditing(false); }} disabled={busy}>
                 Reset
               </Button>
             ) : null}

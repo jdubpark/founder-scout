@@ -145,7 +145,7 @@ function DailyRunForm({ saved, nextRunAt }: { saved: ScheduleSettings; nextRunAt
       <p className="text-base text-ink-2">
         Next run{" "}
         <span className="figure font-semibold text-ink">
-          {!enabled ? "off" : nextRunAt ? `${dateTime(nextRunAt)}, ${until(nextRunAt)}` : "not scheduled"}
+          {!enabled ? "off" : nextRunAt ? `${dateTime(nextRunAt, saved.timezone)}, ${until(nextRunAt)}` : "not scheduled"}
         </span>
       </p>
 

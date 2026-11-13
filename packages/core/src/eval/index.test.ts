@@ -447,4 +447,16 @@ describe("assess-ranking persistence", () => {
     }
     expect(snapshots[0]).toEqual(snapshots[1]);
   });
+
+  it("stamps the present when no clock is supplied, as on the server", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "agentswarm-eval-clock-"));
+    roots.push(root);
+    const jobs = createJobRegistry();
+    const executeJob = createExecuteJob({ jobs, providers: createProviderRegistry({}) });
+    const service = createEvalService({ store: null, jobs, executeJob, flowsDir: root }, { cohortCount: 4, cohortSize: 8, repetitions: 1 });
+    const before = Date.now();
+    const flow = await service.runRounds("assess-ranking", { rounds: 0 });
+    expect(Date.parse(flow.updatedAt ?? "")).toBeGreaterThanOrEqual(before);
+    expect(flow.variants.map((variant) => Date.parse(variant.createdAt) >= before)).toEqual([true]);
+  });
 });

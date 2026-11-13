@@ -7,9 +7,9 @@ import { Table, TableScroll, Td, Th, Tr } from "../../components/ui/table";
 import { Hint, useToast } from "../../components/ui/overlay";
 import { usd } from "../../lib/format";
 import { usePromoteVariant } from "../../lib/queries";
-import { changeLabel, decisionReason, inUseVariant, roundLabel, score, statusView } from "./variants";
+import { canUseVariant, changeLabel, decisionReason, inUseVariant, roundLabel, score, statusView } from "./variants";
 
-/** Every round with its score, cost and status. A kept round that is not in use gets "Use this". */
+/** Every round with its score, cost and status. A round that was not reverted and is not in use gets "Use this". */
 export function RoundsTable({ flow, swarmId, swarmConfigId }: { flow: EvalFlowDTO; swarmId: string; swarmConfigId: string | null }) {
   const head = flow.headlineMetric;
   const inUse = inUseVariant(flow, swarmConfigId);
@@ -65,7 +65,7 @@ export function RoundsTable({ flow, swarmId, swarmConfigId }: { flow: EvalFlowDT
           {flow.variants.map((v) => {
             const isInUse = v.id === inUse;
             const status = statusView(v, isInUse);
-            const canUse = v.status === "kept" && !isInUse;
+            const canUse = canUseVariant(v, isInUse);
             return (
               <Tr key={v.id} selected={isInUse}>
                 <Td className="whitespace-nowrap font-semibold text-ink">{roundLabel(v)}</Td>

@@ -91,11 +91,18 @@ export function dateLong(iso: string | null | undefined): string {
   return d.toLocaleDateString("en-GB", { weekday: "long", day: "numeric", month: "long" });
 }
 
-export function dateTime(iso: string | null | undefined): string {
+/** A date and time. Pass `timeZone` to show it in a chosen zone instead of the viewer's own. */
+export function dateTime(iso: string | null | undefined, timeZone?: string): string {
   if (!iso) return DASH;
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return DASH;
-  return d.toLocaleString("en-GB", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
+  const options: Intl.DateTimeFormatOptions = { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" };
+  try {
+    return d.toLocaleString("en-GB", timeZone ? { ...options, timeZone } : options);
+  } catch {
+    // An unknown zone name falls back to the viewer's zone rather than breaking the page.
+    return d.toLocaleString("en-GB", options);
+  }
 }
 
 /** "1 lead", "3 leads". */

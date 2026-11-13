@@ -242,7 +242,8 @@ describe("createSwarmService", () => {
     const completed = await api.completeOutreach(action.id, { summary: "Intro call complete", transcript: "Founder described the prototype." });
     expect(completed.status).toBe("completed");
     const evidence = store.listEvidence(founder.id)[0];
-    expect(evidence).toMatchObject({ kind: "call_transcript", source: "call", verification: "unverified", claim: "Call transcript awaiting debrief", excerpt: "Founder described the prototype." });
+    // The action here is an email, so the stored notes must not be called a call transcript.
+    expect(evidence).toMatchObject({ kind: "call_transcript", source: "call", verification: "unverified", title: `Conversation with ${founder.name}`, claim: "Notes a partner wrote after this conversation.", excerpt: "Founder described the prototype." });
     expect(completed.transcriptEvidenceId).toBe(evidence?.id);
   });
 
@@ -342,6 +343,18 @@ describe("createSwarmService", () => {
     expect(store.recentAudit(1)[0]).toMatchObject({ actor: "Partner", action: "eval.promote", target: swarm.id });
   });
 
+  it("counts the eval's winner in the trend and refuses to put a reverted round into use", async () => {
+    const { service, store, setFlow, setVariant } = createHarness();
+    const api = service.as("Partner"); const swarm = await api.createSwarm({ name: "Eval", thesis });
+    const round = (id: string, status: "baseline" | "champion" | "reverted", score: number) => ({ id, round: id === "baseline" ? 0 : Number(id.slice(1)), description: id, rationale: "", status, train: {}, test: { rank: score }, testInterval: null, costUsd: 1, config: { ...BASE_CONFIG, id: `cfg_${id}`, label: id }, changes: [], createdAt: stamp });
+    // The real eval reports its current winner as "champion", never as "kept".
+    setFlow({ id: "ranking", label: "Ranking", description: "test", headlineMetric: "rank", baseline: 0.5, best: 0.6, rounds: 2, updatedAt: stamp, metrics: [], goal: { target: "rank", direction: "higher", hold: [] }, cases: { train: 2, test: 2, reps: 1 }, noiseFloor: null, dataNote: "sim", variants: [round("baseline", "baseline", 0.5), round("v1", "reverted", 0.4), round("v2", "champion", 0.6)], bestVariant: "v2", promotedVariant: null, narrative: "" } satisfies EvalFlowDTO);
+    expect((await api.getOverview(swarm.id)).evalTrend).toEqual([{ variant: "baseline", test: 0.5 }, { variant: "v2", test: 0.6 }]);
+    setVariant({ ...BASE_CONFIG, id: "cfg_v1", label: "v1" });
+    await expectServiceError(api.promoteEvalVariant("ranking", { variant: "v1", swarmId: swarm.id }), 409);
+    expect(store.getSwarm(swarm.id)?.configId).toBe(BASE_CONFIG.id);
+  });
+
   it("starts scheduled runs for eligible swarms and continues after one refusal", async () => {
     const { service, store, refused } = createHarness(); const api = service.as("Partner");
     const first = await api.createSwarm({ name: "First", thesis });
@@ -386,6 +399,8 @@ describe("createSwarmService", () => {
     await api.updateSettings({ killSwitch: true, operatorName: " Casey " });
     ids = new Set((await api.getOverview(swarm.id)).alerts.map((alert) => alert.id));
     expect(ids.has("kill-switch")).toBe(true);
+    // The stop covers eval rounds too: a live round spends money just as a run does.
+    await expectServiceError(api.runEvalRounds("ranking", { rounds: 1 }), 409);
     await api.updateSettings({ killSwitch: false });
 
     setSourceConfigured(false);

@@ -139,7 +139,7 @@ function flowFile(deps: EvalDeps): string {
 }
 
 function currentTime(deps: EvalDeps): string {
-  return (deps.now?.() ?? new Date("1970-01-01T00:00:00.000Z")).toISOString();
+  return (deps.now?.() ?? new Date()).toISOString();
 }
 
 function countBySplit(cases: readonly PartnerCase[], split: PartnerCase["split"]): { yes: number; no: number } {

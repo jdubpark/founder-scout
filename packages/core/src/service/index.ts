@@ -35,7 +35,7 @@ const trimmed = (value: unknown): string => typeof value === "string" ? value.tr
  */
 function refusePersonal(text: string, field: string, what: string): void {
   const personal = findSensitive(text);
-  if (personal.length) fail(400, `${what} cannot refer to personal attributes (${personal.join(", ")}). Describe the work or the company instead.`, { [field]: "Remove the personal attribute." });
+  if (personal.length) fail(400, `${what} cannot refer to personal attributes (${personal.join(", ")}). Describe the work or the company instead.`, { [field]: `Remove the personal detail: ${personal.join(", ")}.` });
 }
 const uniqueText = (values: unknown): string[] => {
   if (!Array.isArray(values)) return [];
@@ -307,7 +307,7 @@ export function createSwarmService(deps: ServiceDeps): SwarmService {
     }
     const alerts: Array<{ id: string; level: "info" | "warning" | "error"; title: string; detail: string; at: string; link: string | null }> = [];
     const alertAt = latestRun?.finishedAt ?? latestRun?.startedAt ?? iso(now());
-    if (settings.killSwitch) alerts.push({ id: "kill-switch", level: "error", title: "Kill switch is on", detail: "New runs and tasks are paused. Turn it off in settings when it is safe to resume.", at: iso(now()), link: "/settings" });
+    if (settings.killSwitch) alerts.push({ id: "kill-switch", level: "error", title: "Emergency stop is on", detail: "No new run, task or eval round starts. Turn it off in Settings when it is safe to resume.", at: iso(now()), link: "/settings" });
     if (latestRun?.status === "failed") alerts.push({ id: `run-failed-${latestRun.id}`, level: "error", title: "Latest run failed", detail: latestRun.error ?? "Review the run details and retry when ready.", at: alertAt, link: `/activity/${latestRun.id}` });
     if (latestRun?.status === "budget_stopped") alerts.push({ id: `run-budget-${latestRun.id}`, level: "warning", title: "Latest run reached its spend cap", detail: "Review the run's spend and raise the cap only if the remaining work is worth it.", at: alertAt, link: `/activity/${latestRun.id}` });
     if (latestRun && latestRun.stats.failures > 0) alerts.push({ id: `run-tasks-${latestRun.id}`, level: "warning", title: "Latest run had failed tasks", detail: `${latestRun.stats.failures} task${latestRun.stats.failures === 1 ? "" : "s"} failed. Review the run details.`, at: alertAt, link: `/activity/${latestRun.id}` });
@@ -327,7 +327,8 @@ export function createSwarmService(deps: ServiceDeps): SwarmService {
       const flows = await deps.evals.listFlows();
       if (flows[0]) {
         const flow = await deps.evals.getFlow(flows[0].id);
-        evalTrend = flow.variants.filter((variant) => variant.status === "baseline" || variant.status === "kept")
+        // The eval reports its current winner as "champion", so the trend must count it as kept.
+        evalTrend = flow.variants.filter((variant) => variant.status !== "reverted")
           .flatMap((variant) => typeof variant.test[flow.headlineMetric] === "number" ? [{ variant: variant.id, test: variant.test[flow.headlineMetric]! }] : []);
       }
     } catch { evalTrend = []; }
@@ -365,7 +366,7 @@ export function createSwarmService(deps: ServiceDeps): SwarmService {
         if (patch.dismissedSuggestions !== undefined && !Array.isArray(patch.dismissedSuggestions)) fail(400, "Choose valid dismissed suggestions.", { dismissedSuggestions: "Choose valid suggestion keys." });
         const current = store.getSettings();
         const next = { ...current, ...patch, schedule: { ...current.schedule, ...patch.schedule }, dismissedSuggestions: patch.dismissedSuggestions ? uniqueText(patch.dismissedSuggestions) : current.dismissedSuggestions };
-        if (patch.killSwitch !== undefined && typeof patch.killSwitch !== "boolean") fail(400, "Choose whether the kill switch is on or off.", { killSwitch: "Choose on or off." });
+        if (patch.killSwitch !== undefined && typeof patch.killSwitch !== "boolean") fail(400, "Choose whether emergency stop is on or off.", { killSwitch: "Choose on or off." });
         if (patch.operatorName !== undefined) {
           next.operatorName = trimmed(patch.operatorName);
           if (next.operatorName.length < 1 || next.operatorName.length > 60) fail(400, "Enter an operator name from 1 to 60 characters.", { operatorName: "Enter an operator name from 1 to 60 characters." });
@@ -613,7 +614,7 @@ export function createSwarmService(deps: ServiceDeps): SwarmService {
         let evidenceId = action.transcriptEvidenceId;
         if (transcript) {
           const evidenceIdNew = newId("evd");
-          const evidence: Evidence = { id: evidenceIdNew, founderId: action.founderId, kind: "call_transcript", source: "call", url: null, title: `${action.kind === "call_reference" ? "Reference" : "Founder"} call transcript`, excerpt: transcript, claim: "Call transcript awaiting debrief", publishedAt: null, capturedAt: iso(now()), collectedByTaskId: null, hash: `transcript:${evidenceIdNew}`, verification: "unverified", verificationNote: null, sim: null };
+          const evidence: Evidence = { id: evidenceIdNew, founderId: action.founderId, kind: "call_transcript", source: "call", url: null, title: `Conversation with ${action.target.name}`, excerpt: transcript, claim: "Notes a partner wrote after this conversation.", publishedAt: null, capturedAt: iso(now()), collectedByTaskId: null, hash: `transcript:${evidenceIdNew}`, verification: "unverified", verificationNote: null, sim: null };
           store.insertEvidence(evidence); evidenceId = evidence.id;
         }
         const updated = store.updateOutreach(id, { status: "completed", resultSummary: summary, transcriptEvidenceId: evidenceId, updatedAt: iso(now()) });
@@ -667,9 +668,16 @@ export function createSwarmService(deps: ServiceDeps): SwarmService {
         const promoted = flow.variants.find((variant) => used.has(variant.config.id));
         return { ...flow, promotedVariant: promoted?.id ?? null, variants: flow.variants.map((variant) => variant.id === promoted?.id ? { ...variant, status: "champion" } : variant) };
       },
-      async runEvalRounds(id, input) { return busyAsConflict(() => deps.evals.runRounds(id, input)); },
+      async runEvalRounds(id, input) {
+        // Emergency stop promises that nothing new starts, and a live eval round spends money like a run does.
+        if (store.getSettings().killSwitch) fail(409, "Emergency stop is on. Turn it off in Settings before running an eval round.");
+        return busyAsConflict(() => deps.evals.runRounds(id, input));
+      },
       async promoteEvalVariant(id, input) {
         const swarm = getSwarm(input.swarmId);
+        // The keep rule is the only way a change earns a place, so a reverted round cannot be put into use by hand.
+        const flow = await busyAsConflict(() => deps.evals.getFlow(id));
+        if (flow.variants.find((variant) => variant.id === input.variant)?.status === "reverted") fail(409, "This round was reverted. Only a round the eval kept can be put into use.");
         const config = await busyAsConflict(() => deps.evals.variantConfig(id, input));
         store.saveConfig(config);
         store.updateSwarm(swarm.id, { configId: config.id, updatedAt: iso(now()) } as never);

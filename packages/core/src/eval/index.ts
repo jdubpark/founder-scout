@@ -198,7 +198,8 @@ export interface CandidateDecision {
   rule: "ranking" | "guardrail" | "reverted";
 }
 
-const fallbackNow = () => new Date(0);
+// With no clock supplied, use the real one. A fixed fallback stamped every round "1970" on the server.
+const fallbackNow = () => new Date();
 const json = (value: unknown) => JSON.stringify(value, null, 2) + "\n";
 const clone = <T>(value: T): T => JSON.parse(JSON.stringify(value)) as T;
 

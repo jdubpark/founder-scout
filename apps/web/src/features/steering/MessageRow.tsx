@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Archive, Pause, Pencil, Play } from "lucide-react";
+import { Archive, ArchiveRestore, Pause, Pencil, Play } from "lucide-react";
 import {
   coerceParam,
   getParamDef,
@@ -77,7 +77,14 @@ export function MessageRow({ row }: { row: DirectiveRow }) {
               <Archive />
             </IconButton>
           </div>
-        ) : null}
+        ) : (
+          // Archive is one click, so it needs a way back.
+          <div className="flex shrink-0 items-start opacity-0 transition-opacity duration-150 group-focus-within:opacity-100 group-hover:opacity-100">
+            <IconButton label="Restore" disabled={update.isPending} onClick={() => change({ status: "active" }, "Not restored")}>
+              <ArchiveRestore />
+            </IconButton>
+          </div>
+        )}
       </div>
 
       {editing && !archived ? <EditMessage row={row} onDone={() => setEditing(false)} /> : null}

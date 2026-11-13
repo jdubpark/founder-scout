@@ -107,8 +107,18 @@ Known limits:
   live runs, run the server under its own user account or in a container.
 - The check for personal attributes is phrase based. It removes explicit statements ("is 42
   years old", "is married") from everything stored, and refuses steering that states one. It
-  does not catch hints. The default bar and the simulated analyst are tuned on simulated founders;
-set the bar from the first week of real runs, with the slider on the Founders page.
+  does not catch hints.
+- The default bar and the simulated analyst are tuned on simulated founders. Set the bar from the
+  first week of real runs, with the slider on the Founders page.
+- The spend cap per task stops a call in progress only for headless Claude. Codex and the API
+  adapters finish the call they are in; the cap per run is checked between calls for all of them.
+- The planted hostile hook proves the Claude repository review cannot be hijacked. The Codex
+  review path has no such test; it relies on the read-only sandbox described above.
+- A scout reads only the newest items each run (40 by default). On a busy day Hacker News and
+  arXiv publish more than that, so raise "Items scanned per scout" on the Swarm page (about 150)
+  for live runs. GitHub returns at most 100 per request.
+- A message sent to a class of agents or to one job from the dashboard applies to the current
+  swarm. Steering a class across every swarm is possible through the API only.
 
 ## Rules the code enforces
 

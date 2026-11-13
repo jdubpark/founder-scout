@@ -1,4 +1,4 @@
-import type { EvalFlowDTO, EvalVariant } from "@agentswarm/shared";
+import { BASE_CONFIG, type EvalFlowDTO, type EvalVariant } from "@agentswarm/shared";
 import type { MarkState } from "../../components/ui/marks";
 
 export type Flow = EvalFlowDTO;
@@ -12,7 +12,15 @@ export function roundLabel(variant: Pick<EvalVariant, "id" | "round">): string {
 /** The round that is running in the swarm now. Promotion wins; otherwise the config the swarm holds. */
 export function inUseVariant(flow: Flow, swarmConfigId: string | null): string | null {
   if (flow.promotedVariant) return flow.promotedVariant;
-  return flow.variants.find((v) => swarmConfigId !== null && v.config.id === swarmConfigId)?.id ?? null;
+  const held = flow.variants.find((v) => swarmConfigId !== null && v.config.id === swarmConfigId)?.id;
+  if (held) return held;
+  // A swarm nobody has changed still runs the starting configuration.
+  return swarmConfigId === BASE_CONFIG.id && flow.variants.some((v) => v.id === "baseline") ? "baseline" : null;
+}
+
+/** Any round the eval did not revert can be put into use, the winner and the start included. */
+export function canUseVariant(v: Pick<EvalVariant, "status">, inUse: boolean): boolean {
+  return v.status !== "reverted" && !inUse;
 }
 
 export function statusView(v: EvalVariant, inUse: boolean): { label: string; mark: MarkState } {

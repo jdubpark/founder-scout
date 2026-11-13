@@ -481,7 +481,7 @@ export function createRunController(deps: EngineDeps): RunController {
   return {
     async start(input) {
       const settings = deps.store.getSettings();
-      if (settings.killSwitch) throw new ServiceError(409, "The kill switch is on. Turn it off before starting a run.");
+      if (settings.killSwitch) throw new ServiceError(409, "Emergency stop is on. Turn it off in Settings before starting a run.");
       const swarm = deps.store.getSwarm(input.swarmId);
       if (!swarm) throw new ServiceError(404, "This swarm does not exist.");
       if (swarm.status === "paused") throw new ServiceError(409, "This swarm is paused. Resume it before starting a run.");
