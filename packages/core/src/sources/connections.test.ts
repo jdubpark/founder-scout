@@ -73,7 +73,17 @@ describe("looksLikeFounder", () => {
     ["VP of Engineering", false],
     [null, false],
     [undefined, false],
-    ["Founder's Office", true],
+    ["Founder in Residence", true],
+    // Working for a founder is not being one.
+    ["Founder's Office", false],
+    ["Founder\u2019s Office", false],
+    ["Founders Office", false],
+    ["Founder Associate", false],
+    ["Office of the Founder", false],
+    ["Chief of Staff to the Founder", false],
+    ["Executive Assistant to the Co-Founders", false],
+    // Someone who was that and now is one still counts.
+    ["Co-founder, formerly Chief of Staff to the Founder", true],
   ])("classifies %s", (position, expected) => {
     expect(looksLikeFounder(position)).toBe(expected);
   });

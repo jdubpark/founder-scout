@@ -151,9 +151,26 @@ export function parseConnectionsCsv(text: string): { contacts: ParsedContact[]; 
   return { contacts, skipped };
 }
 
+/**
+ * Titles for working for a founder, which is not being one: "Founder's Office", "Founder
+ * Associate", "Chief of Staff to the Founder". They are taken out of a title before it is read,
+ * so "Co-founder, formerly Chief of Staff to the Founder" still counts and the rest do not.
+ */
+const FOR_A_FOUNDER = new RegExp(
+  [
+    String.raw`\b(?:co[\s-]?)?founders?(?:['\u2019]s?)?\s+(?:office|associate|assistant)\b`,
+    String.raw`\boffice\s+of\s+the\s+(?:co[\s-]?)?founders?\b`,
+    String.raw`\b(?:to|for)\s+the\s+(?:co[\s-]?)?founders?\b`,
+  ].join("|"),
+  "gi",
+);
+
 export function looksLikeFounder(position: string | null | undefined): boolean {
   if (!position) return false;
-  return /\b(?:co[\s-]?founder|founder|founding|stealth)\b/i.test(position) ||
-    /\bbuilding\s+something\s+new\b/i.test(position) ||
-    /\bworking\s+on\s+something\s+new\b/i.test(position);
+  // A contact wrongly read as a founder becomes a lead about a person from a partner's own
+  // list who started nothing, so the cheap mistakes are ruled out here.
+  const own = position.replace(FOR_A_FOUNDER, " ");
+  return /\b(?:co[\s-]?founder|founder|founding|stealth)\b/i.test(own) ||
+    /\bbuilding\s+something\s+new\b/i.test(own) ||
+    /\bworking\s+on\s+something\s+new\b/i.test(own);
 }
