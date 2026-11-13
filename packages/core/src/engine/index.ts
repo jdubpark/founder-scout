@@ -217,7 +217,7 @@ export function createRunController(deps: EngineDeps): RunController {
       const snapshot = {
         directiveIds: [...agentSteering.directiveIds],
         params: Object.fromEntries(Object.entries(agentSteering.params).map(([key, value]) => [key, value.value])),
-        block: steeringBlockForTask(input.agent, agentSteering),
+        block: [steeringBlockForTask(input.agent, agentSteering), selected?.reason].filter(Boolean).join("\n\n"),
       };
       return makeRecord({
         agentId: input.agent.id,
@@ -289,7 +289,7 @@ export function createRunController(deps: EngineDeps): RunController {
         const snapshot = {
           directiveIds: [...steering.directiveIds],
           params: Object.fromEntries(Object.entries(steering.params).map(([key, value]) => [key, value.value])),
-          block: steeringBlock,
+          block: [steeringBlock, selected.reason].filter(Boolean).join("\n\n"),
         };
         const taskBase = {
           agentId: agent.id,

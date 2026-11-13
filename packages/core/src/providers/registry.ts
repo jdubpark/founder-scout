@@ -10,6 +10,7 @@ import { AnthropicApiProvider } from "./anthropic-api";
 import { ClaudeCliProvider } from "./claude-cli";
 import { CodexCliProvider } from "./codex-cli";
 import { OpenAICompatibleProvider } from "./openai-compatible";
+import { OpenCodeCliProvider } from "./opencode-cli";
 
 /**
  * Simulation is handled before any provider is reached, so asking for it
@@ -33,6 +34,7 @@ export function createProviderRegistry(env: NodeJS.ProcessEnv = process.env): Pr
     ["sim", new SimulationProvider()],
     ["claude-cli", new ClaudeCliProvider({ env })],
     ["codex-cli", new CodexCliProvider({ env })],
+    ["opencode-cli", new OpenCodeCliProvider({ env })],
     ["anthropic-api", new AnthropicApiProvider({ env })],
     ["openai-api", new OpenAICompatibleProvider("openai-api", { env })],
     ["deepseek-api", new OpenAICompatibleProvider("deepseek-api", { env })],

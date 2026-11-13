@@ -158,6 +158,11 @@ describe("pools service functions", () => {
     }), 400, "members");
     expect(invalidProvider.fields.members).toContain("known provider");
 
+    const contributor = expectRefusal(() => setPool(h.deps, "swarm-test", firstJob, {
+      members: [{ id: "contributor", route: route("muse-spark-1.3-contributor", "meta-api"), share: 1 }],
+    }), 400, "members");
+    expect(contributor.message).toContain("Contributor models");
+
     expectRefusal(() => setPool(h.deps, "swarm-test", firstJob, {
       members: [{ id: "alpha", route: route("  "), share: 1 }],
     }), 400, "members");
@@ -188,6 +193,10 @@ describe("pools service functions", () => {
     expect(result.config).toBeNull();
     expect(h.configs.size).toBe(1);
     expect(h.swarm().configId).toBe(config.id);
+
+    const screener = harness({ ...BASE_CONFIG, id: "cfg_screen", pools: { "screen.fit": [member("alpha", 0.5), member("beta", 0.5)] } });
+    const screening = await rebalancePools(screener.deps, "swarm-test", { apply: false });
+    expect(screening.report.pools.find((pool) => pool.jobId === "screen.fit")?.note).toBe("This job is measured on failures and cost only; shares are left as they are.");
   });
 
   it("saves and points the swarm at a rebalanced config when changes are applied", async () => {

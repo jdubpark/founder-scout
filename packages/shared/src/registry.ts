@@ -488,6 +488,13 @@ export const PROVIDERS = [
     note: "Uses the Codex login or OPENAI_API_KEY. Reads repositories in a read-only sandbox.",
   },
   {
+    id: "opencode-cli",
+    vendor: "none",
+    label: "OpenCode (headless)",
+    capabilities: { structured: true, research: false, repoReview: false },
+    note: "Uses the existing OpenCode login. Structured calls have no tools.",
+  },
+  {
     id: "anthropic-api",
     vendor: "anthropic",
     label: "Claude API",

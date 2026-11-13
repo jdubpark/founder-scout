@@ -310,6 +310,8 @@ describe("createSwarmService", () => {
     expect(directive.author).toBe("Jamie Partner");
     expect(store.getDirective(directive.id)?.value).toBe(0.7);
     expect(store.recentAudit(1)[0]).toMatchObject({ actor: "Jamie Partner", action: "directive.create", target: directive.id });
+    await expectServiceError(api.createDirective({ scope: { classId: "screener" }, kind: "param", key: "route.model", value: "muse-spark-1.3-contributor" }), 400, "value");
+    await api.createDirective({ scope: { jobId: "scout.github" }, kind: "param", key: "route.model", value: "muse-spark-1.3-contributor" });
   });
 
   it("merges schedule and autopilot settings, trims inputs and validates their limits", async () => {
@@ -757,7 +759,7 @@ describe("createSwarmService", () => {
     store.insertFeedback({ id: newId("fbk"), founderId: founder.id, author: "Partner", verdict: "yes", reasonTags: ["builder"], note: null, createdAt: stamp });
     const result = await api.getEffectiveSteering({ swarmId: swarm.id, agentId: scout.id });
     expect(result.guidance.map((line) => line.text)).toEqual(["Global guidance", "Scout guidance", "GitHub guidance", "Agent guidance"]);
-    expect(result.callsBlock).toContain("YES: Vector Works: a vector index for robot logs");
+    expect(result.callsBlock).toBe("");
     const investigator = store.listAgents(swarm.id).find((agent) => agent.jobId === "investigate.code")!;
     const detail = await api.getEffectiveSteering({ swarmId: swarm.id, agentId: investigator.id });
     expect(detail.params.find((param) => param.key === "investigate.depth")?.value).toBe("deep");
@@ -777,7 +779,7 @@ describe("createSwarmService", () => {
     expect(store.getFounder(founder.id)?.status).toBe("surfaced");
     expect(Date.parse(store.listFeedback(founder.id)[1]?.createdAt ?? "")).toBeGreaterThan(Date.parse(store.listFeedback(founder.id)[0]?.createdAt ?? ""));
     const scout = store.listAgents(swarm.id).find((agent) => agent.jobId === "scout.github")!;
-    expect((await api.getEffectiveSteering({ swarmId: swarm.id, agentId: scout.id })).callsBlock).toContain("YES: Vector Works");
+    expect((await api.getEffectiveSteering({ swarmId: swarm.id, agentId: scout.id })).callsBlock).toBe("");
     expect(store.recentAudit(1)[0]?.actor).toBe("Decision Maker");
   });
 

@@ -29,7 +29,9 @@ import {
   type ModelRoute,
   type ProviderId,
 } from "./registry";
-import { DEFAULT_MODEL_BY_PROVIDER, DEFAULT_ROUTES } from "./models";
+import { DEFAULT_MODEL_BY_PROVIDER, DEFAULT_ROUTES, isContributorModel } from "./models";
+import { mayUseContributorModel } from "./context";
+import type { ModelJobId } from "./jobio";
 
 export type DirectiveKind = "param" | "rule" | "opinion" | "context";
 export type DirectiveStatus = "active" | "paused" | "archived";
@@ -509,10 +511,18 @@ export function routeForTask(
   resolved: ResolvedSteering,
   config: SwarmConfig,
   key: string,
-): { route: ModelRoute; member: string | null } {
+): { route: ModelRoute; member: string | null; reason?: string } {
   const pinned = resolved.params["route.provider"] !== undefined || resolved.params["route.model"] !== undefined;
   const member = pinned ? null : pickMember(config.pools?.[jobId], key);
-  if (!member) return { route: effectiveRoute(jobId, resolved, config), member: null };
+  const route = member ? { ...member.route } : effectiveRoute(jobId, resolved, config);
+  if (isContributorModel(route.model) && !mayUseContributorModel(jobId as ModelJobId)) {
+    return {
+      route: { ...DEFAULT_ROUTES[jobId] },
+      member: null,
+      reason: "Contributor model blocked because this job reads private material or partner calls; using the job's default model.",
+    };
+  }
+  if (!member) return { route, member: null };
   const effort = resolved.params["route.effort"]?.value as Effort | undefined;
-  return { route: effort ? { ...member.route, effort } : { ...member.route }, member: member.id };
+  return { route: effort ? { ...route, effort } : route, member: member.id };
 }

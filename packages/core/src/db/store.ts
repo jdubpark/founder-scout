@@ -1079,15 +1079,15 @@ export class SqliteStore implements Store {
   }
 
   memberStats(swarmId: string, jobId: TaskRun["jobId"], sinceIso: string): MemberStats[] {
-    const huntJob = jobId === "hunt.look";
-    const itemTable = huntJob
+    const leadJob = jobId === "hunt.look" || jobId.startsWith("scout.");
+    const itemTable = leadJob
       ? `leads item ON json_extract(item.record, '$.discoveredByTaskId') = filtered_tasks.id
          LEFT JOIN founders attached ON attached.id = item.founder_id`
       : `evidence item ON json_extract(item.record, '$.collectedByTaskId') = filtered_tasks.id`;
-    const supported = huntJob
+    const supported = leadJob
       ? "attached.status NOT IN ('lead', 'screened_out')"
       : "item.verification = 'supported'";
-    const rejected = huntJob ? "attached.status = 'screened_out'" : "item.verification = 'unsupported'";
+    const rejected = leadJob ? "attached.status = 'screened_out'" : "item.verification = 'unsupported'";
     const rows = this.db.prepare(`
       WITH filtered_tasks AS (
         SELECT id, COALESCE(pool_member, '') AS member_id, status, cost_usd,

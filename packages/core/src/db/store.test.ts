@@ -468,18 +468,22 @@ describe("SQLite store", () => {
   it("aggregates member tasks and their evidence within the requested swarm, job and start window", () => {
     const store = openStore(":memory:");
     store.insertTask(task("tsk_haiku_fail", {
+      jobId: "investigate.background", classId: "investigator", stage: "investigate",
       poolMember: "haiku", status: "failed", costUsd: null, control: "failed",
       startedAt: "2026-01-04T00:00:00.000Z",
     }));
     store.insertTask(task("tsk_haiku_ok", {
+      jobId: "investigate.background", classId: "investigator", stage: "investigate",
       poolMember: "haiku", costUsd: 0.3, control: null,
       startedAt: "2026-01-05T00:00:00.000Z",
     }));
     store.insertTask(task("tsk_sonnet", {
+      jobId: "investigate.background", classId: "investigator", stage: "investigate",
       poolMember: "sonnet", costUsd: 0.2, control: "passed",
       startedAt: "2026-01-04T00:00:00.000Z",
     }));
     store.insertTask(task("tsk_no_member", {
+      jobId: "investigate.background", classId: "investigator", stage: "investigate",
       costUsd: null, startedAt: "2026-01-04T00:00:00.000Z",
     }));
 
@@ -499,10 +503,23 @@ describe("SQLite store", () => {
       poolMember: "haiku", swarmId: "swm_2", startedAt: "2026-01-04T00:00:00.000Z", costUsd: 6,
     }));
 
-    expect(store.memberStats("swm_1", "scout.github", "2026-01-04T00:00:00.000Z")).toEqual([
+    expect(store.memberStats("swm_1", "investigate.background", "2026-01-04T00:00:00.000Z")).toEqual([
       { memberId: "", tasks: 1, failed: 0, costUsd: 0, items: 0, supported: 0, rejected: 0, controls: 0, controlsFailed: 0 },
       { memberId: "haiku", tasks: 2, failed: 1, costUsd: 0.3, items: 3, supported: 1, rejected: 1, controls: 1, controlsFailed: 1 },
       { memberId: "sonnet", tasks: 1, failed: 0, costUsd: 0.2, items: 2, supported: 0, rejected: 1, controls: 1, controlsFailed: 0 },
+    ]);
+    store.close();
+  });
+
+  it("counts scout leads by later fit-screen outcomes", () => {
+    const store = openStore(":memory:");
+    store.insertTask(task("tsk_scout", { poolMember: "muse", startedAt: "2026-01-04T00:00:00.000Z" }));
+    store.insertFounder(founder("fnd_kept", { status: "queued" }));
+    store.insertFounder(founder("fnd_dropped", { status: "screened_out" }));
+    store.insertLead(lead("lead_kept", "2026-01-04T00:00:00.000Z", { founderId: "fnd_kept", discoveredByTaskId: "tsk_scout" }));
+    store.insertLead(lead("lead_dropped", "2026-01-04T00:00:00.000Z", { founderId: "fnd_dropped", discoveredByTaskId: "tsk_scout" }));
+    expect(store.memberStats("swm_1", "scout.github", "2026-01-04T00:00:00.000Z")).toEqual([
+      { memberId: "muse", tasks: 1, failed: 0, costUsd: 0.1, items: 2, supported: 1, rejected: 1, controls: 0, controlsFailed: 0 },
     ]);
     store.close();
   });

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   BASE_CONFIG,
+  EMPTY_STEERING,
   effectiveParam,
   effectiveRoute,
   overlayConfig,
@@ -253,6 +254,17 @@ describe("effective values", () => {
     expect(routeForTask("scout.github", effortOnly, pooled, "k")).toEqual({
       route: { provider: "claude-cli", model: "claude-haiku-5-5", effort: "high" },
       member: "haiku",
+    });
+  });
+
+  it("falls back from a contributor pool member when the job reads private material", () => {
+    const configWithContributor: SwarmConfig = {
+      ...config,
+      pools: { "investigate.background": [{ id: "contributor", route: { provider: "meta-api", model: "muse-spark-1.3-contributor" }, share: 1, status: "active", note: null }] },
+    };
+    expect(routeForTask("investigate.background", EMPTY_STEERING, configWithContributor, "person")).toEqual({
+      route: DEFAULT_ROUTES["investigate.background"], member: null,
+      reason: expect.stringContaining("Contributor model blocked"),
     });
   });
 });

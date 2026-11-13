@@ -1,8 +1,17 @@
 import { describe, expect, it } from "vitest";
-import { CONTEXT_POOLS, CROSSINGS, JOB_INPUT_POOLS, crossingsOf, poolsReadBy } from "./context";
+import { CONTEXT_POOLS, CROSSINGS, JOB_INPUT_POOLS, crossingsOf, mayUseContributorModel, poolsReadBy } from "./context";
 import { MODEL_JOB_IDS } from "./jobio";
 
 describe("pools of context", () => {
+  it("allows contributor models only for public inputs and fund instructions without partner calls", () => {
+    const cases = [
+      ["scout.github", true], ["hunt.look", true], ["hunt.sift", true],
+      ["screen.fit", false], ["investigate.company", false], ["investigate.media", false],
+      ["call.debrief", false], ["assess.judgments", false],
+    ] as const;
+    for (const [job, allowed] of cases) expect(mayUseContributorModel(job), job).toBe(allowed);
+  });
+
   it("never lets a job read a sealed pool", () => {
     const sealed = CONTEXT_POOLS.filter((pool) => pool.sealed).map((pool) => pool.id);
     expect(sealed).toEqual(["network", "truth"]);
@@ -21,7 +30,7 @@ describe("pools of context", () => {
   it("hands a score to the memo writer only, and partner calls only to the classes that are shown them", () => {
     expect(MODEL_JOB_IDS.filter((job) => poolsReadBy(job).includes("decision"))).toEqual(["assess.memo"]);
     expect(poolsReadBy("verify.claims")).not.toContain("calls");
-    expect(poolsReadBy("scout.github")).toContain("calls");
+    expect(poolsReadBy("scout.github")).not.toContain("calls");
   });
 
   it("lets the fact-checker read the items under check and nothing else about the subject", () => {

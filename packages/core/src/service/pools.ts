@@ -7,6 +7,8 @@ import {
   PROVIDERS,
   effectiveRoute,
   getModel,
+  isContributorModel,
+  mayUseContributorModel,
   DEFAULT_REBALANCE,
   memberYield,
   poolProblems,
@@ -145,6 +147,10 @@ export function setPool(deps: PoolsDeps, swarmId: string, jobId: string, input: 
     const message = "Choose a known provider and a model name up to 100 characters.";
     throw new ServiceError(400, message, { members: message });
   }
+  if (input.members.some((member) => isContributorModel(member.route.model) && !mayUseContributorModel(jobId as ModelJobId))) {
+    const message = "Contributor models may only be used for jobs that read public material and the fund's own instructions, without partner calls.";
+    throw new ServiceError(400, message, { members: message });
+  }
 
   const current = swarmConfig(deps, swarm.configId);
   const pools = copyPools(current.pools);
@@ -173,7 +179,10 @@ export async function rebalancePools(
     const members = effective.pools?.[job.id];
     if (!members) continue;
     const result = rebalance(members, deps.store.memberStats(swarmId, job.id, since), DEFAULT_REBALANCE, producesEvidence(job.id));
-    changes.push({ jobId: job.id, label: job.label, changes: result.changes, note: result.note });
+    const note = job.id === "screen.fit"
+      ? "This job is measured on failures and cost only; shares are left as they are."
+      : result.note;
+    changes.push({ jobId: job.id, label: job.label, changes: result.changes, note });
     if (JSON.stringify(result.members) !== JSON.stringify(members)) {
       changed = true;
       // Rebalanced defaults become an explicit config choice for this job only.

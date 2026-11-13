@@ -27,6 +27,7 @@ export interface DoctorOptions {
 export const PROBE_MODEL: Partial<Record<ProviderId, string>> = {
   "claude-cli": "claude-haiku-5-5",
   "codex-cli": "gpt-6-luna",
+  "opencode-cli": "deepseek/deepseek-flash",
   "anthropic-api": "claude-haiku-5-5",
   "openai-api": "gpt-6-luna",
   "deepseek-api": "deepseek-flash",

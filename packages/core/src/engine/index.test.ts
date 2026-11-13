@@ -537,6 +537,19 @@ describe("run engine", () => {
     const unpooledRun = await unpooled.controller.wait(unpooledStart.id);
     const unpooledTask = unpooled.store.listTasks({ runId: unpooledRun.id }).find((task) => task.jobId === "investigate.background");
     expect(unpooledTask).toMatchObject({ founderId: unpooledFounder.id, poolMember: null });
+
+    const unsafe = makeHarness({
+      simWorld: world,
+      agentJobs: ["investigate.background"],
+      config: { pools: { "investigate.background": [{ id: "contributor", route: { provider: "meta-api", model: "muse-spark-1.3-contributor" }, share: 1, status: "active", note: null }] } },
+    });
+    const unsafeFounder = makeFounder(world.founders()[10]!, "fnd_contributor_fallback", { status: "queued" });
+    unsafe.store.insertFounder(unsafeFounder);
+    const unsafeStart = await unsafe.controller.start({ swarmId: SWARM_ID, trigger: "manual", brain: "sim", sources: "live" });
+    const unsafeRun = await unsafe.controller.wait(unsafeStart.id);
+    const unsafeTask = unsafe.store.listTasks({ runId: unsafeRun.id }).find((task) => task.jobId === "investigate.background");
+    expect(unsafeTask).toMatchObject({ model: "claude-sonnet-5-5", poolMember: null });
+    expect(unsafeTask?.steering.block).toContain("Contributor model blocked");
   });
 
   it("advances a deterministic simulated timeline and matches cross-source identities without merging homonyms", async () => {
@@ -1272,7 +1285,7 @@ describe("run engine", () => {
 
     expect(scout).toBeDefined();
     expect(investigator).toBeDefined();
-    expect(scout!.steering.block).toContain(calls);
+    expect(scout!.steering.block).not.toContain(calls);
     expect(scout!.steering.block).not.toContain("NO: ");
     expect(investigator!.steering.block).not.toContain("Recent calls by the partners");
     expect(harness.providerCallCount()).toBe(0);

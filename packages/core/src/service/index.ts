@@ -1,7 +1,7 @@
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
-  AGENT_CLASSES, BASE_CONFIG, JOBS, SOURCES, STAGES, runnerPools,
+  AGENT_CLASSES, BASE_CONFIG, JOBS, MODEL_JOB_IDS, SOURCES, STAGES, isContributorModel, mayUseContributorModel, runnerPools,
   buildEffectiveSteering, coerceParam, effectiveRoute, getParamDef, isClassId, isCompanyReasonFor, isJobId,
   isNeverFetchUrl, isReasonFor, newId, normalizeCompanyName, normalizeRoundLabel, normalizeScope, overlayConfig, paramsFor, scopeLabel, stageLabel,
   scopeLevel, stableId, suggestSteering, suggestionTextKey, summarizeCalls, swarmIdentity,
@@ -36,6 +36,21 @@ function fail(status: number, message: string, fields: Record<string, string> = 
   throw new ServiceError(status, message, fields);
 }
 const trimmed = (value: unknown): string => typeof value === "string" ? value.trim() : "";
+function contributorRouteProblem(scope: Directive["scope"], model: unknown, store: Store): string | null {
+  if (typeof model !== "string" || !isContributorModel(model)) return null;
+  let jobs = [...MODEL_JOB_IDS];
+  if (scope.jobId) jobs = jobs.filter((job) => job === scope.jobId);
+  else if (scope.agentId) {
+    const agent = store.getAgent(scope.agentId);
+    jobs = jobs.filter((job) => job === agent?.jobId);
+  } else if (scope.classId) {
+    jobs = JOBS.filter((job) => job.classId === scope.classId && (MODEL_JOB_IDS as readonly string[]).includes(job.id)).map((job) => job.id as typeof MODEL_JOB_IDS[number]);
+  }
+  if (jobs.some((job) => !mayUseContributorModel(job))) {
+    return "Contributor models may only be pinned for jobs that read public material and the fund's own instructions, without partner calls.";
+  }
+  return null;
+}
 /**
  * Text that tells the swarm what to look for (a thesis, a focus area, steering) is refused when
  * it states a personal attribute, because the swarm must never select on one.
@@ -643,6 +658,8 @@ export function createSwarmService(deps: ServiceDeps): SwarmService {
           if (!paramsFor(identity).some((def) => def.key === key)) fail(400, "That setting has no effect at this scope. Choose a setting used by this scope.", { key: "That setting has no effect at this scope." });
           const checked = coerceParam(key, input.value);
           if (!checked.ok) fail(400, checked.error, { value: checked.error });
+          const contributorProblem = key === "route.model" ? contributorRouteProblem(scope, checked.value, store) : null;
+          if (contributorProblem) fail(400, contributorProblem, { value: contributorProblem });
           value = checked.value;
         } else {
           text = trimmed(input.text);
@@ -666,6 +683,8 @@ export function createSwarmService(deps: ServiceDeps): SwarmService {
           if (current.kind !== "param" || !current.key) fail(400, "Only parameter directives have a value.", { value: "This directive has no parameter value." });
           const checked = coerceParam(current.key, patch.value);
           if (!checked.ok) fail(400, checked.error, { value: checked.error });
+          const contributorProblem = current.key === "route.model" ? contributorRouteProblem(current.scope, checked.value, store) : null;
+          if (contributorProblem) fail(400, contributorProblem, { value: contributorProblem });
           change.value = checked.value;
         }
         if (patch.text !== undefined) {

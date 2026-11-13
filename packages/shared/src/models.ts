@@ -18,6 +18,8 @@ export interface ModelInfo {
   outputPerMTok: number | null;
   cachedInputPerMTok: number | null;
   note?: string;
+  /** The vendor may train on prompts and outputs sent to this model. */
+  trainsOnInputs?: boolean;
 }
 
 export const MODELS: readonly ModelInfo[] = [
@@ -136,6 +138,17 @@ export const MODELS: readonly ModelInfo[] = [
     note: "Standard tier. Never use the cheaper contributor tier, which lets Meta use the data.",
   },
   {
+    id: "muse-spark-1.3-contributor",
+    vendor: "meta",
+    label: "Muse Spark 1.3 Contributor",
+    tier: "mid",
+    inputPerMTok: null,
+    outputPerMTok: null,
+    cachedInputPerMTok: null,
+    note: "Meta may train on prompts and outputs sent to this model.",
+    trainsOnInputs: true,
+  },
+  {
     id: "muse-wonder-1.0",
     vendor: "meta",
     label: "Muse Wonder",
@@ -150,6 +163,10 @@ const MODEL_BY_ID = new Map(MODELS.map((m) => [m.id, m]));
 
 export function getModel(id: string): ModelInfo | undefined {
   return MODEL_BY_ID.get(id);
+}
+
+export function isContributorModel(id: string): boolean {
+  return id.endsWith("-contributor");
 }
 
 export interface Usage {
@@ -192,6 +209,7 @@ export const DEFAULT_MODEL_BY_PROVIDER: Record<ProviderId, string> = {
   sim: "sim",
   "claude-cli": "claude-sonnet-5-5",
   "codex-cli": "gpt-6-luna",
+  "opencode-cli": "deepseek/deepseek-flash",
   "anthropic-api": "claude-sonnet-5-5",
   "openai-api": "gpt-6.1-sol",
   "deepseek-api": "deepseek-flash",
@@ -243,11 +261,8 @@ export const DEFAULT_ROUTES: Record<JobId, ModelRoute> = {
 };
 
 /**
- * The models a runner job is shared between when their keys are present: one small model
- * from DeepSeek and one from Meta, through their direct APIs, because a runner call has to
- * come back in a second or two and a headless agent takes several to start. Neither is
- * chosen here. Both are given the same share, and code then moves share toward the one whose
- * work holds up (see pools.ts). Only members whose provider is configured are used.
+ * The small DeepSeek and Meta models used by default pools. Direct APIs are preferred over
+ * OpenCode when both are ready; pools.ts assigns shares and includes scout and screener jobs.
  */
 export const RUNNER_POOL: ReadonlyArray<{ id: string; route: ModelRoute }> = [
   { id: "deepseek-flash", route: { provider: "deepseek-api", model: "deepseek-flash" } },

@@ -17,7 +17,8 @@
  *    again, and a change is small enough to undo.
  */
 
-import { RUNNER_JOBS, RUNNER_POOL } from "./models";
+import { DEFAULT_ROUTES, RUNNER_JOBS, RUNNER_POOL } from "./models";
+import { mayUseContributorModel } from "./context";
 import type { JobId, ModelRoute, ProviderId } from "./registry";
 import { textSeed } from "./stats";
 
@@ -289,7 +290,7 @@ export function rebalance(
  * something to balance its pool on.
  */
 export function producesEvidence(jobId: JobId): boolean {
-  return jobId.startsWith("investigate.") || jobId.startsWith("company.") || jobId === "hunt.look";
+  return jobId.startsWith("investigate.") || jobId.startsWith("company.") || jobId === "hunt.look" || jobId.startsWith("scout.");
 }
 
 /** Problems with a pool a person entered, as sentences. Empty when it can be used. */
@@ -308,13 +309,24 @@ export function poolProblems(members: readonly PoolMember[]): string[] {
 }
 
 /**
- * The pools a runner job gets when its config names none: the runner models whose provider
- * is ready, in equal shares. With one ready there is a pool of one, so runners use the fast
- * direct API and not the slower default route. With none there is no pool, and the job keeps
- * its ordinary route.
+ * Default pools for runners, scouts and screening. Runners split work equally across ready
+ * DeepSeek and Meta routes. Scouts and screening get their normal route half the time, and
+ * DeepSeek and Meta a quarter each, when both vendors are reachable. Direct APIs win over
+ * OpenCode for each vendor.
  */
 export function runnerPools(ready: (provider: ProviderId) => boolean): Pools {
-  const usable = RUNNER_POOL.filter((member) => ready(member.route.provider));
+  const usable = RUNNER_POOL.map((member) => {
+    const apiProvider = member.route.provider;
+    const cliModel = apiProvider === "deepseek-api" ? "deepseek/deepseek-flash" : "meta/muse-ember-1.0";
+    const cliId = apiProvider === "deepseek-api" ? "deepseek-flash-opencode" : "muse-ember-opencode";
+    if (ready(apiProvider)) return member;
+    return ready("opencode-cli") ? { id: cliId, route: { provider: "opencode-cli" as const, model: cliModel } } : null;
+  }).filter((member): member is { id: string; route: ModelRoute } => member !== null);
+  const memberVendor = (member: { route: ModelRoute }) => member.route.provider === "deepseek-api" || member.route.model.startsWith("deepseek/")
+    ? "deepseek"
+    : member.route.provider === "meta-api" || member.route.model.startsWith("meta/") ? "meta" : member.route.provider;
+  const availableVendors = new Set(usable.map(memberVendor));
+  const bothVendors = availableVendors.has("deepseek") && availableVendors.has("meta");
   if (usable.length === 0) return {};
   const share = Math.round((1 / usable.length) * 1000) / 1000;
   const pools: Pools = {};
@@ -328,11 +340,31 @@ export function runnerPools(ready: (provider: ProviderId) => boolean): Pools {
       note: null,
     }));
   }
+  // Scouts and fit screening compare today's default with the two cheap vendors.
+  if (bothVendors) {
+    const scouts = ["scout.hackernews", "scout.github", "scout.research", "scout.talent", "screen.fit"] as const;
+    const byVendor = new Map(usable.map((member) => [memberVendor(member), member]));
+    const deepseek = byVendor.get("deepseek");
+    const meta = byVendor.get("meta");
+    if (deepseek && meta) for (const job of scouts) {
+      pools[job] = [
+        { id: "default", route: { ...DEFAULT_ROUTES[job] }, share: 0.5, status: "active", note: null },
+        { ...deepseek, route: { ...deepseek.route }, share: 0.25, status: "active", note: null },
+        { ...meta, id: "muse-ember", route: { ...meta.route }, share: 0.25, status: "active", note: null },
+      ];
+    }
+  }
   return pools;
 }
 
 /** A config's pools with defaults behind them: a pool the config names always wins. */
-export function withDefaultPools<T extends { pools?: Pools }>(config: T, defaults: Pools): T {
+export function withDefaultPools<T extends { pools?: Pools; routes?: Partial<Record<JobId, ModelRoute>> }>(config: T, defaults: Pools): T {
   const merged: Pools = { ...defaults, ...(config.pools ?? {}) };
+  for (const job of ["scout.hackernews", "scout.github", "scout.research", "scout.talent", "screen.fit"] as const) {
+    if (config.pools?.[job]) continue;
+    const route = config.routes?.[job];
+    if (!route) continue;
+    merged[job] = (merged[job] ?? []).map((member) => member.id === "default" ? { ...member, route: { ...route } } : member);
+  }
   return Object.keys(merged).length === 0 ? config : { ...config, pools: merged };
 }

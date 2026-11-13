@@ -124,6 +124,12 @@ export function poolsReadBy(jobId: ModelJobId): PoolId[] {
   return CONTEXT_POOLS.map((pool) => pool.id).filter((id) => read.has(id));
 }
 
+/** Contributor models may see only public material and the fund's own instructions. */
+export function mayUseContributorModel(jobId: ModelJobId): boolean {
+  const allowed = new Set<PoolId>(["objective", "steering", "lessons", "sources", "hunt", "lead"]);
+  return poolsReadBy(jobId).every((pool) => allowed.has(pool));
+}
+
 export interface Crossing {
   from: PoolId;
   to: PoolId;
