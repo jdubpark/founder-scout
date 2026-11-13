@@ -25,10 +25,12 @@ const MAX_SEARCH_BYTES = 2_000_000;
  * would otherwise hold a wave open for as long as it liked. null for anything but a complete
  * JSON answer within both limits.
  */
-async function boundedJson(fetchFn: FetchFn, url: string, headers: Record<string, string>, options: { timeoutMs?: number; signal?: AbortSignal }): Promise<unknown | null> {
+export async function boundedJson(fetchFn: FetchFn, url: string, headers: Record<string, string>, options: { timeoutMs?: number; signal?: AbortSignal; method?: "GET" | "POST"; body?: string }): Promise<unknown | null> {
   const deadline = AbortSignal.timeout(options.timeoutMs ?? SEARCH_TIMEOUT_MS);
   const signal = options.signal ? AbortSignal.any([deadline, options.signal]) : deadline;
-  const response = await fetchFn(url, { method: "GET", headers, signal });
+  const init: RequestInit = { method: options.method ?? "GET", headers, signal };
+  if (options.body !== undefined) init.body = options.body;
+  const response = await fetchFn(url, init);
   if (!response.ok || !response.body) return null;
   const reader = response.body.getReader();
   const chunks: Uint8Array[] = [];

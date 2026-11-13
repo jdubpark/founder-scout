@@ -33,6 +33,16 @@ describe("sites whose terms bar automated reading", () => {
     for (const entry of TERMS_BARRED_HOSTS) expect(entry.why.length, entry.host).toBeGreaterThan(20);
   });
 
+  it.each([
+    { host: "youtube.com", probe: "www.youtube.com" },
+    { host: "youtu.be", probe: "youtu.be" },
+    { host: "vimeo.com", probe: "player.vimeo.com" },
+    { host: "spotify.com", probe: "open.spotify.com" },
+  ])("bars automated reading on $host", ({ host, probe }) => {
+    expect(termsBar(probe)?.host).toBe(host);
+    expect(termsBar(probe)?.why).toContain("automated");
+  });
+
   it("leaves Hacker News readable, because it is read through its public API", () => {
     expect(termsBar("www.ycombinator.com")).not.toBeNull();
     expect(termsBar("news.ycombinator.com")).toBeNull();

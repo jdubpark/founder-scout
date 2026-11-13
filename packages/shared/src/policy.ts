@@ -60,6 +60,10 @@ export const TERMS_BARRED_HOSTS: ReadonlyArray<{ host: string; except?: readonly
   { host: "producthunt.com", why: "Its API may not be used for a business without permission." },
   { host: "x.com", why: "Reading at scale is through a paid API with limits on what may be collected." },
   { host: "twitter.com", why: "Reading at scale is through a paid API with limits on what may be collected." },
+  { host: "youtube.com", why: "Its terms prohibit automated access except for public search engines following robots.txt or with prior written permission." },
+  { host: "youtu.be", why: "Its terms prohibit automated access except for public search engines following robots.txt or with prior written permission." },
+  { host: "vimeo.com", why: "Its terms prohibit automated access except through its API, a public search engine following robots.txt, or prior written permission." },
+  { host: "spotify.com", why: "Its guidelines prohibit automated crawling, scraping, or other collection of service and content information." },
 ];
 
 const sameOrUnder = (host: string, parent: string) => host === parent || host.endsWith(`.${parent}`);

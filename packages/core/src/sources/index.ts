@@ -24,6 +24,7 @@ export { createQuoteChecker } from "./quote-check";
 export { createWebReader, type WebReaderOptions } from "./web";
 export { createGitHubSearchEngine, createHnSearchEngine, createHuggingFaceSearchEngine, type SearchOptions } from "./search";
 export { createModelSearchEngine } from "./search";
+export { createLinkupSearchEngine } from "./search-linkup";
 export { looksLikeFounder, parseConnectionsCsv, type ParsedContact } from "./connections";
 export { sanitizeCheckout, type SanitizeResult } from "./sanitize";
 export { parseRepoUrl, parseGitHubLogin, type RepoFinderOptions } from "./repo-finder";
