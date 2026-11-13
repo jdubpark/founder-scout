@@ -743,8 +743,10 @@ The last of the four ran on the code as it is after both reviews.
 **What is not built.** A general web search engine. Every search service read has a price and
 terms: Perplexity's search API is $1 for a thousand fast queries, Exa $4, Brave $5; Brave and
 Kagi forbid keeping results, which a queue of addresses does, and the terms of the others could
-not be read. Choosing one is a contract, so it is left to the owner (section 17); until then the
-engines are Hacker News and GitHub search, and a page a person or the navigator names. Scraping
+not be read. Those prices and terms were gathered through a tool that summarises a page, so
+they are a starting point and must be read on the vendor's own page before anything is signed.
+Choosing one is a contract, so it is left to the owner (section 17); until then the engines are
+Hacker News, GitHub and Hugging Face search, and a page a person or the navigator names. Scraping
 a search engine is not an option: Google sued a company for it in December 2025. There is no
 eval flow for the hunt yet: its measure is each trail's and each model's yield on the Hunt page.
 An outside long-horizon agent cannot yet drive the hunt through the API in place of the built-in

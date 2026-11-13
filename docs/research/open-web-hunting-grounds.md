@@ -73,6 +73,8 @@ Status key: **free** = usable without a key; **key** = usable with a free key; *
 
 Prices as stated on each vendor's page on 2026-11-13. "Storage" is what the quoted terms allow; blank means the terms did not address it or I could not read them (see Unverified).
 
+Caution on this table: unlike the rest of this note, its prices and terms were gathered by a second agent whose page-fetching tool returns a summary of a page, not the page. A quoted sentence here may be a paraphrase. Read the vendor's own pricing and terms pages before choosing or signing anything.
+
 | API | Price per 1,000 queries | Free tier | Rate limit | Store and show? | Returns |
 |---|---|---|---|---|---|
 | Brave Search API | $5 (Search); Answers $4 plus $5 per million tokens | $5 of credit per month (header says "Up to $20" and the plan text says $5; not reconciled) | 50 queries per second (Answers 2) | Terms of Service 3(b)(i) bars you to "store, cache, or create a database of Search Results, in whole or in part", except "transient storage required for operation of Customer Applications". 3(a)(ii) licenses use "with the Customer Applications". Storage rights need a custom plan. 4(c) requires conspicuous attribution. 3(b)(xiii) bars training or fine-tuning AI models. | Links and snippets; an LLM Context endpoint returns content of about 1k to 33k tokens |

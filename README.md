@@ -317,7 +317,9 @@ Known limits:
   founders found elsewhere is unknown.
 - The hunt has no general web search. Its engines are Hacker News, GitHub and Hugging Face
   search, the links on pages it reads, and any page a person or the navigator names. A web
-  search service is a contract with terms on keeping results; choosing one is yours.
+  search service is a contract with terms on keeping results; choosing one is yours. The
+  prices and terms in `docs/research/open-web-hunting-grounds.md` were gathered through a tool
+  that summarises pages: read the vendor's own page before signing.
 - The hunt's too-late rule reads a page that is about one company. A page that lists several
   companies names people without saying how far along each is, and they go on to the fit
   screen. A person shown only as a handle is not kept; the runner follows the profile link.
