@@ -27,6 +27,8 @@ const EMPTY_PROFILE: CompanyProfileUpdate = {
   oneLiner: null,
   missionText: null,
   missionUrl: null,
+  taglineText: null,
+  taglineUrl: null,
   sector: null,
   stage: null,
   github: null,
@@ -46,7 +48,7 @@ const FOCUS: Record<Exclude<CompanyJobId, "assess.company">, string> = {
 
 export function companySystemRules(id: CompanyJobId): string {
   if (id === "assess.company") {
-    return "\nAnswer each company rubric question from the supplied verified evidence. Give a level from 0 to 4 or null when the evidence does not settle it, confidence, rationale, and evidence IDs. Partner notes are context for questions, not evidence. Write a plain, non-promotional summary of at most about 80 words. Every strength and risk must cite supplied evidence IDs. Never return a score, ranking, or decision.";
+    return "\nAnswer each company rubric question from the supplied verified evidence. Give a level from 0 to 4 or null when the evidence does not settle it, confidence, rationale, and evidence IDs. Partner notes are context for questions, not evidence. Write a plain, non-promotional summary of at most about 80 words. Every strength, risk, and moat must cite supplied evidence IDs. Give one sentence on what would make the company hard to copy, or null when verified evidence shows no moat. Never return a score, ranking, or decision.";
   }
   const rules = [
     "Every evidence item needs a facet, source address, and excerpt copied word for word from that page. Do not paraphrase or tidy excerpts. Quote at least one full sentence, because a few words cannot be checked. To skip words between passages, put \" ... \" between them. Code discards an excerpt whose words are not on the cited page.",
@@ -63,7 +65,7 @@ export function companySystemRules(id: CompanyJobId): string {
     rules.push("Return only professional details. For each team member include their name, role, founder status, one line of relevant earlier work, and the page that lists them.");
   }
   if (id === "company.product") {
-    rules.push("Copy the company's own mission exactly into profile.missionText, give its page in profile.missionUrl, and return it as evidence with facet mission. Check what has shipped and whether outsiders can use it, alternatives and other teams working on the problem, and the stated roadmap.");
+    rules.push("Copy the company's own mission exactly into profile.missionText and tagline exactly into profile.taglineText, with each page address in its matching URL field. Never paraphrase either line. Return the mission as evidence with facet mission. Check what has shipped and whether outsiders can use it, alternatives and other teams working on the problem, and the stated roadmap.");
   }
   return "\n" + rules.join(" ");
 }
@@ -76,7 +78,7 @@ export function buildCompanyPrompt(
   if (id === "assess.company") {
     const value = input as CompanyAssessInput;
     const prompt = [
-      "Task: assess the company against every rubric dimension. Answer each question independently from verified evidence, cite supplied evidence IDs, and use null when unsettled. Partner notes are context only and cannot support an answer. Add a plain summary of the company and its current position in at most about 80 words, plus sourced strengths, risks, and open questions. Do not return any score, ranking, or decision.",
+      "Task: assess the company against every rubric dimension. Answer each question independently from verified evidence, cite supplied evidence IDs, and use null when unsettled. Partner notes are context only and cannot support an answer. Add a plain summary of the company and its current position in at most about 80 words, sourced strengths and risks, one cited sentence on what may make it hard to copy or null when evidence shows no moat, and open questions. Do not return any score, ranking, or decision.",
       safeTag("investment_thesis", renderThesis(value.thesis)),
       safeTag("company", explicitJson({
         id: value.company.id,
@@ -84,6 +86,7 @@ export function buildCompanyPrompt(
         url: value.company.url,
         oneLiner: value.company.oneLiner,
         mission: value.company.mission,
+        tagline: value.company.tagline,
         sector: value.company.sector,
         stage: value.company.stage,
         links: value.company.links,
@@ -116,6 +119,7 @@ export function buildCompanyPrompt(
       url: value.company.url,
       oneLiner: value.company.oneLiner,
       mission: value.company.mission,
+      tagline: value.company.tagline,
       sector: value.company.sector,
       stage: value.company.stage,
       links: value.company.links,
@@ -159,6 +163,8 @@ export function simulateCompanyResearch(
     oneLiner: company.oneLiner,
     missionText: company.mission,
     missionUrl: company.url,
+    taglineText: company.tagline,
+    taglineUrl: company.url,
     sector: company.sector,
     stage: company.stage,
   };
@@ -256,6 +262,7 @@ export function normalizeCompanyAssessment(input: CompanyAssessInput, output: Co
   return {
     judgments,
     summary: output.summary.trim().slice(0, 1200),
+    moat: output.moat ? cleanPoints([output.moat])[0] ?? null : null,
     strengths: cleanPoints(output.strengths),
     risks: cleanPoints(output.risks),
     openQuestions: output.openQuestions.map((question) => question.trim()).filter(Boolean),
@@ -303,6 +310,7 @@ export function simulateCompanyAssessment(
   };
   const strong = ranked.filter((judgment) => (judgment.level ?? 0) >= 3).slice(0, 3);
   const weak = ranked.filter((judgment) => (judgment.level ?? 4) <= 1).reverse().slice(0, 3);
+  const edge = ranked.find((judgment) => judgment.dimension === "edge");
   const label = (id: string) => COMPANY_DIMENSIONS.find((item) => item.id === id)?.label ?? id;
   const strongest = ranked[0];
   const weakest = ranked[ranked.length - 1];
@@ -312,6 +320,9 @@ export function simulateCompanyAssessment(
       ? input.company.name + " is strongest on " + label(strongest.dimension).toLowerCase() +
         (weakest && weakest.dimension !== strongest.dimension ? " and weakest on " + label(weakest.dimension).toLowerCase() + "." : ".")
       : "The evidence on file does not yet settle where " + input.company.name + " stands.",
+    moat: edge && (edge.level ?? 0) >= 3 && edge.evidenceIds.length > 0
+      ? { text: "The verified evidence points to a company edge that may be hard to copy: " + COMPANY_DIMENSIONS.find((item) => item.id === "edge")!.levels[edge.level as number], evidenceIds: edge.evidenceIds }
+      : null,
     strengths: strong.map(point),
     risks: weak.map(point),
     openQuestions: judgments.filter((judgment) => judgment.level === null).slice(0, 4)

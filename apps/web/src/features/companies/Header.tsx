@@ -1,6 +1,6 @@
 import { Link } from "react-router-dom";
 import { ArrowLeft, Link2 } from "lucide-react";
-import { COMPANY_REASONS, type Company, type CompanyFeedback, type Decision } from "@agentswarm/shared";
+import { COMPANY_REASONS, normalizeRoundLabel, type Company, type CompanyFeedback, type Decision } from "@agentswarm/shared";
 import { useApi } from "../../lib/api/context";
 import { Avatar } from "../../components/ui/layout";
 import { Caution, Chip } from "../../components/ui/marks";
@@ -56,11 +56,12 @@ export function CompanyHeader({
               {DECISION_LABEL[decision]}
             </span>
           ) : null}
-          {company.stage ? <Chip>{company.stage}</Chip> : null}
+          {normalizeRoundLabel(company.stage) ? <Chip>{normalizeRoundLabel(company.stage)}</Chip> : null}
           {company.sector ? <Chip>{company.sector}</Chip> : null}
           {/* A simulated company is labelled wherever it appears, on a real server as much as in the demo. */}
           {demo || company.simId ? <Caution>Simulated</Caution> : null}
         </div>
+        {company.tagline ? <p className="truncate text-sm text-ink-2" title={`"${company.tagline.text}"`}>{`"${company.tagline.text}"`}</p> : null}
       </div>
       <YesNo
         companyId={company.id}

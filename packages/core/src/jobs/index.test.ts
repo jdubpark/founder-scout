@@ -207,6 +207,7 @@ const simCompany: SimCompany = {
   url: "https://analytical.example",
   oneLiner: "Developer infrastructure for reliable compute",
   mission: "Make builds reliable for every engineering team.",
+  tagline: "Reliable builds for every team.",
   sector: "developer tools",
   stage: "seed",
   latent: Object.fromEntries(COMPANY_DIMENSIONS.map((dimension) => [dimension.id, 0.8])) as SimCompany["latent"],
@@ -227,6 +228,7 @@ const company: CompanyRef = {
   url: "https://analytical.example",
   oneLiner: "Developer infrastructure for reliable compute",
   mission: { text: "Make builds reliable for every engineering team.", url: "https://analytical.example/about" },
+  tagline: null,
   sector: "developer tools",
   stage: "seed",
   links: { github: null, x: null, linkedin: null, docs: null, careers: null },
@@ -726,7 +728,7 @@ describe("job registry and prompt contracts", () => {
         companyEvidenceDraft({ excerpt: "x".repeat(1300) }),
       ],
       profile: {
-        url: null, oneLiner: null, missionText: "The founder is 42 years old.", missionUrl: null,
+        url: null, oneLiner: null, missionText: "The founder is 42 years old.", missionUrl: null, taglineText: null, taglineUrl: null,
         sector: null, stage: null, github: null, x: null, linkedin: null, docs: null, careers: null,
       },
       team: [teamMember, { ...teamMember, name: "grace hopper", background: "Built distributed systems." }, { ...teamMember, name: "   " }],
@@ -1102,6 +1104,7 @@ describe("sensitive text detection and output normalization", () => {
         { dimension: "traction", level: 2.6, confidence: -1, rationale: "Latest.", evidenceIds: ["company-ev-1"], counterEvidenceIds: [] },
       ],
       summary: "  A sourced company summary.  ",
+      moat: null,
       strengths: [
         { text: "  Real use. ", evidenceIds: ["company-ev-1", "missing"] },
         { text: "No source.", evidenceIds: ["missing"] },

@@ -330,6 +330,7 @@ export interface SimCompany {
   oneLiner: string;
   /** The mission as the company would state it. */
   mission: string;
+  tagline: string;
   sector: string;
   stage: string;
   /** True level 0..1 per company rubric dimension. */

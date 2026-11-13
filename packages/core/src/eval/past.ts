@@ -462,6 +462,7 @@ function companyInput(evidence: CompanyAssessInput["evidence"]): CompanyAssessIn
       url: null,
       oneLiner: null,
       mission: null,
+      tagline: null,
       sector: null,
       stage: null,
       links: { github: null, x: null, linkedin: null, docs: null, careers: null },

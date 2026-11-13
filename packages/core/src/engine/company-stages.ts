@@ -49,6 +49,7 @@ function companyRef(runtime: EngineRuntime, company: Company): CompanyRef {
     url: company.url,
     oneLiner: company.oneLiner,
     mission: company.mission,
+    tagline: company.tagline,
     sector: company.sector,
     stage: company.stage,
     links: company.links,
@@ -191,6 +192,7 @@ export async function runCompanyResolve(runtime: EngineRuntime): Promise<void> {
         url: founder.company.url,
         oneLiner: founder.company.oneLiner,
         mission: null,
+        tagline: null,
         sector: null,
         stage: founder.company.stage,
         links: { github: null, x: null, linkedin: null, docs: null, careers: null },
@@ -293,6 +295,7 @@ function mergeProfile(runtime: EngineRuntime, company: Company, profile: import(
     ...(profile.sector?.trim() ? { sector: profile.sector.trim() } : {}),
     ...(profile.stage?.trim() ? { stage: profile.stage.trim() } : {}),
     ...(profile.missionText?.trim() ? { mission: { text: profile.missionText.trim(), url: profile.missionUrl?.trim() || null } } : {}),
+    ...(profile.taglineText?.trim() ? { tagline: { text: profile.taglineText.trim(), url: profile.taglineUrl?.trim() || null } } : {}),
     links: {
       github: profile.github?.trim() || company.links.github,
       x: profile.x?.trim() || company.links.x,
@@ -302,6 +305,34 @@ function mergeProfile(runtime: EngineRuntime, company: Company, profile: import(
     },
     updatedAt: runtime.now().toISOString(),
   });
+}
+
+async function checkedCompanyProfile(
+  runtime: EngineRuntime,
+  profile: import("@agentswarm/shared").CompanyProfileUpdate,
+  jobId: ResearchJob,
+): Promise<import("@agentswarm/shared").CompanyProfileUpdate> {
+  const scoped = jobId === "company.product" ? profile : { ...profile, missionText: null, missionUrl: null, taglineText: null, taglineUrl: null };
+  if (runtime.run.sources === "sim") return scoped;
+  const check = async (text: string | null, url: string | null): Promise<boolean> => {
+    if (!text?.trim() || !url?.trim() || !runtime.deps.quotes) return false;
+    try {
+      return (await runtime.deps.quotes.check(url.trim(), text.trim(), runtime.signal)).status === "found";
+    } catch {
+      return false;
+    }
+  };
+  const [missionFound, taglineFound] = await Promise.all([
+    check(scoped.missionText, scoped.missionUrl),
+    check(scoped.taglineText, scoped.taglineUrl),
+  ]);
+  return {
+    ...scoped,
+    missionText: missionFound ? scoped.missionText : null,
+    missionUrl: missionFound ? scoped.missionUrl : null,
+    taglineText: taglineFound ? scoped.taglineText : null,
+    taglineUrl: taglineFound ? scoped.taglineUrl : null,
+  };
 }
 
 function addResearchTeam(runtime: EngineRuntime, companyId: string, members: readonly import("@agentswarm/shared").TeamMemberDraft[], founders: readonly Founder[]): void {
@@ -401,10 +432,10 @@ export async function runCompanyResearch(runtime: EngineRuntime, companyCandidat
     const successful = results.filter(({ result }) => result?.task.status === "succeeded" && result.output !== null);
     if (successful.length === 0) return;
     let current = company;
-    for (const { result } of successful) {
+    for (const { jobId, result } of successful) {
       const output = result!.output!;
       addCompanyEvidence(runtime, lead.id, company.id, result!.task.id, output.evidence);
-      current = mergeProfile(runtime, current, output.profile);
+      current = mergeProfile(runtime, current, await checkedCompanyProfile(runtime, output.profile, jobId));
       addResearchTeam(runtime, company.id, output.team, founders);
     }
     if (runtime.run.sources === "live" && runtime.deps.people) {
@@ -540,6 +571,7 @@ export async function runCompanyAssess(runtime: EngineRuntime, companyCandidates
     const score = scoreCompany({ judgments, weights, unknownPrior: thresholds.unknownPrior });
     const brief: CompanyBrief = {
       summary: result.output.summary.trim(),
+      moat: result.output.moat ? groundPoints([result.output.moat], supplied)[0] ?? null : null,
       strengths: groundPoints(result.output.strengths, supplied),
       risks: groundPoints(result.output.risks, supplied),
       openQuestions: result.output.openQuestions.map((question) => question.trim()).filter(Boolean),

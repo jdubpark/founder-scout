@@ -340,6 +340,8 @@ export interface Company {
   oneLiner: string | null;
   /** The mission in the company's own words. */
   mission: SourcedText | null;
+  /** The line the company's own site leads with, in its own words. */
+  tagline: SourcedText | null;
   sector: string | null;
   stage: string | null;
   links: CompanyLinks;
@@ -389,6 +391,7 @@ export interface CitedPoint {
 /** The company in a few lines, for a partner with two minutes. */
 export interface CompanyBrief {
   summary: string;
+  moat: CitedPoint | null;
   strengths: CitedPoint[];
   risks: CitedPoint[];
   openQuestions: string[];

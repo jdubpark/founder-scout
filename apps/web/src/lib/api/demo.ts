@@ -460,7 +460,8 @@ export function createDemoClient(snapshot: DemoSnapshot, getActor: () => string)
       if (query.q?.trim()) {
         const q = query.q.trim().toLowerCase();
         rows = rows.filter((r) =>
-          [r.name, r.headline ?? "", r.companyName ?? ""].some((v) => v.toLowerCase().includes(q)),
+          [r.name, r.headline ?? "", r.companyName ?? "", r.companyOneLiner ?? "", r.sector ?? "", r.stage ?? "", r.tagline ?? "", r.moat ?? ""]
+            .some((v) => v.toLowerCase().includes(q)),
         );
       }
       const sort = query.sort ?? "composite";
@@ -524,7 +525,7 @@ export function createDemoClient(snapshot: DemoSnapshot, getActor: () => string)
       if (query.status && query.status !== "all") rows = rows.filter((r) => r.status === query.status);
       if (query.q?.trim()) {
         const q = query.q.trim().toLowerCase();
-        rows = rows.filter((r) => [r.name, r.oneLiner ?? "", r.sector ?? ""].some((v) => v.toLowerCase().includes(q)));
+        rows = rows.filter((r) => [r.name, r.oneLiner ?? "", r.tagline ?? "", r.moat ?? "", r.sector ?? "", r.stage ?? ""].some((v) => v.toLowerCase().includes(q)));
       }
       const sort = query.sort ?? "deal";
       const recent = (a: CompanyRow, b: CompanyRow) => b.updatedAt.localeCompare(a.updatedAt);

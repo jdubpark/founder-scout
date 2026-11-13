@@ -391,6 +391,7 @@ export interface CompanyRef {
   url: string | null;
   oneLiner: string | null;
   mission: SourcedText | null;
+  tagline: SourcedText | null;
   sector: string | null;
   stage: string | null;
   links: CompanyLinks;
@@ -432,6 +433,10 @@ export const CompanyProfileUpdateSchema = z.object({
   missionText: nullableString,
   /** The page the mission was copied from. */
   missionUrl: nullableString,
+  /** Exact lead line from the company's own site, copied word for word. */
+  taglineText: nullableString,
+  /** Page where the tagline was copied from. */
+  taglineUrl: nullableString,
   sector: nullableString,
   stage: nullableString,
   github: nullableString,
@@ -496,6 +501,8 @@ export const CompanyAssessOutputSchema = z.object({
   judgments: z.array(CompanyJudgmentDraftSchema),
   /** What the company is and where it stands, in a short paragraph. */
   summary: z.string(),
+  /** One sentence on what could make the company hard to copy, from verified evidence. Null when none is shown. */
+  moat: CitedPointSchema.nullable(),
   strengths: z.array(CitedPointSchema),
   risks: z.array(CitedPointSchema),
   openQuestions: z.array(z.string()),

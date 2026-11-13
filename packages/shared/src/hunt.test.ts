@@ -9,6 +9,7 @@ import {
   isPlantedUrl,
   nameOnPage,
   notesForRunner,
+  normalizeRoundLabel,
   onPage,
   plantedDue,
   plantedPage,
@@ -413,5 +414,10 @@ describe("planted pages", () => {
     expect(due.filter(Boolean)).toHaveLength(2);
     expect(due[11]).toBe(true);
     expect(plantedDue(5, 0)).toBe(false);
+  });
+
+  it("normalizes known round spellings and leaves unknown stages empty", () => {
+    expect(["pre-seed", "Pre Seed", "seed", "Series A", "series_a_or_later", "mystery round"].map(normalizeRoundLabel))
+      .toEqual(["Pre-seed", "Pre-seed", "Seed", "Series A+", "Series A+", null]);
   });
 });

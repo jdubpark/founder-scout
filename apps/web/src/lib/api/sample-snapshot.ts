@@ -439,6 +439,11 @@ SEEDS.forEach((seed, index) => {
     name: seed.name,
     headline: seed.headline,
     companyName: seed.company,
+    companyOneLiner: seed.oneLiner,
+    sector: null,
+    stage: null,
+    tagline: null,
+    moat: null,
     status,
     decision: assessed ? score.decision : null,
     composite: assessed ? score.composite : null,
@@ -458,6 +463,7 @@ SEEDS.forEach((seed, index) => {
   if (index < 6) {
     details[id] = {
       founder,
+      company: null,
       assessment,
       history: assessed
         ? [
@@ -682,6 +688,7 @@ interface CompanySeed {
   sector: string;
   stage: string;
   mission: string;
+  tagline: string;
   status: CompanyStatus;
   decision: Decision;
   /** Index into `rows`, the lead founder. */
@@ -694,6 +701,7 @@ interface CompanySeed {
   evidence: EvidenceSeed[];
   brief: {
     summary: string;
+    moat: { text: string; ev: number[] } | null;
     strengths: Array<{ text: string; ev: number[] }>;
     risks: Array<{ text: string; ev: number[] }>;
     openQuestions: string[];
@@ -710,6 +718,7 @@ const COMPANY_SEEDS: CompanySeed[] = [
     sector: "Robotics data",
     stage: "pre-seed",
     mission: "Tessaly finds the one clip that explains a robot failure, from months of telemetry, in seconds.",
+    tagline: "Find the clip behind any robot failure.",
     status: "surfaced",
     decision: "surface",
     lead: 0,
@@ -736,6 +745,7 @@ const COMPANY_SEEDS: CompanySeed[] = [
     ],
     brief: {
       summary: "Tessaly makes field-robot logs searchable. The open core works, outside users have tried it, and a pre-seed round is in place. Pull rests on pilots so far.",
+      moat: { text: "Its open core is shaped around robot telemetry formats and replay workflows.", ev: [1, 2] },
       strengths: [
         { text: "The open core does the job end to end and is public.", ev: [1, 2] },
         { text: "Outside users asked for features and got them in the next release.", ev: [7, 3] },
@@ -760,6 +770,7 @@ const COMPANY_SEEDS: CompanySeed[] = [
     sector: "Developer tools",
     stage: "seed",
     mission: "Quillmark makes agent workflows replayable, so a failed run can be re-run one step at a time.",
+    tagline: "Replay an agent run one step at a time.",
     status: "surfaced",
     decision: "surface",
     lead: 1,
@@ -785,6 +796,7 @@ const COMPANY_SEEDS: CompanySeed[] = [
     ],
     brief: {
       summary: "Quillmark makes failed agent runs replayable. The engine works across frameworks and a seed round is in place. Named enterprise customers are not yet on record.",
+      moat: { text: "Its replay engine produces matching results across several agent frameworks.", ev: [10] },
       strengths: [
         { text: "An outside reviewer found replay matching across three frameworks.", ev: [10] },
         { text: "Usage is rising by the company's own figure, from 900 to 3,000 a week.", ev: [9] },
@@ -805,6 +817,7 @@ const COMPANY_SEEDS: CompanySeed[] = [
     sector: "Cloud infrastructure",
     stage: "pre-seed",
     mission: "Loomfield schedules inference jobs onto idle accelerators, so clusters waste less time.",
+    tagline: "Keep accelerators busy.",
     status: "watch",
     decision: "watch",
     lead: 2,
@@ -830,6 +843,7 @@ const COMPANY_SEEDS: CompanySeed[] = [
     ],
     brief: {
       summary: "Loomfield is a prototype scheduler with a published trial. Pull is early and the category has established rivals. Re-check in a quarter.",
+      moat: null,
       strengths: [
         { text: "A published trial reports a fifth of accelerator time recovered.", ev: [2] },
         { text: "The scheduler runs on a real test cluster.", ev: [1] },
@@ -907,6 +921,7 @@ COMPANY_SEEDS.forEach((seed, index) => {
 
   const brief = {
     summary: seed.brief.summary,
+    moat: seed.brief.moat ? { text: seed.brief.moat.text, evidenceIds: seed.brief.moat.ev.map((i) => evidence[i]!.id) } : null,
     strengths: seed.brief.strengths.map((p) => ({ text: p.text, evidenceIds: p.ev.map((i) => evidence[i]!.id) })),
     risks: seed.brief.risks.map((p) => ({ text: p.text, evidenceIds: p.ev.map((i) => evidence[i]!.id) })),
     openQuestions: seed.brief.openQuestions,
@@ -941,6 +956,7 @@ COMPANY_SEEDS.forEach((seed, index) => {
     domain: `${seed.host}.example`,
     url: `https://${seed.host}.example`,
     oneLiner: seed.oneLiner,
+    tagline: { text: seed.tagline, url: `https://${seed.host}.example` },
     mission: { text: seed.mission, url: `https://${seed.host}.example/about` },
     sector: seed.sector,
     stage: seed.stage,
@@ -1024,6 +1040,8 @@ COMPANY_SEEDS.forEach((seed, index) => {
     id: companyId,
     name: seed.name,
     oneLiner: seed.oneLiner,
+    tagline: seed.tagline,
+    moat: brief.moat?.text ?? null,
     sector: seed.sector,
     stage: seed.stage,
     status: seed.status,
@@ -1057,6 +1075,18 @@ COMPANY_SEEDS.forEach((seed, index) => {
     tasks: companyTasks,
     knownPeople,
   };
+  const founderRow = rows.find((row) => row.id === lead.id);
+  if (founderRow) {
+    founderRow.companyId = company.id;
+    founderRow.sector = company.sector;
+    founderRow.stage = company.stage === "pre-seed" ? "Pre-seed" : company.stage;
+    founderRow.tagline = company.tagline?.text ?? null;
+    founderRow.moat = brief.moat?.text ?? null;
+  }
+  if (leadDetail) {
+    leadDetail.company = company;
+    leadDetail.founder = { ...leadDetail.founder, companyId: company.id };
+  }
 });
 
 const companyWaiting = companyRows.filter((r) => r.status === "surfaced" && r.feedback === null).length;

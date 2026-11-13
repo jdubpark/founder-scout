@@ -53,13 +53,15 @@ export function CompanyTable({ rows }: { rows: CompanyRow[] }) {
                       {row.name}
                     </Link>
                     {row.stage ? <Chip>{row.stage}</Chip> : null}
+                    {row.sector ? <Chip>{row.sector}</Chip> : null}
                     <FounderDots founders={row.founders} />
                   </div>
-                  {row.oneLiner ? (
-                    <p className="max-w-96 truncate text-sm text-ink-3" title={row.oneLiner}>
-                      {row.oneLiner}
+                  {row.tagline || row.oneLiner ? (
+                    <p className="max-w-96 truncate text-sm text-ink-3" title={row.tagline ? `"${row.tagline}"` : row.oneLiner ?? ""}>
+                      {row.tagline ? `"${row.tagline}"` : row.oneLiner}
                     </p>
                   ) : null}
+                  {row.moat ? <p className="max-w-96 truncate text-sm text-ink-2" title={row.moat}>{row.moat}</p> : null}
                 </div>
               </div>
             </Td>

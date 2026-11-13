@@ -35,6 +35,8 @@ export function BriefPanel({ brief }: { brief: CompanyAssessment["brief"] }) {
       <div className="flex flex-col gap-6">
         {brief.summary ? <p className="prose-measure text-base text-ink">{brief.summary}</p> : null}
 
+        {brief.moat ? <div className="flex max-w-[68ch] items-start gap-3"><div className="flex min-w-0 flex-col gap-2"><h3 className="text-sm font-bold text-ink-3">Moat</h3><p className="prose-measure m-0 text-base text-ink">{brief.moat.text}</p></div><Chip title={`${brief.moat.evidenceIds.length} sources`}>{brief.moat.evidenceIds.length}</Chip></div> : null}
+
         {hasLists ? (
           <div className="grid grid-cols-1 gap-8 md:grid-cols-2">
             {brief.strengths.length > 0 ? <PointList title="Strengths" points={brief.strengths} tone="green" /> : null}

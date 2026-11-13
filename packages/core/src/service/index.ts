@@ -2,7 +2,7 @@ import { join } from "node:path";
 import {
   AGENT_CLASSES, BASE_CONFIG, JOBS, SOURCES, STAGES, runnerPools,
   buildEffectiveSteering, coerceParam, effectiveRoute, getParamDef, isClassId, isCompanyReasonFor, isJobId,
-  isNeverFetchUrl, isReasonFor, newId, normalizeCompanyName, normalizeScope, overlayConfig, paramsFor, scopeLabel,
+  isNeverFetchUrl, isReasonFor, newId, normalizeCompanyName, normalizeRoundLabel, normalizeScope, overlayConfig, paramsFor, scopeLabel, stageLabel,
   scopeLevel, stableId, suggestSteering, suggestionTextKey, summarizeCalls, swarmIdentity,
   type Agent, type AgentIdentity, type ApiClient, type AddTrailInput, type UpdateTrailInput, type Pools,
   type AddFounderInput, type CallExample, type ClassId, type CoachReport, type CompanyFeedback, type CompanyQuery, type Directive, type DirectiveFilter,
@@ -168,8 +168,16 @@ export function createSwarmService(deps: ServiceDeps): SwarmService {
     const assessment = store.latestAssessment(founder.id);
     const feedback = store.listFeedback(founder.id).at(-1);
     const evidence = store.listEvidence(founder.id);
+    const company = founder.companyId ? store.getCompany(founder.companyId) : null;
+    const companyAssessment = company ? store.latestCompanyAssessment(company.id) : null;
+    const leadStage = store.listLeads({ founderId: founder.id }).sort((a, b) => b.discoveredAt.localeCompare(a.discoveredAt)).find((lead) => lead.stage)?.stage ?? null;
     return {
-      id: founder.id, name: founder.name, headline: founder.headline, companyName: founder.company.name,
+      id: founder.id, name: founder.name, headline: founder.headline, companyName: company?.name ?? founder.company.name,
+      companyOneLiner: company?.oneLiner ?? founder.company.oneLiner,
+      sector: company?.sector ?? null,
+      stage: normalizeRoundLabel(company?.stage ?? null) ?? normalizeRoundLabel(founder.company.stage) ?? stageLabel(leadStage),
+      tagline: company?.tagline?.text ?? null,
+      moat: companyAssessment?.brief.moat?.text ?? null,
       status: founder.status, decision: assessment?.decision ?? null, composite: assessment?.composite ?? null,
       cracked: assessment?.cracked ?? null, founderScore: assessment?.founderScore ?? null,
       fit: assessment?.fit ?? founder.fit, coverage: assessment?.coverage ?? null, sources: founder.sources,
@@ -179,9 +187,22 @@ export function createSwarmService(deps: ServiceDeps): SwarmService {
       companyId: founder.companyId ?? null, firstSeenAt: founder.firstSeenAt, updatedAt: founder.updatedAt,
     };
   };
-  const withCompanyIds = (rows: FounderRow[]): FounderRow[] => rows.map((row) => ({
-    ...row, companyId: store.getFounder(row.id)?.companyId ?? null,
-  }));
+  const withCompanyIds = (rows: FounderRow[]): FounderRow[] => rows.map((row) => {
+    const founder = store.getFounder(row.id);
+    const company = founder?.companyId ? store.getCompany(founder.companyId) : null;
+    const companyAssessment = company ? store.latestCompanyAssessment(company.id) : null;
+    const leadStage = founder ? store.listLeads({ founderId: founder.id }).sort((a, b) => b.discoveredAt.localeCompare(a.discoveredAt)).find((lead) => lead.stage)?.stage ?? null : null;
+    return {
+      ...row,
+      companyName: company?.name ?? founder?.company.name ?? row.companyName,
+      companyId: founder?.companyId ?? null,
+      companyOneLiner: company?.oneLiner ?? founder?.company.oneLiner ?? null,
+      sector: company?.sector ?? null,
+      stage: normalizeRoundLabel(company?.stage ?? null) ?? normalizeRoundLabel(founder?.company.stage ?? null) ?? stageLabel(leadStage),
+      tagline: company?.tagline?.text ?? null,
+      moat: companyAssessment?.brief.moat?.text ?? null,
+    };
+  });
   const validateName = (name: unknown, field = "name"): string => {
     const value = trimmed(name);
     if (value.length < 1 || value.length > 80) fail(400, "Enter a name from 1 to 80 characters.", { [field]: "Enter a name from 1 to 80 characters." });
@@ -700,7 +721,7 @@ export function createSwarmService(deps: ServiceDeps): SwarmService {
         const evidence = store.listEvidence(id).sort((a, b) => b.capturedAt.localeCompare(a.capturedAt));
         const tasks = store.listTasks({ founderId: id }).sort((a, b) => (b.startedAt ?? "").localeCompare(a.startedAt ?? "")).map(({ trace: _trace, ...task }) => task);
         const knownPeople = founder.company.name ? store.networkAtCompany(normalizeCompanyName(founder.company.name)) : [];
-        return { founder, assessment: store.latestAssessment(id), history: store.assessmentHistory(id), evidence, leads: store.listLeads({ founderId: id }), outreach: store.listOutreach({ founderId: id }), feedback: store.listFeedback(id), tasks, knownPeople };
+        return { founder, company: founder.companyId ? store.getCompany(founder.companyId) : null, assessment: store.latestAssessment(id), history: store.assessmentHistory(id), evidence, leads: store.listLeads({ founderId: id }), outreach: store.listOutreach({ founderId: id }), feedback: store.listFeedback(id), tasks, knownPeople };
       },
       async addFeedback(founderId, input) {
         const founder = getFounder(founderId);

@@ -66,7 +66,7 @@ function evidence(id: string, founderId: string, hash: string, verification: Evi
 function company(id: string, overrides: Partial<Company> = {}): Company {
   return {
     id, swarmId: "swm_1", name: `Company ${id}`, domain: `${id}.test`, url: `https://${id}.test`,
-    oneLiner: "Builds useful tools", mission: null, sector: "software", stage: "seed",
+    oneLiner: "Builds useful tools", mission: null, tagline: null, sector: "software", stage: "seed",
     links: { github: null, x: null, linkedin: null, docs: null, careers: null }, status: "tracked",
     firstSeenAt: "2026-01-01T00:00:00.000Z", updatedAt: "2026-01-02T00:00:00.000Z",
     lastResearchedAt: null, lastAssessedAt: null, nextRecheckAt: null, simId: null,
@@ -79,7 +79,7 @@ function companyAssessment(id: string, companyId: string, overrides: Partial<Com
     id, companyId, runId: null, configId: "cfg_base", company: 0.6, companyCoverage: 0.7,
     companyPotential: 0.8, leadFounderId: null, team: 0.5, deal: 0.55, coverage: 0.7,
     potential: 0.8, decision: "watch", reasons: [], flags: [], breakdown: [], judgments: [],
-    brief: { summary: "A sourced company summary.", strengths: [], risks: [], openQuestions: [] },
+    brief: { summary: "A sourced company summary.", moat: null, strengths: [], risks: [], openQuestions: [] },
     createdAt: "2026-01-03T00:00:00.000Z", ...overrides,
   };
 }
@@ -374,12 +374,14 @@ describe("SQLite store", () => {
   it("builds filtered dashboard rows with all status counts, evidence, flags, sorts and pagination", () => {
     const store = openStore(":memory:");
     const people = [
-      founder("fnd_a", { name: "Ada", headline: "Systems founder", company: { name: "Acme", url: null, oneLiner: null, stage: null }, status: "surfaced", updatedAt: "2026-01-01T00:00:00.000Z", fit: 0.2 }),
+      founder("fnd_a", { name: "Ada", headline: "Systems founder", company: { name: "Acme", url: null, oneLiner: "Builds Acme", stage: "Pre Seed" }, companyId: "cmp_a", status: "surfaced", updatedAt: "2026-01-01T00:00:00.000Z", fit: 0.2 }),
       founder("fnd_b", { name: "Ben", headline: "Designer", company: { name: "Acme North", url: null, oneLiner: null, stage: null }, status: "watch", updatedAt: "2026-01-04T00:00:00.000Z", fit: 0.9 }),
       founder("fnd_c", { name: "Cy", headline: "Engineer", company: { name: "Other", url: null, oneLiner: null, stage: null }, status: "lead", updatedAt: "2026-01-02T00:00:00.000Z" }),
       founder("fnd_d", { name: "Dee", headline: "Archived", status: "archived", updatedAt: "2026-01-05T00:00:00.000Z" }),
     ];
     for (const person of people) store.insertFounder(person);
+    store.insertCompany(company("cmp_a", { swarmId: "swm_1", name: "Acme", oneLiner: "Builds Acme", tagline: { text: "Tools for systems teams.", url: "https://acme.test" }, sector: "Developer tools", stage: "series_a_or_later" }));
+    store.insertCompanyAssessment(companyAssessment("cas_a", "cmp_a", { brief: { summary: "", moat: { text: "Its data format is hard to copy.", evidenceIds: ["evd_company"] }, strengths: [], risks: [], openQuestions: [] } }));
     store.insertAssessment(assessment("asm_a", "fnd_a", { composite: 0.8, cracked: 0.1, fit: 0.2, decision: "surface", flags: [
       { code: "integrity_concern", severity: "warning", message: "Review" },
       { code: "outside_thesis", severity: "info", message: "Info does not count" },
@@ -406,6 +408,7 @@ describe("SQLite store", () => {
     const ada = store.founderRows({ swarmId: "swm_1", q: "acme", status: "all", limit: 500 }).rows.find((row) => row.id === "fnd_a");
     // The most recent call wins, and its reasons come with it.
     expect(ada).toMatchObject({ evidenceCount: 2, flagCount: 1, feedback: "yes", feedbackReasons: ["builder", "speed"] });
+    expect(ada).toMatchObject({ companyOneLiner: "Builds Acme", sector: "Developer tools", stage: "Series A+", tagline: "Tools for systems teams.", moat: "Its data format is hard to copy." });
     expect(store.founderRows({ swarmId: "swm_1", status: "archived" }).rows.map((row) => row.id)).toEqual(["fnd_d"]);
     store.close();
   });

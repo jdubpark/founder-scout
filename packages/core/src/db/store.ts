@@ -39,6 +39,8 @@ import {
   type Verification,
   newId,
   normalizeCompanyName,
+  normalizeRoundLabel,
+  stageLabel,
 } from "@agentswarm/shared";
 import type { CompanyListDTO, CompanyQuery, CompanyRow } from "@agentswarm/shared";
 import type { NodeStatRow, Store } from "../contracts";
@@ -502,6 +504,18 @@ export class SqliteStore implements Store {
       const feedback = JSON.parse(row.record) as Feedback;
       if (!latestFeedback.has(feedback.founderId)) latestFeedback.set(feedback.founderId, feedback);
     }
+    const companies = new Map(rowRecords<Company>(this.db.prepare("SELECT record FROM companies WHERE swarm_id = ?").all(query.swarmId) as RecordRow[]).map((company) => [company.id, company]));
+    const companyAssessments = rowRecords<CompanyAssessment>(this.db.prepare(`SELECT a.record FROM company_assessments a
+      JOIN companies c ON c.id = a.company_id WHERE c.swarm_id = ? ORDER BY a.created_at DESC, a.rowid DESC`).all(query.swarmId) as RecordRow[]);
+    const latestCompanyAssessments = new Map<string, CompanyAssessment>();
+    for (const assessment of companyAssessments) if (!latestCompanyAssessments.has(assessment.companyId)) latestCompanyAssessments.set(assessment.companyId, assessment);
+    const leadsByFounder = new Map<string, Lead[]>();
+    for (const lead of rowRecords<Lead>(this.db.prepare("SELECT record FROM leads WHERE swarm_id = ? ORDER BY discovered_at DESC, rowid DESC").all(query.swarmId) as RecordRow[])) {
+      if (!lead.founderId) continue;
+      const group = leadsByFounder.get(lead.founderId) ?? [];
+      group.push(lead);
+      leadsByFounder.set(lead.founderId, group);
+    }
     const evidenceRows = this.db.prepare(`
       SELECT founder_id, COUNT(*) AS count FROM evidence
       WHERE verification IN ('unverified', 'supported') GROUP BY founder_id
@@ -510,11 +524,19 @@ export class SqliteStore implements Store {
 
     let rows = founders.map((founder): FounderRow => {
       const assessment = latestAssessments.get(founder.id) ?? null;
+      const company = founder.companyId ? companies.get(founder.companyId) ?? null : null;
+      const companyAssessment = company ? latestCompanyAssessments.get(company.id) ?? null : null;
+      const leadStage = leadsByFounder.get(founder.id)?.find((lead) => lead.stage)?.stage ?? null;
       return {
         id: founder.id,
         name: founder.name,
         headline: founder.headline,
-        companyName: founder.company.name,
+        companyName: company?.name ?? founder.company.name,
+        companyOneLiner: company?.oneLiner ?? founder.company.oneLiner,
+        sector: company?.sector ?? null,
+        stage: normalizeRoundLabel(company?.stage ?? null) ?? normalizeRoundLabel(founder.company.stage) ?? stageLabel(leadStage),
+        tagline: company?.tagline?.text ?? null,
+        moat: companyAssessment?.brief.moat?.text ?? null,
         status: founder.status,
         decision: assessment?.decision ?? null,
         composite: assessment?.composite ?? null,
@@ -724,7 +746,8 @@ export class SqliteStore implements Store {
         || a.firstSeenAt.localeCompare(b.firstSeenAt) || a.id.localeCompare(b.id));
       const feedback = latestFeedback.get(company.id) ?? null;
       return {
-        id: company.id, name: company.name, oneLiner: company.oneLiner, sector: company.sector, stage: company.stage,
+        id: company.id, name: company.name, oneLiner: company.oneLiner, tagline: company.tagline?.text ?? null,
+        moat: assessment?.brief.moat?.text ?? null, sector: company.sector, stage: normalizeRoundLabel(company.stage),
         status: company.status, decision: assessment?.decision ?? null, deal: assessment?.deal ?? null,
         company: assessment?.company ?? null, team: assessment?.team ?? null, coverage: assessment?.coverage ?? null,
         founders: founders.map(({ id, name }) => ({ id, name })), teamSize: memberCountById.get(company.id) ?? 0,

@@ -37,11 +37,11 @@ export default function FounderDetailPage() {
 
   if (!detail.data) return <SkeletonRows rows={10} />;
 
-  const { founder, assessment, history: _history, evidence, leads, outreach, feedback, tasks } = detail.data;
+  const { founder, company, assessment, history: _history, evidence, leads, outreach, feedback, tasks } = detail.data;
 
   return (
     <div className="flex flex-col gap-10">
-      <DossierHeader founder={founder} feedback={feedback} backTo={backTo} knownPeople={detail.data.knownPeople ?? []} />
+      <DossierHeader founder={founder} company={company} leads={leads} feedback={feedback} backTo={backTo} knownPeople={detail.data.knownPeople ?? []} />
       <Verdict assessment={assessment} thesisNotes={founder.fitReasons.join(" · ")} />
       <MemoPanel memo={assessment?.memo ?? null} />
       <Panel title="Rubric">

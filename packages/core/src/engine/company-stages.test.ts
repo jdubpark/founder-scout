@@ -107,6 +107,7 @@ function makeCompany(id: string, name: string, overrides: Partial<Company> = {})
     url: null,
     oneLiner: null,
     mission: null,
+    tagline: null,
     sector: null,
     stage: null,
     links: { ...EMPTY_COMPANY_LINKS },
@@ -151,7 +152,7 @@ function makeCompanyAssessment(companyId: string, id: string, createdAt: string,
     flags: [],
     breakdown: [],
     judgments: emptyCompanyJudgments(),
-    brief: { summary: "The company needs a closer look.", strengths: [], risks: [], openQuestions: ["What has shipped?"] },
+    brief: { summary: "The company needs a closer look.", moat: null, strengths: [], risks: [], openQuestions: ["What has shipped?"] },
     createdAt,
     ...overrides,
   };
@@ -186,6 +187,7 @@ function harness(options: {
   configParams?: SwarmConfig["params"];
   now?: () => Date;
   people?: EngineDeps["people"];
+  quotes?: EngineDeps["quotes"];
   world?: SimWorld;
   wrapExecuteJob?: (delegate: ExecuteJob) => ExecuteJob;
 } = {}) {
@@ -222,6 +224,7 @@ function harness(options: {
     now: options.now ?? (() => new Date(baseTime)),
     sleep: async () => undefined,
     people: options.people,
+    quotes: options.quotes,
   });
   return { store, world, controller, config };
 }
@@ -269,6 +272,7 @@ function strongCompanyOutput(input: CompanyAssessInput): CompanyAssessOutput {
       counterEvidenceIds: [],
     })),
     summary: "A strong company with a shipped product.",
+    moat: { text: "The system is hard to copy.", evidenceIds: [evidenceId] },
     strengths: [{ text: "A usable product is available.", evidenceIds: [evidenceId] }],
     risks: [],
     openQuestions: [],
@@ -283,7 +287,62 @@ function withStrongCompanyAssessment(delegate: ExecuteJob): ExecuteJob {
   };
 }
 
+function withMoatEvidence(delegate: ExecuteJob, cite: "verified" | "missing"): ExecuteJob {
+  return async <J extends ModelJobId>(jobId: J, input: JobInput<J>, context: JobContext, options: Parameters<ExecuteJob>[3]): Promise<JobExecution<J>> => {
+    const execution = await delegate(jobId, input, context, options);
+    if (jobId !== "assess.company") return execution;
+    const assessmentInput = input as CompanyAssessInput;
+    const evidenceId = cite === "verified" ? assessmentInput.evidence[0]?.id ?? "missing" : "missing-evidence";
+    const output = strongCompanyOutput(assessmentInput);
+    return { ...execution, output: { ...output, moat: { text: "A hard-to-copy system.", evidenceIds: [evidenceId] } } as JobOutput<J> };
+  };
+}
+
 describe("company pipeline stages", () => {
+  it("keeps a moat only when it cites verified company evidence", async () => {
+    const make = (cite: "verified" | "missing") => {
+      const world = createSimWorld({ seed: 719, founders: 1, days: 1 });
+      const h = harness({
+        jobs: ["screen.fit", "investigate.background", "verify.claims", "assess.judgments", "company.product", "company.traction", "company.team", "assess.company"],
+        founders: [makeFounder(world.founders()[0]!, `fnd_moat_${cite}`)],
+        world,
+        configParams: { "screen.min_fit": 0 },
+        wrapExecuteJob: (delegate) => withMoatEvidence(delegate, cite),
+      });
+      return h;
+    };
+    const verified = make("verified");
+    const missing = make("missing");
+    await run(verified);
+    await run(missing);
+    const verifiedAssessment = verified.store.listCompanies({ swarmId: SWARM_ID }).map((company) => verified.store.latestCompanyAssessment(company.id)).find(Boolean);
+    const missingAssessment = missing.store.listCompanies({ swarmId: SWARM_ID }).map((company) => missing.store.latestCompanyAssessment(company.id)).find(Boolean);
+    expect(verifiedAssessment?.brief.moat).toEqual({ text: "A hard-to-copy system.", evidenceIds: expect.any(Array) });
+    expect(verifiedAssessment?.brief.moat?.evidenceIds.length).toBeGreaterThan(0);
+    expect(missingAssessment?.brief.moat).toBeNull();
+  });
+
+  it("does not store a company tagline whose words are missing from its cited page", async () => {
+    const world = createSimWorld({ seed: 741, founders: 1, days: 1 });
+    const founder = makeFounder(world.founders()[0]!, "fnd_bad_tagline", { status: "surfaced", simId: null });
+    const wrap: (delegate: ExecuteJob) => ExecuteJob = (delegate) => async <J extends ModelJobId>(jobId: J, input: JobInput<J>, context: JobContext, options: Parameters<ExecuteJob>[3]): Promise<JobExecution<J>> => {
+      const execution = await delegate(jobId, input, context, options);
+      if (jobId !== "company.product" || !execution.output) return execution;
+      const output = execution.output as JobOutput<"company.product">;
+      return { ...execution, output: { ...output, profile: { ...output.profile, taglineText: "A line not on this page.", taglineUrl: "https://example.test/" } } as JobOutput<J> };
+    };
+    const h = harness({
+      jobs: ["company.product"],
+      founders: [founder],
+      world,
+      wrapExecuteJob: wrap,
+      quotes: { check: async () => ({ status: "not_found", detail: "not on page" }) },
+    });
+    await run(h, "live");
+    const company = h.store.listCompanies({ swarmId: SWARM_ID })[0];
+    expect(company?.tagline).toBeNull();
+  });
+
   it("creates founder company records, researches and assesses them with company evidence", async () => {
     const world = createSimWorld({ seed: 911, founders: 3, days: 3 });
     const h = harness({
@@ -495,7 +554,7 @@ describe("company pipeline stages", () => {
       deal: 0.68,
       judgments: emptyCompanyJudgments(),
       breakdown: [],
-      brief: { summary: "Saved brief.", strengths: [], risks: [], openQuestions: ["Saved question."] },
+      brief: { summary: "Saved brief.", moat: null, strengths: [], risks: [], openQuestions: ["Saved question."] },
     });
     const h = harness({
       jobs: ["assess.company"],

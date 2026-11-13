@@ -247,6 +247,11 @@ export interface FounderRow {
   name: string;
   headline: string | null;
   companyName: string | null;
+  companyOneLiner: string | null;
+  sector: string | null;
+  stage: string | null;
+  tagline: string | null;
+  moat: string | null;
   status: FounderStatus;
   decision: Decision | null;
   composite: number | null;
@@ -288,6 +293,7 @@ export interface FounderListDTO {
 
 export interface FounderDetailDTO {
   founder: Founder;
+  company: Company | null;
   assessment: Assessment | null;
   /** Composite score at each past assessment, oldest first. */
   history: Array<{ at: string; composite: number; decision: Decision }>;
@@ -326,6 +332,8 @@ export interface CompanyRow {
   id: string;
   name: string;
   oneLiner: string | null;
+  tagline: string | null;
+  moat: string | null;
   sector: string | null;
   stage: string | null;
   status: CompanyStatus;

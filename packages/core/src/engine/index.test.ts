@@ -1844,6 +1844,7 @@ describe("run engine", () => {
       url: `https://${id}.example`,
       oneLiner: `${name} builds software.`,
       mission: null,
+        tagline: null,
       sector: "Developer tools",
       stage: "pre-seed",
       links: { github: null, x: null, linkedin: null, docs: null, careers: null },

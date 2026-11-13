@@ -18,7 +18,7 @@ const founder = (id: string, companyId: string | null = null): Founder => ({
 });
 
 const company = (id: string): Company => ({
-  id, swarmId: swarm.id, name: id, domain: null, url: null, oneLiner: null, mission: null, sector: null, stage: null,
+  id, swarmId: swarm.id, name: id, domain: null, url: null, oneLiner: null, mission: null, tagline: null, sector: null, stage: null,
   links: { github: null, x: null, linkedin: null, docs: null, careers: null }, status: "tracked",
   firstSeenAt: "", updatedAt: "", lastResearchedAt: null, lastAssessedAt: null, nextRecheckAt: null, simId: null,
 });
@@ -38,7 +38,7 @@ function companyAssessment(id: string, level: 1 | 2 | 3 | 4 = 1): CompanyAssessm
     id: `assessment-${id}`, companyId: id, runId: null, configId: "cfg-current", company: 0.25, companyCoverage: 1,
     companyPotential: 0.25, leadFounderId: null, team: null, deal: 0.25, coverage: 1, potential: 0.25,
     decision: "watch", reasons: [], flags: [], breakdown: [], judgments: [judgment],
-    brief: { summary: "", strengths: [], risks: [], openQuestions: [] }, createdAt: "",
+    brief: { summary: "", moat: null, strengths: [], risks: [], openQuestions: [] }, createdAt: "",
   };
 }
 

@@ -737,6 +737,7 @@ function makeCompany(founder: SimFounder, seed: number): SimCompany {
     url: site,
     oneLiner: founder.companyOneLiner,
     mission,
+    tagline: founder.companyOneLiner,
     sector: founder.sector,
     stage: founder.stage,
     latent,

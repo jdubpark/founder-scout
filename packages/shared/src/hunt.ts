@@ -411,6 +411,20 @@ export function stageLabel(stage: StageRead | null): string | null {
   }
 }
 
+/** A short round label for free-text company stages. Unknown text stays empty. */
+export function normalizeRoundLabel(stage: string | null): string | null {
+  if (!stage) return null;
+  const value = stage.toLowerCase().replace(/[_-]+/g, " ").replace(/\s+/g, " ").trim();
+  if (/\bpre\s*seed\b/.test(value)) return "Pre-seed";
+  if (/\bseed\b/.test(value)) return "Seed";
+  if (/\bseries\s*a\b/.test(value) || value.includes("series a or later")) return "Series A+";
+  if (/\bseries\s*b\b/.test(value)) return "Series B+";
+  if (/\bseries\s*c\b/.test(value)) return "Series C+";
+  if (/\bangel\b/.test(value) || value.includes("accelerator")) return "Angel";
+  if (value.includes("unfunded") || value.includes("bootstrapped")) return "Unfunded";
+  return null;
+}
+
 /* ------------------------------------------------------------------ */
 /* Checks on what a runner returns                                      */
 /* ------------------------------------------------------------------ */
