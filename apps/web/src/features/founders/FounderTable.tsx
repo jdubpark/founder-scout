@@ -35,15 +35,13 @@ export function FounderTable({ rows, threshold, wouldSurface }: FounderTableProp
   return (
     <Table className="table-fixed">
       <colgroup>
-        <col className="w-[12%]" /><col className="w-[22%]" /><col className="w-[9%]" /><col className="w-[8%]" />
-        <col className="w-[14%]" /><col className="w-[11%]" /><col className="w-[14%]" /><col className="w-[10%]" />
+        <col className="w-[18%]" /><col className="w-[33%]" /><col className="w-[16%]" />
+        <col className="w-[12%]" /><col className="w-[12%]" /><col className="w-[9%]" />
       </colgroup>
       <thead>
         <tr>
           <Th>Founder</Th>
           <Th>Company</Th>
-          <Th>Industry</Th>
-          <Th>Round</Th>
           <Th>Moat</Th>
           <Th>Status</Th>
           <Th numeric>Overall</Th>
@@ -60,31 +58,28 @@ export function FounderTable({ rows, threshold, wouldSurface }: FounderTableProp
               <Td>
                 <div className="flex min-w-0 items-center gap-3">
                   <Avatar name={row.name} />
-                  <div className="min-w-0">
-                    <Link
-                      to={dossierPath(row.id)}
-                      state={{ back: location.search }}
-                      title={row.name}
-                      className="block max-w-72 truncate font-bold text-ink hover:underline"
-                    >
-                      {row.name}
-                    </Link>
-                  </div>
+                  <Link
+                    to={dossierPath(row.id)}
+                    state={{ back: location.search }}
+                    title={row.name}
+                    className="min-w-0 truncate font-bold text-ink hover:underline"
+                  >
+                    {row.name}
+                  </Link>
                 </div>
               </Td>
               <Td>
-                {row.companyId ? (
-                  <Link to={`/companies/${encodeURIComponent(row.companyId)}`} title={row.companyName ?? "-"} className="block truncate font-bold text-ink hover:underline">
-                    {row.companyName ?? "-"}
-                  </Link>
-                ) : <span className="block truncate font-bold text-ink" title={row.companyName ?? "-"}>{row.companyName ?? "-"}</span>}
-                <p className="truncate text-sm text-ink-3" title={companyLine ?? "-"}>{companyLine ?? "-"}</p>
-              </Td>
-              <Td>
-                {row.sector ? <Chip title={row.sector} className="max-w-full truncate">{row.sector}</Chip> : <span className="text-ink-3">-</span>}
-              </Td>
-              <Td>
-                {row.stage ? <Chip title={row.stage}>{row.stage}</Chip> : <span className="text-ink-3">-</span>}
+                {/* The company on one line with its industry and round as chips, its own tagline under it. */}
+                <div className="flex min-w-0 items-center gap-2">
+                  {row.companyId ? (
+                    <Link to={`/companies/${encodeURIComponent(row.companyId)}`} title={row.companyName ?? "-"} className="min-w-0 truncate font-bold text-ink hover:underline">
+                      {row.companyName ?? "-"}
+                    </Link>
+                  ) : <span className="min-w-0 truncate font-bold text-ink" title={row.companyName ?? "-"}>{row.companyName ?? "-"}</span>}
+                  {row.sector ? <Chip title="Industry" className="shrink-0 whitespace-nowrap">{row.sector}</Chip> : null}
+                  {row.stage ? <Chip title="Round" className="shrink-0 whitespace-nowrap">{row.stage}</Chip> : null}
+                </div>
+                {companyLine ? <p className="truncate text-sm text-ink-3" title={companyLine}>{companyLine}</p> : null}
               </Td>
               <Td title={row.moat ?? "-"}>
                 <span className="block truncate text-sm text-ink-2">{row.moat ?? "-"}</span>
@@ -95,7 +90,7 @@ export function FounderTable({ rows, threshold, wouldSurface }: FounderTableProp
                 </Status>
               </Td>
               <Td>
-                <div className="flex min-w-0 flex-wrap items-center justify-end gap-1">
+                <div className="flex min-w-0 items-center justify-end gap-2">
                   <Meter value={row.composite} threshold={threshold} label={`Overall for ${row.name}`} showFigure={false} className="w-14 shrink-0" />
                   <span className="figure w-7 text-right font-bold text-ink">{score100(row.composite)}</span>
                   {marked ? <Chip tone="gold">Surface</Chip> : null}
