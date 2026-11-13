@@ -78,6 +78,29 @@ those citations was checked against the checkouts and held. Nothing from the che
 - **Handoffs that broadcast the whole conversation.** They undo the isolation the rest of the
   design depends on.
 
+## Added afterwards: the hunt
+
+A navigator and runners were added to look for founders on the open web (design section 16).
+The shape follows what this note found to work, and stops where it found things to fail.
+
+| What the research says | What the hunt does |
+| --- | --- |
+| One strong lead that hands short, bounded tasks to cheap workers is the arrangement with evidence behind it (`multi-agent-methods.md`: the orchestrator and worker results) | One navigator on the strongest model; runners on the smallest. A runner's task is one page |
+| Agents working without a central check multiplied errors about seventeen times, and with one about four (same note) | Nothing a runner returns is kept until code has checked it against the page: the name, the quoted words, the stage answers, the links |
+| A written ledger of facts and guesses was the only design studied that keeps a plan outside a model's context (`frameworks/microsoft-agent-framework.md`) | The navigator's memory is a notebook in the database. Each turn is a fresh call handed the notebook, so turn 400 costs what turn 4 did |
+| Rewriting a playbook wholesale erodes it; adding small entries does not (`multi-agent-methods.md`) | The navigator adds lines to the notebook. It cannot rewrite or delete one |
+| What working systems pass between agents is a short record, not a transcript | A runner returns a record. The navigator is shown counts and labels of a few words, never a page |
+| Routers that let a model choose its model or its own sub-agents were the least reliable part of the frameworks studied | The navigator chooses where to look. Code chooses which runner model reads a page, how many calls a trail gets, and when to stop |
+| None of the five frameworks tests its workers with inputs whose right answer is known | One page in twelve is planted: it names nobody and tells the reader to report someone. What a model does with it is counted against that model |
+
+Two things the hunt does that none of the five frameworks was found to do: it spends a wave
+across lines of work by what each has yielded, with a head start for a new one and a floor for
+every one; and it treats a site's own rules (robots.txt, and terms that forbid automated
+reading) as part of the address check, before any request.
+
+What the hunt does not have, and the evals do: a held-out measure. A trail's yield is counted
+on what the fit screener kept, which is another agent's judgment, not an outcome.
+
 ## Not built yet, in the order worth doing
 
 1. **A prospective record.** Every assessment made today is a prediction about a company that
