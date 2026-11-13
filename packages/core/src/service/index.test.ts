@@ -1,9 +1,9 @@
 import { afterEach, describe, expect, it } from "vitest";
 import {
-  BASE_CONFIG, DEFAULT_SETTINGS, JOBS, PROVIDERS, ZERO_STATS, newId, stableId,
+  BASE_CONFIG, DEFAULT_SETTINGS, JOBS, PROVIDERS, ZERO_STATS, newId, stableId, runnerPools,
   type Agent, type Assessment, type Company, type CompanyAssessment, type CompanyMember, type EvalFlowDTO,
   type Evidence, type Feedback, type Founder, type NetworkContact, type OutreachAction, type Run,
-  type Swarm, type SwarmConfig, type TaskRun,
+  type Swarm, type SwarmConfig, type TaskRun, type Pools,
 } from "@agentswarm/shared";
 import type { EvalService, ProviderRegistry, RunController, SourceRegistry, Store } from "../contracts";
 import { openStore } from "../db";
@@ -14,7 +14,7 @@ const fixedAt = new Date("2026-11-12T18:00:00.000Z");
 const stamp = fixedAt.toISOString();
 const cron = { isValid: (value: string) => value === "0 6 * * *", next: () => "2026-11-13T06:00:00.000Z" };
 
-function harness() {
+function harness(defaultPools?: () => Promise<Pools>, existingSwarm = false) {
   const store = openStore(":memory:");
   const refused = new Set<string>();
   let sourceConfigured = true;
@@ -69,7 +69,12 @@ function harness() {
     variantConfig: async (id) => variantConfigs.get(id) ?? promotedConfig,
   };
   let clock = fixedAt;
-  const service = createSwarmService({ store, runs, evals, providers, liveSources, cron, now: () => clock });
+  if (existingSwarm) {
+    const swarm: Swarm = { id: "swm_legacy", name: "Legacy", status: "active", thesis, configId: BASE_CONFIG.id, createdAt: stamp, updatedAt: stamp };
+    store.insertSwarm(swarm);
+    store.insertAgent({ id: "agt_legacy_scout", swarmId: swarm.id, jobId: "scout.github", classId: "scout", name: "GitHub", status: "active", beat: null, state: {}, createdAt: stamp });
+  }
+  const service = createSwarmService({ store, runs, evals, providers, liveSources, ...(defaultPools ? { defaultPools } : {}), cron, now: () => clock });
   return {
     store, service, refused,
     setNow: (at: Date) => { clock = at; },
@@ -143,16 +148,101 @@ function expectServiceError(promise: Promise<unknown>, status: number, field?: s
 }
 
 const opened: ReturnType<typeof harness>[] = [];
-function createHarness() { const item = harness(); opened.push(item); return item; }
+function createHarness(defaultPools?: () => Promise<Pools>, existingSwarm = false) { const item = harness(defaultPools, existingSwarm); opened.push(item); return item; }
 afterEach(() => { for (const item of opened.splice(0)) item.service.close(); });
 
 describe("createSwarmService", () => {
+  it("backfills enabled job agents for a swarm loaded from an older database", () => {
+    const { service, store } = createHarness(undefined, true);
+    const agents = store.listAgents("swm_legacy");
+
+    expect(agents.map((agent) => agent.jobId).sort()).toEqual(JOBS.filter((job) => job.enabled).map((job) => job.id).sort());
+    expect(agents.find((agent) => agent.id === "agt_legacy_scout")).toBeDefined();
+    expect(agents.filter((agent) => agent.jobId === "hunt.navigate")).toHaveLength(1);
+    expect(agents.filter((agent) => agent.jobId === "hunt.look")).toHaveLength(1);
+    expect(agents.filter((agent) => agent.jobId === "hunt.sift")).toHaveLength(1);
+    service.close();
+  });
+
+  it("uses agent scoped runner directives for Hunt limits", async () => {
+    const { service, store } = createHarness();
+    await service.ensureSeeded();
+    const swarm = store.listSwarms()[0]!;
+    const runner = store.listAgents(swarm.id).find((agent) => agent.jobId === "hunt.look")!;
+    const api = service.as("Partner");
+    await api.createDirective({ scope: { agentId: runner.id }, kind: "param", key: "hunt.wave_size", value: 18 });
+
+    expect((await api.getHunt(swarm.id)).limits.waveSize).toBe(18);
+  });
+
   it("assembles the app from its options and closes the shared store", async () => {
     const app = createApp({ dbPath: ":memory:", dataDir: ".", flowsDir: ".", cron });
     await app.service.ensureSeeded();
     expect(app.store.listSwarms()).toHaveLength(1);
     expect(app.providers).toBeDefined();
     app.close();
+  });
+
+  it("resolves both configured runner providers into default pools and lets saved pools replace them", async () => {
+    const app = createApp({
+      dbPath: ":memory:",
+      dataDir: ".",
+      flowsDir: ".",
+      cron,
+      env: {
+        DEEPSEEK_API_KEY: "test-key",
+        DEEPSEEK_BASE_URL: "https://deepseek.example.test/v1",
+        META_API_KEY: "test-key",
+        META_BASE_URL: "https://meta.example.test/v1",
+      },
+    });
+    try {
+      await app.service.ensureSeeded();
+      const api = app.service.as("Partner");
+      const swarm = (await api.listSwarms())[0]!;
+      const defaults = await api.getPools(swarm.id);
+      expect(defaults.pools.find((pool) => pool.jobId === "hunt.look")?.members.map((member) => member.id)).toEqual(["deepseek-flash", "muse-ember"]);
+      expect(defaults.pools.find((pool) => pool.jobId === "hunt.sift")?.members.map((member) => member.id)).toEqual(["deepseek-flash", "muse-ember"]);
+
+      const saved = await api.setPool(swarm.id, "hunt.look", { members: [{ id: "local-runner", route: { provider: "sim", model: "local" }, share: 1 }] });
+      expect(saved.pools.find((pool) => pool.jobId === "hunt.look")?.members.map((member) => member.id)).toEqual(["local-runner"]);
+      expect(saved.pools.find((pool) => pool.jobId === "hunt.sift")?.members.map((member) => member.id)).toEqual(["deepseek-flash", "muse-ember"]);
+    } finally {
+      app.close();
+    }
+  });
+
+  it("runs the hunt through the assembled simulation app", async () => {
+    const app = createApp({ dbPath: ":memory:", dataDir: ".", flowsDir: ".", cron, simSeed: 13 });
+    try {
+      await app.service.ensureSeeded();
+      const api = app.service.as("Partner");
+      const [swarm] = await api.listSwarms();
+      // Ordinary scouts run before the hunt and would deduplicate the same simulated founders.
+      for (const agent of app.store.listAgents(swarm!.id).filter((item) => item.jobId.startsWith("scout."))) {
+        app.store.updateAgent(agent.id, { status: "paused" });
+      }
+      await api.addHuntTrail(swarm!.id, {
+        name: "Simulated founder pages",
+        pages: [
+          "https://web.sim.example/g/strong-early/1",
+          "https://web.sim.example/g/decent/1",
+          "https://web.sim.example/g/small-team/1",
+          "https://web.sim.example/g/mixed/1",
+          "https://web.sim.example/g/later-stage/1",
+          "https://web.sim.example/g/job-board/1",
+        ],
+      });
+      const started = await api.startRun({ swarmId: swarm!.id, brain: "sim", sources: "sim" });
+      await app.service.runs.wait(started.id);
+
+      const hunt = await api.getHunt(swarm!.id);
+      expect(hunt.trails.length).toBeGreaterThan(0);
+      expect(hunt.calls.length).toBeGreaterThan(0);
+      expect(hunt.finds.length).toBeGreaterThan(0);
+    } finally {
+      app.close();
+    }
   });
 
   it("seeds a complete swarm, two global rules and one swarm preference, once", async () => {
@@ -544,6 +634,27 @@ describe("createSwarmService", () => {
     await expectServiceError(api.setPool("missing", "investigate.background", { members }), 404);
     const cleared = await api.setPool(swarm.id, "investigate.background", { members: [] });
     expect(cleared.pools.find((pool) => pool.jobId === "investigate.background")?.members).toEqual([]);
+  });
+
+  it("shows configured runner defaults until a swarm saves its own pool", async () => {
+    // These defaults represent DeepSeek and Meta reporting configured for scheduled runner jobs.
+    const { service } = createHarness(async () => runnerPools(() => true));
+    const api = service.as("Partner");
+    const swarm = await api.createSwarm({ name: "Runner defaults", thesis });
+
+    const defaults = await api.getPools(swarm.id);
+    expect(defaults.pools.find((pool) => pool.jobId === "hunt.look")?.members.map((member) => member.id)).toEqual(["deepseek-flash", "muse-ember"]);
+    expect(defaults.pools.find((pool) => pool.jobId === "hunt.sift")?.members.map((member) => member.id)).toEqual(["deepseek-flash", "muse-ember"]);
+
+    const own = await api.setPool(swarm.id, "hunt.look", {
+      members: [{ id: "local-runner", route: { provider: "sim", model: "local" }, share: 1 }],
+    });
+    expect(own.pools.find((pool) => pool.jobId === "hunt.look")?.members.map((member) => member.id)).toEqual(["local-runner"]);
+    expect(own.pools.find((pool) => pool.jobId === "hunt.sift")?.members.map((member) => member.id)).toEqual(["deepseek-flash", "muse-ember"]);
+
+    const reset = await api.setPool(swarm.id, "hunt.look", { members: [] });
+    expect(reset.pools.find((pool) => pool.jobId === "hunt.look")?.members).toEqual([]);
+    expect(reset.pools.find((pool) => pool.jobId === "hunt.look")?.route).not.toBeNull();
   });
 
   it("lists every assumption even when nothing has been judged yet", async () => {

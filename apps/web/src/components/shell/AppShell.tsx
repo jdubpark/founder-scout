@@ -3,6 +3,7 @@ import {
   Activity,
   Building2,
   ClipboardCheck,
+  Compass,
   Hash,
   House,
   LineChart,
@@ -40,6 +41,7 @@ const WORK: NavItem[] = [
 
 const MANAGE: NavItem[] = [
   { to: "/swarm", label: "Swarm", icon: Network },
+  { to: "/hunt", label: "Hunt", icon: Compass },
   { to: "/steering", label: "Steering", icon: SlidersHorizontal },
   { to: "/improve", label: "Improve", icon: LineChart },
   { to: "/assumptions", label: "Assumptions", icon: ListChecks },

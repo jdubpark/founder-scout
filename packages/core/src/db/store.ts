@@ -17,8 +17,12 @@ import {
   type Evidence,
   type Feedback,
   type FeedbackVerdict,
+  type FrontierItem,
   type Founder,
   type FounderStatus,
+  type Hunt,
+  type HuntCall,
+  type HuntNote,
   type Lead,
   type MemberStats,
   type Memo,
@@ -31,6 +35,7 @@ import {
   type Swarm,
   type SwarmConfig,
   type TaskRun,
+  type Trail,
   type Verification,
   newId,
   normalizeCompanyName,
@@ -274,6 +279,141 @@ export class SqliteStore implements Store {
     if (!row) throw missing("Lead", leadId);
     const lead = { ...JSON.parse(row.record) as Lead, founderId };
     this.db.prepare("UPDATE leads SET founder_id = ?, record = ? WHERE id = ?").run(founderId, serialize(lead), leadId);
+  }
+
+  getHunt(swarmId: string): Hunt | null {
+    return parse(this.db.prepare("SELECT record FROM hunts WHERE swarm_id = ?").get(swarmId) as RecordRow | undefined);
+  }
+
+  saveHunt(hunt: Hunt): void {
+    this.db.prepare(`INSERT INTO hunts (id, swarm_id, record) VALUES (?, ?, ?)
+      ON CONFLICT(id) DO UPDATE SET swarm_id = excluded.swarm_id, record = excluded.record`)
+      .run(hunt.id, hunt.swarmId, serialize(hunt));
+  }
+
+  listTrails(huntId: string): Trail[] {
+    return rowRecords(this.db.prepare(`SELECT record FROM hunt_trails WHERE hunt_id = ?
+      ORDER BY opened_at ASC, id ASC`).all(huntId) as RecordRow[]);
+  }
+
+  getTrail(id: string): Trail | null {
+    return parse(this.db.prepare("SELECT record FROM hunt_trails WHERE id = ?").get(id) as RecordRow | undefined);
+  }
+
+  saveTrail(trail: Trail): void {
+    this.db.prepare(`INSERT INTO hunt_trails (id, hunt_id, opened_at, record) VALUES (?, ?, ?, ?)
+      ON CONFLICT(id) DO UPDATE SET hunt_id = excluded.hunt_id, opened_at = excluded.opened_at, record = excluded.record`)
+      .run(trail.id, trail.huntId, trail.openedAt, serialize(trail));
+  }
+
+  addFrontier(items: FrontierItem[]): FrontierItem[] {
+    const insert = this.db.prepare(`INSERT OR IGNORE INTO hunt_frontier
+      (id, hunt_id, trail_id, kind, target, engine, state, added_at, record)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`);
+    const existing = this.db.prepare(`SELECT record FROM hunt_frontier
+      WHERE hunt_id = ? AND kind = ? AND target = ? AND COALESCE(engine, '') = ?`);
+    const requeue = this.db.prepare(`UPDATE hunt_frontier
+      SET trail_id = ?, state = ?, added_at = ?, record = ? WHERE id = ?`);
+    return this.transaction(() => {
+      const added: FrontierItem[] = [];
+      for (const item of items) {
+        const result = insert.run(item.id, item.huntId, item.trailId, item.kind, item.target,
+          item.engine, item.state, item.addedAt, serialize(item));
+        if (result.changes === 1) {
+          added.push(item);
+          continue;
+        }
+        const before = parse<FrontierItem>(existing.get(item.huntId, item.kind, item.target, item.engine ?? "") as RecordRow | undefined);
+        if (!before) continue;
+        if (before.state === "queued") {
+          // Still waiting, on another trail: it moves to the trail that asks now. The first
+          // trail may have been closed since, and work left on a closed trail is never done.
+          if (before.trailId === item.trailId) continue;
+          const moved: FrontierItem = { ...before, trailId: item.trailId, label: item.label, priority: item.priority, depth: Math.min(before.depth, item.depth), from: item.from };
+          requeue.run(moved.trailId, moved.state, moved.addedAt, serialize(moved), before.id);
+          added.push(moved);
+          continue;
+        }
+        // Done with: a page is never read twice. A search is run again in a later run, or on
+        // a later day: the same words find new people next week.
+        if (item.kind !== "search") continue;
+        // What counts is when it ran and which run ran it, not when it was first queued: a
+        // search queued yesterday and run a minute ago has just been run.
+        const laterDay = (before.ranAt ?? before.addedAt).slice(0, 10) < item.addedAt.slice(0, 10);
+        const otherRun = (before.ranBy !== undefined ? before.ranBy : before.runId ?? null) !== (item.runId ?? null);
+        if (!laterDay && !otherRun) continue;
+        const again: FrontierItem = { ...item, id: before.id };
+        requeue.run(again.trailId, again.state, again.addedAt, serialize(again), before.id);
+        added.push(again);
+      }
+      return added;
+    });
+  }
+
+  listFrontier(huntId: string, filter: { state?: FrontierItem["state"]; trailId?: string } = {}): FrontierItem[] {
+    const where = ["hunt_id = ?"];
+    const params: unknown[] = [huntId];
+    if (filter.state !== undefined) { where.push("state = ?"); params.push(filter.state); }
+    if (filter.trailId !== undefined) { where.push("trail_id = ?"); params.push(filter.trailId); }
+    return rowRecords(this.db.prepare(`SELECT record FROM hunt_frontier WHERE ${where.join(" AND ")}
+      ORDER BY added_at ASC, id ASC`).all(...params) as RecordRow[]);
+  }
+
+  getFrontierItem(id: string): FrontierItem | null {
+    return parse<FrontierItem>(this.db.prepare("SELECT record FROM hunt_frontier WHERE id = ?").get(id) as RecordRow | undefined);
+  }
+
+  setFrontierState(id: string, state: FrontierItem["state"], ran?: { at: string; runId: string | null }): void {
+    const item = this.getFrontierItem(id);
+    if (item === null) throw missing("Frontier item", id);
+    const updated: FrontierItem = ran ? { ...item, state, ranAt: ran.at, ranBy: ran.runId } : { ...item, state };
+    this.db.prepare("UPDATE hunt_frontier SET state = ?, record = ? WHERE id = ?").run(state, serialize(updated), id);
+  }
+
+  insertHuntNote(note: HuntNote): void {
+    this.db.prepare("INSERT INTO hunt_notes (id, hunt_id, created_at, record) VALUES (?, ?, ?, ?)")
+      .run(note.id, note.huntId, note.createdAt, serialize(note));
+  }
+
+  listHuntNotes(huntId: string, limit: number): HuntNote[] {
+    return rowRecords(this.db.prepare(`SELECT record FROM hunt_notes WHERE hunt_id = ?
+      ORDER BY created_at DESC, id DESC LIMIT ?`).all(huntId, Math.max(0, Math.floor(limit))) as RecordRow[]);
+  }
+
+  removeHuntNote(id: string): boolean {
+    return this.db.prepare("DELETE FROM hunt_notes WHERE id = ?").run(id).changes > 0;
+  }
+
+  insertHuntCall(call: HuntCall): void {
+    this.db.prepare("INSERT INTO hunt_calls (id, hunt_id, run_id, turn, at, record) VALUES (?, ?, ?, ?, ?, ?)")
+      .run(call.id, call.huntId, call.runId, call.turn, call.at, serialize(call));
+  }
+
+  listHuntCalls(huntId: string, filter: { turn?: number; runId?: string; limit?: number } = {}): HuntCall[] {
+    const where = ["hunt_id = ?"];
+    const params: unknown[] = [huntId];
+    if (filter.turn !== undefined) { where.push("turn = ?"); params.push(filter.turn); }
+    if (filter.runId !== undefined) { where.push("run_id = ?"); params.push(filter.runId); }
+    const limit = filter.limit === undefined ? "" : " LIMIT ?";
+    if (filter.limit !== undefined) params.push(Math.max(0, Math.floor(filter.limit)));
+    return rowRecords(this.db.prepare(`SELECT record FROM hunt_calls WHERE ${where.join(" AND ")}
+      ORDER BY at DESC, id DESC${limit}`).all(...params) as RecordRow[]);
+  }
+
+  listHuntLeads(swarmId: string, limit: number): Lead[] {
+    return rowRecords(this.db.prepare(`SELECT record FROM leads WHERE swarm_id = ?
+      AND COALESCE(json_extract(record, '$.trailId'), '') <> ''
+      ORDER BY discovered_at DESC, id DESC LIMIT ?`).all(swarmId, Math.max(0, Math.floor(limit))) as RecordRow[]);
+  }
+
+  keptByTrail(huntId: string): Map<string, number> {
+    const rows = this.db.prepare(`SELECT trails.id, COUNT(leads.id) AS kept FROM hunt_trails trails
+      JOIN leads ON json_extract(leads.record, '$.trailId') = trails.id
+      JOIN founders ON founders.id = leads.founder_id
+      WHERE trails.hunt_id = ? AND COALESCE(json_extract(leads.record, '$.trailId'), '') <> ''
+        AND founders.status NOT IN ('lead', 'screened_out')
+      GROUP BY trails.id ORDER BY trails.id ASC`).all(huntId) as Array<{ id: string; kept: number }>;
+    return new Map(rows.map((row) => [row.id, row.kept]));
   }
 
   insertFounder(founder: Founder): void {
@@ -916,6 +1056,15 @@ export class SqliteStore implements Store {
   }
 
   memberStats(swarmId: string, jobId: TaskRun["jobId"], sinceIso: string): MemberStats[] {
+    const huntJob = jobId === "hunt.look";
+    const itemTable = huntJob
+      ? `leads item ON json_extract(item.record, '$.discoveredByTaskId') = filtered_tasks.id
+         LEFT JOIN founders attached ON attached.id = item.founder_id`
+      : `evidence item ON json_extract(item.record, '$.collectedByTaskId') = filtered_tasks.id`;
+    const supported = huntJob
+      ? "attached.status NOT IN ('lead', 'screened_out')"
+      : "item.verification = 'supported'";
+    const rejected = huntJob ? "attached.status = 'screened_out'" : "item.verification = 'unsupported'";
     const rows = this.db.prepare(`
       WITH filtered_tasks AS (
         SELECT id, COALESCE(pool_member, '') AS member_id, status, cost_usd,
@@ -932,19 +1081,19 @@ export class SqliteStore implements Store {
         FROM filtered_tasks
         GROUP BY member_id
       ),
-      evidence_stats AS (
-        SELECT filtered_tasks.member_id, COUNT(evidence.id) AS items,
-          SUM(CASE WHEN evidence.verification = 'supported' THEN 1 ELSE 0 END) AS supported,
-          SUM(CASE WHEN evidence.verification = 'unsupported' THEN 1 ELSE 0 END) AS rejected
+      item_stats AS (
+        SELECT filtered_tasks.member_id, COUNT(item.id) AS items,
+          SUM(CASE WHEN ${supported} THEN 1 ELSE 0 END) AS supported,
+          SUM(CASE WHEN ${rejected} THEN 1 ELSE 0 END) AS rejected
         FROM filtered_tasks
-        LEFT JOIN evidence ON json_extract(evidence.record, '$.collectedByTaskId') = filtered_tasks.id
+        LEFT JOIN ${itemTable}
         GROUP BY filtered_tasks.member_id
       )
       SELECT task_stats.member_id, task_stats.tasks, task_stats.failed, task_stats.cost_usd,
-        evidence_stats.items, evidence_stats.supported, evidence_stats.rejected,
+        item_stats.items, item_stats.supported, item_stats.rejected,
         task_stats.controls, task_stats.controls_failed
       FROM task_stats
-      JOIN evidence_stats ON evidence_stats.member_id = task_stats.member_id
+      JOIN item_stats ON item_stats.member_id = task_stats.member_id
       ORDER BY task_stats.member_id ASC
     `).all(swarmId, jobId, sinceIso) as Array<{
       member_id: string;

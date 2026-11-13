@@ -7,6 +7,7 @@ import { useMutation, useQuery, useQueryClient, type QueryClient } from "@tansta
 import type {
   AddAgentInput,
   AddFounderInput,
+  AddTrailInput,
   CompanyFeedbackInput,
   CompanyQuery,
   CreateDirectiveInput,
@@ -15,6 +16,7 @@ import type {
   EffectiveSteeringQuery,
   FeedbackInput,
   FounderQuery,
+  HuntDTO,
   JobId,
   NetworkImportInput,
   OutreachCompleteInput,
@@ -28,6 +30,7 @@ import type {
   UpdateAgentInput,
   UpdateDirectiveInput,
   UpdateSwarmInput,
+  UpdateTrailInput,
 } from "@agentswarm/shared";
 import { useApi } from "./api/context";
 
@@ -55,6 +58,7 @@ export const keys = {
   evalFlow: (id: string, swarmId?: string | null) => ["eval", id, swarmId ?? ""] as const,
   assumptions: (swarmId: string) => ["assumptions", swarmId] as const,
   pools: (swarmId: string) => ["pools", swarmId] as const,
+  hunt: (swarmId: string) => ["hunt", swarmId] as const,
 };
 
 /** After steering changes, everything that shows steering or its effects is stale. */
@@ -65,7 +69,7 @@ function steeringChanged(qc: QueryClient) {
 }
 
 function runsChanged(qc: QueryClient) {
-  for (const root of ["runs", "run", "overview", "tree", "founders", "founder", "outreach"]) {
+  for (const root of ["runs", "run", "overview", "tree", "founders", "founder", "outreach", "hunt"]) {
     void qc.invalidateQueries({ queryKey: [root] });
   }
 }
@@ -242,6 +246,17 @@ export function usePools(swarmId: string | null) {
     queryKey: keys.pools(swarmId ?? ""),
     queryFn: () => client.getPools(swarmId as string),
     enabled: Boolean(swarmId),
+  });
+}
+
+/** The open-web hunt notebook and the recent finds it produced. */
+export function useHunt(swarmId: string | null) {
+  const { client } = useApi();
+  return useQuery({
+    queryKey: keys.hunt(swarmId ?? ""),
+    queryFn: () => client.getHunt(swarmId as string),
+    enabled: Boolean(swarmId),
+    refetchInterval: (query) => (query.state.data?.active ? ACTIVE_REFRESH : IDLE_REFRESH),
   });
 }
 
@@ -500,5 +515,46 @@ export function usePromoteVariant() {
       void qc.invalidateQueries({ queryKey: ["tree"] });
       void qc.invalidateQueries({ queryKey: keys.swarms });
     },
+  });
+}
+
+function setHunt(qc: QueryClient, swarmId: string, data: HuntDTO) {
+  qc.setQueryData(keys.hunt(swarmId), data);
+}
+
+export function useAddHuntTrail(swarmId: string) {
+  const { client } = useApi();
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (input: AddTrailInput) => client.addHuntTrail(swarmId, input),
+    onSuccess: (data) => setHunt(qc, swarmId, data),
+  });
+}
+
+export function useUpdateHuntTrail(swarmId: string) {
+  const { client } = useApi();
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (args: { trailId: string; input: UpdateTrailInput }) =>
+      client.updateHuntTrail(swarmId, args.trailId, args.input),
+    onSuccess: (data) => setHunt(qc, swarmId, data),
+  });
+}
+
+export function useAddHuntNote(swarmId: string) {
+  const { client } = useApi();
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (text: string) => client.addHuntNote(swarmId, { text }),
+    onSuccess: (data) => setHunt(qc, swarmId, data),
+  });
+}
+
+export function useRemoveHuntNote(swarmId: string) {
+  const { client } = useApi();
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (noteId: string) => client.removeHuntNote(swarmId, noteId),
+    onSuccess: (data) => setHunt(qc, swarmId, data),
   });
 }

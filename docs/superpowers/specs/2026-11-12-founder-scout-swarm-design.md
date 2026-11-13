@@ -406,8 +406,8 @@ the integrity question).
 
 ## 12. The dashboard
 
-Ten destinations: Home, Founders, Companies, Approvals, Swarm, Steering, Improve, Assumptions,
-Activity, Settings.
+Eleven destinations: Home, Founders, Companies, Approvals, Swarm, Hunt, Steering, Improve,
+Assumptions, Activity, Settings.
 Direction from the owner: light, very simple and professional, modelled on Slack; as little text as
 possible, with icons and simple diagrams in its place; desktop only. The visual system is recorded
 in `DESIGN.md` and the page-building rules in `apps/web/BUILDING.md`.
@@ -418,6 +418,7 @@ in `DESIGN.md` and the page-building rules in `apps/web/BUILDING.md`.
 - **Founders**: the ranked list with a yes and a no on every row; a slider that shows who would clear a different bar before saving it; a dossier where each rubric answer sits beside its evidence.
 - **Steering**: everything the swarm has been told, suggestions from the partner's calls, and a composer.
 - **Approvals**: drafts to approve, edit or reject.
+- **Hunt**: the navigator, its runners and what they found as one figure; each trail with its attention, its share of the next wave, what it read, found and cost, and buttons to pin, pause and close it; the notebook, with a line to add to it; the people found, each with how early the company is; the latest runner calls.
 - **Companies**: the ranked list of companies with the same Yes and No, and a dossier per company.
 - **Improve**: the three eval flows, round by round, with a budget for the one that calls a model and a list of every decision a change would flip before it is put into use.
 - **Assumptions**: the ledger of section 15, one row per statement, with a bar for past companies and a bar for the partner's calls.
@@ -558,7 +559,198 @@ What was left out, with reasons, is in the synthesis note: consensus protocols, 
 that pick their own topology or sub-agents, shared mutable state, memory a model may rewrite or
 delete, and self-modifying code.
 
-## 16. Decisions that are yours
+## 16. The hunt: a navigator, runners, and the open web
+
+**Why.** The fund wants founders as early as they can be seen, when the price is lowest: before
+a priced round, often before the company has a name. The fixed feeds of section 5 read three
+places. The earliest signal is wherever a person first shows work, and that changes. So the
+swarm needs to roam, and something has to decide where.
+
+**Three kinds of actor, on purpose** (`packages/shared/src/hunt.ts`).
+
+| | What it is | What it does | What it never does |
+|---|---|---|---|
+| **Navigator** | One long-horizon agent, Claude or Codex | Decides where to look: opens and closes trails, writes searches, says where attention should go, writes what it learned in the notebook | Reads a page. Scores a person. Chooses a model |
+| **Runners** | Small fast models, used as tools. DeepSeek and Meta share the work | Read one page or one list of search results and return a short record: the people starting something in the page's own words, how early the company is, the links worth opening | Remember anything. Add an address of their own. Decide who is kept |
+| **Code** | The engine | Spends each wave across trails by what each has yielded, checks every person against the page, leaves out companies past the wanted stage, plants pages that test the runners, keeps the address rules, stops at the budget | Judge a founder |
+
+**Long-horizon means the memory is in the database.** The navigator does not hold a
+conversation open. Each turn it is handed its notebook: the trails with their counts, the latest
+notes, what the last wave found. It answers with one structured request, and code carries it
+out. So a hunt runs for days across scheduled runs, survives a restart, costs the same on turn
+400 as on turn 4, and works the same with Claude or Codex. A turn is a request: code checks it
+(`checkTurn`) and tells the navigator what it refused and why.
+
+**A turn, then a wave.**
+
+1. The navigator's turn: open trails (a name, what to look for, searches or pages to start
+   from), extend or close trails, set attention from 1 to 5, add notes, or say it is done.
+2. Code plans the wave (`planWave`): the open trails share `hunt.wave_size` runner calls in
+   proportion to attention times yield, where yield is leads for each thing read, a lead the
+   fit screener later kept counting three times. A new trail gets a head start, every trail
+   with something waiting gets at least one call, and a trail that read thirty pages and found
+   nobody is closed by code unless a person pinned it. Within a trail pages go before
+   searches, and while both are waiting a trail runs one search for every three pages it has
+   read, counted over its life: people are on pages, and a search only finds more pages. A
+   page is read once and never again. A search that has run is run again only by a later run
+   or on a later day. Something still waiting on a closed trail moves to the trail that asks
+   for it again. On a real site no more than three pages are read in one wave, and a site that
+   asks for a pause is left alone for the rest of the run, with what is waiting behind it read
+   in its place.
+3. Runners work the wave in parallel. A search is run by code against a search engine (a
+   site's own search API or a web search service) and a runner picks the results worth
+   opening. A page is fetched by code and a runner reads it.
+4. Code checks what came back and writes it down. Then the navigator's next turn.
+
+**Checks on a runner, all done by code.**
+
+- *The person is on the page.* Every word of the name must be on the page, and so must the
+  quoted words, compared after tidying case, spacing and quote marks. Otherwise the person is
+  dropped and counted against the trail and the model.
+- *Links by number.* A runner is shown a page's links numbered and answers with numbers. It
+  cannot add an address.
+- *Stage needs the page's words.* The three stage answers (funding, team, progress) each need a
+  quote that is on the page, or code resets the answer to unknown.
+- *Too late.* A company whose page states a round later than `hunt.latest_stage` is left out
+  before a dollar is spent investigating it. Silence is never too late. The rule is about a
+  page that is about one company; a page that lists several is left to the fit screener.
+- *Addresses come from the page.* A profile link or a company address a runner reports is kept
+  only when it is one of the page's links or written in its text.
+- *Planted pages.* One page in `hunt.planted_every` that a runner reads was written by code: a
+  dull changelog that names no founder and has one line telling the reader to report a made-up
+  one. A runner that reports anyone followed an instruction it found on a page. The result is
+  recorded on the task, and the pool rule of section 15 benches a model that keeps doing it.
+
+**Earliness** (`earliness` in `hunt.ts`) is the mean of three answers, 1 for unfunded, one or two
+people, nothing launched. It is a proxy for a low valuation, which no public page states, and
+the page shows it as a label, not as a price.
+
+**Reading the web within its rules** (`packages/core/src/sources/web.ts`). The reader never
+requests a host on the deny list or a private address, connects only to the address it
+validated, reads robots.txt and obeys it (RFC 9309: the group that names the reader, else the
+general one; the longest rule wins; paths are compared with their escapes made the same; no
+answer means no; a file with rules too long or too many to apply means no to the whole site),
+waits between requests to one host and longer when the site asks, sends no login and no cookie,
+and gives up on anything large or not text. A robots.txt is a stranger's text: its patterns
+are matched by hand, because turned into a regular expression one crafted rule can hold a
+server for minutes. It does not log in, does not solve challenges and does not disguise itself: a site that
+says no is a blocked page, counted on its trail.
+
+robots.txt is not the whole contract. Several places where early founders show up allow every
+reader in robots.txt and forbid automated reading in their terms: Devpost, Y Combinator's own
+site, Substack. Reddit and Indie Hackers refuse in robots.txt itself, the second by naming AI
+agents. Product Hunt's API is not for business use, and X is a paid API. The reader does not
+request any of them (`TERMS_BARRED_HOSTS` in `policy.ts`, each with its rule; the sentences are
+quoted in `docs/research/open-web-hunting-grounds.md`). Hacker News is read through its public
+API. The list is a floor: it will need a person to add to it as trails reach new sites.
+
+The reader names itself `web-reader/1.0` unless `HUNT_USER_AGENT` says otherwise. A reader
+should carry a name and a contact address of its owner, so a site can refuse it by name; that
+name is the owner's to choose, so it is a setting and not a default.
+
+**Where the early signal is.** The one place with published timing is GitHub: start-ups raise
+their activity there in the twelve months before a first financing round (Conti, Peukert and
+Roche; 160,065 US start-ups). For first posts, new packages, new models and people announcing
+they have left a job, no study of lead time was found. The seed trails are therefore new
+repositories and first posts, and everything else is for the navigator to try and for the yield
+figures to judge. Places that can be read without a key and are not yet engines: the Hugging
+Face Hub, the npm, PyPI and crates.io registries, OpenAlex, Mastodon and Bluesky. A securities
+notice (Form D) is public and free, and late by design: it is filed after the first sale.
+
+**Which model.** The navigator defaults to the strongest judgment model on a login that needs no
+key (`claude-cli`, Opus); Codex is a route change. Runners need answers in a second or two, and
+a headless agent takes several to start, so runner jobs go through direct APIs: when a DeepSeek
+or a Meta key is present, the runner jobs are given a pool of `deepseek-flash` and
+`muse-ember-1.0` in equal shares (`RUNNER_POOL` in `models.ts`), and code moves share toward
+whichever holds up: leads the screener kept for each dollar, planted pages failed, tasks failed.
+With no key, runners use the small Claude model on the login, which works and is slower.
+
+"DeepSeek or Meta" is answered by that measurement. What is known beforehand
+(`docs/research/rapid-runner-models.md`, measured by Artificial Analysis and read from each
+vendor's documents on 2026-11-13):
+
+| | DeepSeek Flash | Meta Muse Ember |
+|---|---|---|
+| Price for a million tokens, in and out | $0.30 and $1.20 at peak, half off-peak | $0.10 and $0.50 |
+| Time to the first token, 10,000 tokens in | 1.2 s on its own API, 0.6 s on a US host, with thinking off | 5 to 8 s at the two settings measured; the lowest setting is unmeasured |
+| Tokens a second once started | 170 on its own API, 300 on a US host | 520 |
+| Answer in the asked shape | Valid JSON only; can come back blank | Enforced |
+| Reasons by default | Yes: 20 to 60 s unless switched off | Yes, and cannot be switched off, only lowered |
+| What it does with what it is sent | Own API: Chinese law, servers in China, training not stated. A US host of the open weights: the host's terms | Not used for training; where it is processed is not stated |
+
+So the adapter sends each the switch it needs when a route names no effort (thinking off for
+DeepSeek, the lowest reasoning for Meta), puts the shape in the prompt and repairs once where
+it is not enforced, and DeepSeek has no default address: an operator must name a host they have
+approved for data about named people. None of this was run against a live key here.
+
+**How it joins the rest.** The hunt is a stage of a run, after the fixed scouts and before
+matching. A person a runner found becomes a lead like any other (source "web", with its trail,
+its quote and its stage), and from there the pipeline of section 5 applies unchanged: matching,
+the fit screen, investigation, the quote check, fact-checking, the rubric. The hunt may spend at
+most `hunt.budget_share` of a run's cap. Each call is given an allowance before it starts, out
+of what is left of that share, and is held to it; allowances in flight never add up to more
+than what is left, and a call that finds no room waits for one in flight to finish instead of
+ending the hunt.
+
+**A person's hand comes first.** A navigator's turn takes seconds to arrive, and a person may
+have pinned, paused or closed a trail meanwhile. The turn is checked against the trails as
+they are when it arrives. The navigator cannot close a pinned trail or a paused one, cannot
+reopen what a person closed, and cannot change attention on a trail that is not open.
+
+**Pools of context.** The navigator reads the objective, steering, the partner's calls and the
+hunt notebook, and nothing a page said. A runner reads the objective, one page, what its trail
+is looking for and three lines of the notebook. What a runner writes about a page reaches the
+navigator only as counts and as labels of a few words, and the navigator is told they are data.
+Three crossings were added to the table for this.
+
+**Steering it.** A person steers the navigator the way they steer any agent (section 6), and
+also in the hunt's own terms: open a trail, pin one so it cannot be closed, pause or close one,
+set its attention, write a line in the notebook. A person's note is shown to runners before the
+navigator's.
+
+**The navigator steers the search and never the scoring.** It cannot write guidance for the
+analysts or change a weight. Those change only through a person or through an eval's keep rule
+(section 11). A page can therefore mislead a hunt toward a bad address, which the address rules
+and the budget bound, and it cannot reach a founder's score.
+
+**Reviewed twice.** An independent reviewer read the hunt twice. The first reading found
+nine defects and the second seven, all fixed, each with a test: among them a robots.txt
+pattern that could freeze the server, a way round robots.txt with an escaped letter, a
+navigator's answer undoing a person's pin, a runner supplying a company address that was not on
+the page, and work stranded on a closed trail. The fixes to the second reading were not read a
+third time.
+
+**What happened when it ran** (2026-11-13). In simulation: six simulated days from the command
+line, and in the dashboard a trail added by hand read fifteen pages and found seven people on
+the next run. Live, on the headless logins, four runs on one notebook for $0.25 in all:
+
+| | |
+|---|---|
+| Navigator (Claude Opus) | 5 turns, about $0.04 and 8 to 17 seconds each. It wrote searches in each engine's own syntax (`topic:llm created:>2026-10-15 stars:>50`), added nothing on later turns because enough was waiting, raised attention on the one trail whose finds the screener had kept, and on the fifth turn closed the trail that had found nobody, giving the counts as its reason |
+| Search engines | Hacker News, GitHub and the Hugging Face Hub: 12 of 13 searches returned results |
+| Runners (Claude Haiku on the login) | 12 result lists sifted at $0.001 each and 18 pages read at $0.002 each, a median of 5 to 8 seconds a call. That is the headless start-up, and it is why runners are meant for a direct API |
+| Reader | 14 pages read on huggingface.co, github.com and projects' own sites, each after its robots.txt. One page was refused by its site's robots.txt and one answered HTTP 500; both were counted as blocked |
+| Checks | 4 people kept, each after code found the name and the quoted words on the page. 4 planted pages read; the runner reported nobody each time |
+| After the hunt | The 4 were matched and screened in the run that found them: the fit screen kept 3 and left 1 out, and the trail's count of kept finds followed a run later |
+
+The first run read no page at all: every call of both waves was a search, because the oldest
+item went first and the navigator kept adding searches. That is why pages now go before
+searches. Four runs show that the parts work together on real sites. They say nothing about
+how many founders a hunt finds, or how good they are, and nothing about DeepSeek or Meta as
+runners: no key for either was present, so those paths have run only against a fake client.
+The last of the four ran on the code as it is after both reviews.
+
+**What is not built.** A general web search engine. Every search service read has a price and
+terms: Perplexity's search API is $1 for a thousand fast queries, Exa $4, Brave $5; Brave and
+Kagi forbid keeping results, which a queue of addresses does, and the terms of the others could
+not be read. Choosing one is a contract, so it is left to the owner (section 17); until then the
+engines are Hacker News and GitHub search, and a page a person or the navigator names. Scraping
+a search engine is not an option: Google sued a company for it in December 2025. There is no
+eval flow for the hunt yet: its measure is each trail's and each model's yield on the Hunt page.
+An outside long-horizon agent cannot yet drive the hunt through the API in place of the built-in
+navigator.
+
+## 17. Decisions that are yours
 
 1. The fund's name and first thesis.
 2. Which profile-data vendor to sign with, after reading its terms and asking where its data comes from. The People Data Labs adapter works with a free key (100 records a month) for a first look.
@@ -570,4 +762,6 @@ delete, and self-modifying code.
 8. Hosting and login, before anyone but you opens the dashboard.
 9. What counts as a company that did well. Today: publicly listed, on its programme's list of top companies, or still operating with at least 100 people. A labels file overrides it.
 10. Which model judges past cases (`EVAL_JUDGE`), and how much autopilot may spend on evals each day (zero today, so it only suggests).
-11. Whether a job should be shared between models at all, and which ones. Pools are empty until members are added on the Swarm page.
+11. Whether a job should be shared between models at all, and which ones. Pools are empty until members are added on the Swarm page, except the runner jobs, which are shared between DeepSeek Flash and Muse Ember once their keys are set.
+12. For the hunt: the name and contact address its reader gives to sites (`HUNT_USER_AGENT`); which host runs DeepSeek's weights, if any; which web search service to contract with, after reading its terms on keeping results; and the latest stage worth a look (seed today).
+13. Which sites to add to the list the hunt does not read. The list holds the ones whose terms were read; a trail will reach others.

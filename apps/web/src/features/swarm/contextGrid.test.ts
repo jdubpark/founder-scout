@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { CONTEXT_POOLS, type ClassId, type PoolId } from "@agentswarm/shared";
-import { classReadsPool, contextGrid, crossingLines, poolsForJob } from "./contextGrid";
+import { CARRIER_LABEL, classReadsPool, contextGrid, crossingLines, poolsForJob } from "./contextGrid";
 
-const CLASSES: ClassId[] = ["scout", "resolver", "screener", "investigator", "company", "verifier", "analyst", "outreach"];
+const CLASSES: ClassId[] = ["navigator", "scout", "runner", "resolver", "screener", "investigator", "company", "verifier", "analyst", "outreach"];
 
 function cell(pool: PoolId, classId: ClassId): boolean {
   const row = contextGrid(CLASSES).find((r) => r.pool.id === pool);
@@ -23,6 +23,10 @@ describe("context grid", () => {
     // Scouts read source items; analysts never do.
     expect(cell("sources", "scout")).toBe(true);
     expect(cell("sources", "analyst")).toBe(false);
+    // The hunt notebook is shared with the navigator and runner, not scouts.
+    expect(cell("hunt", "navigator")).toBe(true);
+    expect(cell("hunt", "runner")).toBe(true);
+    expect(cell("hunt", "scout")).toBe(false);
   });
 
   it("draws the sealed pools with no dots at all", () => {
@@ -56,6 +60,10 @@ describe("pools a job reads", () => {
 });
 
 describe("crossing lines", () => {
+  it("labels the runner as a carrier", () => {
+    expect(CARRIER_LABEL.runners).toBe("Runners");
+  });
+
   it("carry the labels of both pools", () => {
     const lines = crossingLines();
     expect(lines.length).toBeGreaterThan(0);

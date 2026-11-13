@@ -44,6 +44,7 @@ import { plantControl } from "../jobs";
 import type { PersonRecord } from "../contracts";
 import { runCompanyAssess, runCompanyResearch, runCompanyResolve } from "./company-stages";
 import { forEachConcurrent, type EngineRuntime } from "./runtime";
+import { runHunt } from "./hunt";
 import { normalizeLink, normalizeName } from "../db";
 import { redactSensitive } from "../jobs";
 
@@ -1163,6 +1164,8 @@ export async function runPipelineStages(runtime: EngineRuntime): Promise<void> {
   if (!(await runDebrief(runtime, assessmentCandidates))) return;
   if (runtime.stopped()) return;
   const simIdsByLead = await runScout(runtime);
+  if (runtime.stopped()) return;
+  await runHunt(runtime, simIdsByLead);
   if (runtime.stopped()) return;
   await runResolve(runtime, simIdsByLead);
   if (runtime.stopped()) return;

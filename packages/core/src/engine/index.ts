@@ -12,6 +12,7 @@ import {
   resolveSteering,
   stableId,
   swarmIdentity,
+  withDefaultPools,
   type Agent,
   type JobInput,
   type JobOutput,
@@ -184,11 +185,12 @@ export function createRunController(deps: EngineDeps): RunController {
       agent: Agent,
       founderId: string | null,
       companyId: string | null,
+      routeKey?: string,
     ) => routeForTask(
       jobId,
       steering,
       config,
-      `${run.swarmId}:${jobId}:${companyId ?? founderId ?? agent.id}`,
+      `${run.swarmId}:${jobId}:${routeKey ?? companyId ?? founderId ?? agent.id}`,
     );
 
     const makeRecord = (input: Omit<TaskRun, "id" | "runId" | "swarmId" | "trace">): TaskRun => {
@@ -270,16 +272,19 @@ export function createRunController(deps: EngineDeps): RunController {
         input: JobInput<J>;
         founderId?: string | null;
         companyId?: string | null;
+        routeKey?: string;
+        maxBudgetUsd?: number;
         repoDir?: string | null;
       }): Promise<TaskResult<J> | null> => {
-        const { agent, stage, jobId, input, founderId = null, companyId = null, repoDir = null } = args;
+        const { agent, stage, jobId, input, founderId = null, companyId = null, routeKey, repoDir = null } = args;
         if (stopped()) return null;
         const job = deps.jobs.get(jobId);
         const steering = steeringForTask(agent);
-        const selected = routeFor(jobId, steering, agent, founderId, companyId);
+        const selected = routeFor(jobId, steering, agent, founderId, companyId, routeKey);
         const route = selected.route;
         const steeringBlock = steeringBlockForTask(agent, steering);
-        const taskBudgetUsd = numberParam("budget.task_usd", steering, config);
+        // A stage that shares out its own allowance between calls may give this one less than the per-task cap.
+        const taskBudgetUsd = Math.min(numberParam("budget.task_usd", steering, config), args.maxBudgetUsd ?? Number.POSITIVE_INFINITY);
         const timestamp = iso(now());
         const snapshot = {
           directiveIds: [...steering.directiveIds],
@@ -375,7 +380,8 @@ export function createRunController(deps: EngineDeps): RunController {
               promptVariant: config.promptVariants[jobId] ?? "base",
               now: now(),
               sim,
-              rng: taskSeed(agent, founderId, attempt),
+              // One agent does a runner job many times in a run; the thing it works on tells the calls apart.
+              rng: taskSeed(agent, founderId ?? routeKey ?? null, attempt),
             };
             try {
               const execution: JobExecution<J> = await deps.executeJob(jobId, input, taskContext, {
@@ -493,10 +499,11 @@ export function createRunController(deps: EngineDeps): RunController {
     const execute = async (): Promise<Run> => {
       try {
         if (stopped()) return finish("cancelled", null);
+        const defaultPools = await deps.defaultPools?.() ?? {};
         currentRun = deps.store.updateRun(run.id, { status: "running" });
         setStage("plan");
         currentSwarm = deps.store.getSwarm(run.swarmId) ?? currentSwarm;
-        config = deps.store.getConfig(run.configId) ?? BASE_CONFIG;
+        config = withDefaultPools(deps.store.getConfig(run.configId) ?? BASE_CONFIG, defaultPools);
         agents = deps.store.listAgents(run.swarmId);
         const planIdentity = swarmIdentity(run.swarmId);
         const planSteering = resolveSteering(deps.store.listDirectives(), planIdentity, now());

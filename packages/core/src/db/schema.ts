@@ -110,6 +110,38 @@ const migrations: readonly Migration[] = [
   (db) => {
     db.exec("ALTER TABLE tasks ADD COLUMN pool_member TEXT");
   },
+  (db) => {
+    db.exec(`
+      CREATE TABLE hunts (
+        id TEXT PRIMARY KEY, swarm_id TEXT NOT NULL UNIQUE, record TEXT NOT NULL
+      );
+      CREATE TABLE hunt_trails (
+        id TEXT PRIMARY KEY, hunt_id TEXT NOT NULL, opened_at TEXT NOT NULL, record TEXT NOT NULL
+      );
+      CREATE INDEX hunt_trails_by_hunt ON hunt_trails(hunt_id, opened_at, id);
+      CREATE TABLE hunt_frontier (
+        id TEXT PRIMARY KEY, hunt_id TEXT NOT NULL, trail_id TEXT NOT NULL,
+        kind TEXT NOT NULL, target TEXT NOT NULL, engine TEXT, state TEXT NOT NULL,
+        added_at TEXT NOT NULL, record TEXT NOT NULL
+      );
+      CREATE INDEX hunt_frontier_by_hunt ON hunt_frontier(hunt_id, added_at, id);
+      CREATE INDEX hunt_frontier_by_trail_state ON hunt_frontier(hunt_id, trail_id, state, added_at, id);
+      CREATE UNIQUE INDEX hunt_frontier_dedupe
+        ON hunt_frontier(hunt_id, kind, target, COALESCE(engine, ''));
+      CREATE TABLE hunt_notes (
+        id TEXT PRIMARY KEY, hunt_id TEXT NOT NULL, created_at TEXT NOT NULL, record TEXT NOT NULL
+      );
+      CREATE INDEX hunt_notes_by_hunt ON hunt_notes(hunt_id, created_at DESC, id DESC);
+      CREATE TABLE hunt_calls (
+        id TEXT PRIMARY KEY, hunt_id TEXT NOT NULL, run_id TEXT NOT NULL,
+        turn INTEGER NOT NULL, at TEXT NOT NULL, record TEXT NOT NULL
+      );
+      CREATE INDEX hunt_calls_by_hunt ON hunt_calls(hunt_id, at DESC, id DESC);
+      CREATE INDEX hunt_calls_by_run ON hunt_calls(hunt_id, run_id, at DESC, id DESC);
+      CREATE INDEX hunt_calls_by_turn ON hunt_calls(hunt_id, turn, at DESC, id DESC);
+      CREATE INDEX leads_by_swarm_discovered ON leads(swarm_id, discovered_at DESC, id DESC);
+    `);
+  },
 ];
 
 export function migrate(db: Database.Database): void {

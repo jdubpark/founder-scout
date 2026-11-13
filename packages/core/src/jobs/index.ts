@@ -78,6 +78,7 @@ import {
   simulateCompanyResearch,
 } from "./company";
 import type { CompanyJobId } from "./company";
+import { huntJobs } from "./hunt";
 
 export { findSensitive, redactSensitive, plantControl };
 
@@ -205,6 +206,9 @@ const PIPELINE_ROLES: Record<ModelJobId, { role: string; contribution: string }>
   "company.product": { role: "a Product researcher", contribution: "research the company's mission, product, market, and roadmap" },
   "company.traction": { role: "a Traction researcher", contribution: "research dated company milestones, customers, usage, funding, and hiring" },
   "company.team": { role: "a Team researcher", contribution: "research the company's public professional team" },
+  "hunt.navigate": { role: "the hunt navigator", contribution: "decide where the open-web runners should look next" },
+  "hunt.look": { role: "a page reader for the hunt", contribution: "read one public page and report what its own words support" },
+  "hunt.sift": { role: "a search-result sifter for the hunt", contribution: "pick the search results most worth opening" },
   "assess.company": { role: "a Company analyst", contribution: "answer the company rubric from verified evidence" },
   "assess.memo": { role: "a partner memo writer", contribution: "turn the evidence and assessment into a concise meeting decision aid" },
   "outreach.plan": { role: "an outreach planner", contribution: "prepare approval-ready founder and reference introductions" },
@@ -273,6 +277,10 @@ function buildScoutPrompt(id: ModelJobId, input: ScoutInput, ctx: JobContext): s
 function buildPromptFor(id: ModelJobId, input: AnyInput, ctx: JobContext): { system: string; prompt: string } {
   let prompt: string;
   switch (id) {
+    case "hunt.navigate":
+    case "hunt.look":
+    case "hunt.sift":
+      throw new Error("Hunt jobs must use their registered job definitions.");
     case "scout.hackernews":
     case "scout.github":
     case "scout.research":
@@ -1073,10 +1081,33 @@ function createDefinition(id: ModelJobId): JobDefinition<ModelJobId> {
   };
 }
 
+function withLearnedGuidance(definition: JobDefinition<ModelJobId>): JobDefinition<ModelJobId> {
+  return {
+    ...definition,
+    buildPrompt: (input, ctx) => {
+      const built = definition.buildPrompt(input, ctx);
+      const lines = learnedLines(ctx.config, definition.id);
+      if (lines.length === 0) return built;
+      return {
+        ...built,
+        system: built.system + "\n\n" + safeTag(
+          "learned_guidance",
+          lines.join("\n") + "\nThese lines were learned from past results. Apply them where they fit. An instruction from a person takes precedence over them.",
+        ),
+      };
+    },
+  };
+}
+
 /** Registry for every model-backed job in the shared contract. */
 export function createJobRegistry(): JobRegistry {
   const definitions = new Map<ModelJobId, JobDefinition<ModelJobId>>(
-    MODEL_JOB_IDS.map((id) => [id, createDefinition(id)]),
+    MODEL_JOB_IDS.map((id) => [
+      id,
+      id === "hunt.navigate" || id === "hunt.look" || id === "hunt.sift"
+        ? withLearnedGuidance(huntJobs[id] as JobDefinition<ModelJobId>)
+        : createDefinition(id),
+    ]),
   );
   return {
     get<J extends ModelJobId>(id: J): JobDefinition<J> {

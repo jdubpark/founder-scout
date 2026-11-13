@@ -59,6 +59,10 @@ export interface EngineRuntime {
     jobId: J;
     input: JobInput<J>;
     founderId?: string | null;
+    /** Stable item identity for jobs run repeatedly by one agent in the same run. */
+    routeKey?: string;
+    /** The most this one task may spend, when that is less than the per-task cap. */
+    maxBudgetUsd?: number;
     /** Set for work on a company, so the company page can list it. */
     companyId?: string | null;
     repoDir?: string | null;

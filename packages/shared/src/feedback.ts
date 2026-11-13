@@ -75,7 +75,7 @@ export function latestCalls(feedback: readonly Feedback[]): Map<string, Feedback
 /* ------------------------------------------------------------------ */
 
 /** Agent classes that are shown recent partner calls. */
-export const CLASSES_SHOWN_CALLS: readonly ClassId[] = ["scout", "screener", "analyst"];
+export const CLASSES_SHOWN_CALLS: readonly ClassId[] = ["navigator", "scout", "screener", "analyst"];
 
 export interface CallExample {
   verdict: FeedbackVerdict;

@@ -1,8 +1,9 @@
 # Founder Scout
 
-An agent swarm that finds startup founders for a venture investor, builds sourced dossiers on them
-and on their companies, scores both, and learns from the partner's Yes / No. Read the design before
-changing behaviour:
+An agent swarm that finds startup founders for a venture investor as early as they can be seen,
+builds sourced dossiers on them and on their companies, scores both, and learns from the
+partner's Yes / No. A long-horizon navigator steers small fast runners across the open web
+(design section 16); fixed scouts read three feeds. Read the design before changing behaviour:
 `docs/superpowers/specs/2026-11-12-founder-scout-swarm-design.md`.
 
 ## Layout
@@ -20,7 +21,7 @@ enforced in `packages/core/src/rules.test.ts`.
 pnpm check                                   # typecheck all packages, then all tests
 pnpm exec vitest run packages/core/src/engine   # one area
 pnpm dev                                     # API on 4317, dashboard on 5317
-pnpm swarm run --days 3                      # simulated runs from the command line
+pnpm swarm run --days 3                      # simulated runs from the command line; each prints what its hunt read and found
 pnpm swarm past collect --from 2018-01-01 --to 2021-01-01 --yc --unicorns   # build the past-companies dataset
 pnpm swarm eval rounds --flow past-founders --rounds 0 --budget 3          # measure it; this calls models
 ```
@@ -121,6 +122,33 @@ check it. `packages/core/src/rules.test.ts` enforces that, so add the test with 
   ledger in `packages/shared/src/assumptions.ts` tests each statement on past companies from the
   tuning periods and on the partner's calls, and keeps the two apart. Tests:
   `packages/shared/src/assumptions.test.ts`, `packages/core/src/service/assumptions.test.ts`.
+- **The navigator steers the search and never the scoring.** It is one long-horizon agent whose
+  memory is a notebook in the database. It is shown counts and labels of a few words, never a
+  page. Its turn is a request that `checkTurn` checks, and it cannot write guidance for the
+  analysts or change a weight. Tests: `packages/shared/src/hunt.test.ts`,
+  `packages/core/src/engine/hunt.test.ts`, `packages/shared/src/context.test.ts`.
+- **A runner cannot add a person or an address.** A person is kept only when the name and the
+  quoted words are on the page; links and search results are picked by number; a stage answer
+  without the page's words is reset; a company whose page states a round later than the fund
+  wants is left out, and silence is never too late. Earliness is a proxy and is never called a
+  valuation. Tests: `packages/shared/src/hunt.test.ts`, `packages/core/src/engine/hunt.test.ts`.
+- **One page in every so many that a runner reads is planted.** It names no founder and tells
+  the reader to report one. The result is the task's control, counted against the pool member,
+  and nobody from a planted page is ever kept. Tests: `packages/shared/src/hunt.test.ts`,
+  `packages/core/src/engine/hunt.test.ts`, `packages/core/src/jobs/hunt.test.ts`.
+- **The hunt reads public pages within their rules.** robots.txt is obeyed, requests to one host
+  are spaced, there is no login and no cookie, a refusal is final, an address must be a named
+  public host, and the sites in `TERMS_BARRED_HOSTS` are not read even where robots.txt allows.
+  Add a site to that list with the sentence that bars it. Tests:
+  `packages/core/src/sources/web.test.ts`, `packages/shared/src/policy.test.ts`,
+  `packages/shared/src/hunt.test.ts`.
+- **A page is read once; a search runs again only in a later run or on a later day.** Test:
+  `packages/core/src/db/store.test.ts`.
+- **A runner call names no effort, and that means answer fast.** DeepSeek is sent thinking off
+  and Meta the lowest reasoning, because both reason by default. DeepSeek has no default
+  address. The runner pool is built only from providers that are ready, and a pool in the config
+  wins. Tests: `packages/core/src/providers/openai-compatible.test.ts`,
+  `packages/shared/src/pools.test.ts`, `packages/core/src/service/pools.test.ts`.
 - **The server has no login.** It binds to loopback and rejects other Host names and other sites'
   Origins (`apps/server/src/app.ts`). Keep both checks until there is a login. Test:
   `apps/server/src/app.test.ts`.

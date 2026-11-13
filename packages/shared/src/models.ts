@@ -215,6 +215,12 @@ export const DEFAULT_ROUTES: Record<JobId, ModelRoute> = {
   "scout.github": { provider: "claude-cli", model: "claude-haiku-5-5", effort: "low" },
   "scout.research": { provider: "claude-cli", model: "claude-haiku-5-5", effort: "low" },
   "scout.talent": { provider: "claude-cli", model: "claude-haiku-5-5", effort: "low" },
+  // The navigator plans over days: the strongest judgment model, on a login that needs no key.
+  "hunt.navigate": { provider: "claude-cli", model: "claude-opus-5-5", effort: "high" },
+  // Runners are tools: the smallest capable model. This route is what runs with no key set;
+  // RUNNER_POOL below is what runs once a DeepSeek or Meta key is there.
+  "hunt.look": { provider: "claude-cli", model: "claude-haiku-5-5", effort: "low" },
+  "hunt.sift": { provider: "claude-cli", model: "claude-haiku-5-5", effort: "low" },
   "resolve.identity": NOT_A_MODEL_JOB,
   "screen.fit": { provider: "claude-cli", model: "claude-haiku-5-5", effort: "medium" },
   "investigate.background": { provider: "claude-cli", model: "claude-sonnet-5-5", effort: "medium" },
@@ -234,3 +240,18 @@ export const DEFAULT_ROUTES: Record<JobId, ModelRoute> = {
   "call.reference": NOT_A_MODEL_JOB,
   "call.debrief": { provider: "claude-cli", model: "claude-sonnet-5-5", effort: "medium" },
 };
+
+/**
+ * The models a runner job is shared between when their keys are present: one small model
+ * from DeepSeek and one from Meta, through their direct APIs, because a runner call has to
+ * come back in a second or two and a headless agent takes several to start. Neither is
+ * chosen here. Both are given the same share, and code then moves share toward the one whose
+ * work holds up (see pools.ts). Only members whose provider is configured are used.
+ */
+export const RUNNER_POOL: ReadonlyArray<{ id: string; route: ModelRoute }> = [
+  { id: "deepseek-flash", route: { provider: "deepseek-api", model: "deepseek-flash" } },
+  { id: "muse-ember", route: { provider: "meta-api", model: "muse-ember-1.0" } },
+];
+
+/** The jobs runners do. */
+export const RUNNER_JOBS = ["hunt.look", "hunt.sift"] as const satisfies readonly JobId[];

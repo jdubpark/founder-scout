@@ -13,6 +13,7 @@ import {
   DIMENSIONS,
   EMPTY_COMPANY_LINKS,
   EMPTY_LINKS,
+  earliness,
   FACET_DIMENSIONS,
   JOBS,
   PROVIDERS,
@@ -50,6 +51,8 @@ import {
   type FounderDetailDTO,
   type FounderRow,
   type FounderStatus,
+  type HuntDTO,
+  type StageRead,
   type Judgment,
   type Level,
   type NetworkContact,
@@ -1058,6 +1061,351 @@ COMPANY_SEEDS.forEach((seed, index) => {
 
 const companyWaiting = companyRows.filter((r) => r.status === "surfaced" && r.feedback === null).length;
 
+/* -------------------------------- Hunt ----------------------------- */
+
+const sampleHuntId = "hunt_sample_01";
+const sampleTrailIds = Array.from({ length: 6 }, (_, i) => `trail_sample_${i + 1}`);
+
+const sampleHuntStages: StageRead[] = [
+  {
+    funding: "says_unfunded",
+    fundingQuote: "We have not raised outside capital.",
+    team: "two_to_five",
+    teamQuote: "The two of us built the first version.",
+    progress: "building",
+    progressQuote: "A private preview is running with design partners.",
+  },
+  {
+    funding: "none_stated",
+    fundingQuote: null,
+    team: "solo",
+    teamQuote: "I am building the first release on my own.",
+    progress: "launched",
+    progressQuote: "The public beta opened this month.",
+  },
+  {
+    funding: "angel_or_accelerator",
+    fundingQuote: "We joined a small operator-led accelerator.",
+    team: "two_to_five",
+    teamQuote: "Our team is three engineers.",
+    progress: "building",
+    progressQuote: "The hosted version is in private preview.",
+  },
+  {
+    funding: "seed",
+    fundingQuote: "We announced a seed round in September.",
+    team: "six_to_twenty",
+    teamQuote: "There are twelve people on the team.",
+    progress: "revenue",
+    progressQuote: "Customers are paying for the hosted service.",
+  },
+];
+
+interface SampleHuntCall {
+  turn: number;
+  trail: number | null;
+  tool: "search" | "look";
+  target: string;
+  result?: "ok" | "empty" | "blocked" | "failed";
+  detail?: string | null;
+  leads?: number;
+  dropped?: number;
+  tooLate?: number;
+  queued?: number;
+  control?: "passed" | "failed" | null;
+}
+
+type SampleHuntCallOptions = Omit<Partial<SampleHuntCall>, "turn" | "trail" | "tool" | "target">;
+
+const huntSearch = (turn: number, trail: number, target: string, options: SampleHuntCallOptions = {}): SampleHuntCall => ({
+  turn,
+  trail,
+  tool: "search",
+  target,
+  result: "ok",
+  queued: 1,
+  ...options,
+});
+
+const huntLook = (turn: number, trail: number, path: string, options: SampleHuntCallOptions = {}): SampleHuntCall => ({
+  turn,
+  trail,
+  tool: "look",
+  target: `https://web.sim.example/${path}`,
+  result: "ok",
+  queued: 1,
+  ...options,
+});
+
+const huntPlant = (turn: number, path: string, control: "passed" | "failed"): SampleHuntCall => ({
+  turn,
+  trail: null,
+  tool: "look",
+  target: `https://web.sim.example/controls/${path}`,
+  result: control === "passed" ? "empty" : "ok",
+  detail: control === "failed" ? "The runner repeated the planted founder claim; code rejected the lead." : null,
+  leads: control === "failed" ? 1 : 0,
+  dropped: control === "failed" ? 1 : 0,
+  queued: 0,
+  control,
+});
+
+// Oldest first here; the DTO exposes the most recent calls first.
+const sampleHuntCallSeeds: SampleHuntCall[] = [
+  // Wave 1
+  huntSearch(1, 1, "new telemetry infrastructure project founder launch"),
+  huntSearch(1, 2, "Rust event log tool first users maker"),
+  huntLook(1, 1, "launches/cedar-trace", { leads: 2, queued: 2 }),
+  huntSearch(1, 3, "open research paper agent runtime maintainer"),
+  // Wave 2
+  huntSearch(2, 1, "robot data storage preview founder"),
+  huntLook(2, 2, "projects/keel-index", { leads: 1 }),
+  huntSearch(2, 2, "typed event stream startup builder", { result: "empty", detail: "No useful project pages matched this query.", queued: 0 }),
+  huntLook(2, 3, "lab-notes/quiet-scheduler", { leads: 1 }),
+  // Wave 3
+  huntSearch(3, 1, "new open source model tracing repository"),
+  huntLook(3, 1, "launches/cedar-trace-followup", { leads: 2, queued: 1 }),
+  huntSearch(3, 3, "systems paper author building developer tool"),
+  // Wave 4
+  huntSearch(4, 1, "founder-built telemetry database early access"),
+  huntLook(4, 2, "projects/keel-index-team", { leads: 1, dropped: 1, tooLate: 1 }),
+  huntSearch(4, 4, "research to production model evaluation startup"),
+  huntLook(4, 1, "launches/cedar-trace-demo", { leads: 1 }),
+  // Wave 5
+  huntSearch(5, 2, "new Rust infrastructure company maker notes"),
+  huntLook(5, 3, "lab-notes/quiet-scheduler-authors", { leads: 1, dropped: 1, tooLate: 1 }),
+  huntPlant(5, "silent-project", "passed"),
+  // Wave 6
+  huntSearch(6, 4, "small team private inference serving"),
+  huntLook(6, 1, "launches/cedar-trace-usage", { leads: 1, queued: 2 }),
+  huntSearch(6, 5, "founder notes feature store prototype"),
+  huntLook(6, 5, "field-notes/fen-store", { leads: 1, dropped: 1 }),
+  // Wave 7
+  huntSearch(7, 2, "new infrastructure launch project founder"),
+  huntLook(7, 4, "projects/amber-serve", { result: "blocked", detail: "The simulated host refused the page request.", queued: 0 }),
+  huntLook(7, 5, "field-notes/fen-store-team", { result: "failed", detail: "The simulated host timed out after two attempts.", queued: 0 }),
+  // Wave 8
+  huntSearch(8, 1, "agent trace storage project early users"),
+  huntLook(8, 2, "projects/keel-index-roadmap", { leads: 1 }),
+  huntSearch(8, 6, "new local runtime reproducible workflows"),
+  huntPlant(8, "false-founder-claim", "failed"),
+  // Wave 9
+  huntSearch(9, 4, "private model serving small team launch"),
+  huntLook(9, 3, "lab-notes/quiet-scheduler-followup", { leads: 1 }),
+  huntSearch(9, 5, "feature store prototype project page"),
+  // Wave 10
+  huntSearch(10, 3, "new agent workflow runtime project"),
+  huntLook(10, 6, "projects/morrow-runtime", { leads: 1 }),
+  huntLook(10, 4, "projects/amber-serve-stage", { leads: 1, tooLate: 1 }),
+  // Wave 11
+  huntSearch(11, 6, "local replay tool maintainer project"),
+  huntLook(11, 2, "projects/keel-index-release", { leads: 1 }),
+  // Wave 12
+  huntSearch(12, 2, "typed event stream tool first customers"),
+  huntSearch(12, 3, "research runtime maintainer new company"),
+  huntSearch(12, 1, "telemetry database project founder update"),
+];
+
+const callsInTurn = new Map<number, number>();
+const sampleHuntCalls: HuntDTO["calls"] = sampleHuntCallSeeds
+  .map((seed, index) => {
+    const inTurn = callsInTurn.get(seed.turn) ?? 0;
+    callsInTurn.set(seed.turn, inTurn + 1);
+    const result = seed.result ?? "ok";
+    const blocked = result === "blocked";
+    const failed = result === "failed";
+    return {
+      id: `call_sample_${index + 1}`,
+      huntId: sampleHuntId,
+      swarmId: SWARM_ID,
+      runId: latest.id,
+      taskId: seed.tool === "look" && !blocked ? stableId("tsk", `sample-hunt-call-${index + 1}`) : null,
+      trailId: seed.trail === null ? null : sampleTrailIds[seed.trail - 1]!,
+      turn: seed.turn,
+      tool: seed.tool,
+      target: seed.target,
+      host: seed.tool === "look" ? "web.sim.example" : null,
+      result,
+      detail: seed.detail ?? null,
+      leads: seed.leads ?? 0,
+      dropped: seed.dropped ?? 0,
+      tooLate: seed.tooLate ?? 0,
+      queued: seed.queued ?? 0,
+      control: seed.control ?? null,
+      model: seed.tool === "look" && !blocked ? "sim-page-reader-v1" : null,
+      costUsd: seed.tool === "search" ? 0.001 : blocked ? 0 : failed ? 0.002 : 0.004,
+      latencyMs: seed.tool === "search" ? 720 + index * 9 : blocked ? 160 : failed ? 2_100 : 1_350 + index * 11,
+      at: iso((12 - seed.turn) * 70 + (4 - inTurn)),
+    };
+  })
+  .sort((a, b) => b.at.localeCompare(a.at));
+
+const sampleHuntTrails: HuntDTO["trails"] = [
+  {
+    id: sampleTrailIds[0]!, huntId: sampleHuntId, swarmId: SWARM_ID,
+    name: "Launch threads", intent: "Find technical founders shipping early infrastructure projects in public.",
+    status: "open", openedBy: "person", weight: 5, pinned: true,
+    stats: { searches: 6, pages: 4, leads: 6, kept: 4, dropped: 0, tooLate: 0, blocked: 0, costUsd: 0.022 },
+    openedAt: iso(9 * DAY), closedAt: null, closedWhy: null,
+    queued: 2, score: 4.4, share: 0.46,
+  },
+  {
+    id: sampleTrailIds[1]!, huntId: sampleHuntId, swarmId: SWARM_ID,
+    name: "Systems repositories", intent: "Look for original systems work with a clear path from repository to product.",
+    status: "open", openedBy: "navigator", weight: 4, pinned: false,
+    stats: { searches: 5, pages: 4, leads: 4, kept: 2, dropped: 1, tooLate: 1, blocked: 0, costUsd: 0.021 },
+    openedAt: iso(7 * DAY), closedAt: null, closedWhy: null,
+    queued: 2, score: 3.5, share: 0.34,
+  },
+  {
+    id: sampleTrailIds[2]!, huntId: sampleHuntId, swarmId: SWARM_ID,
+    name: "Lab work becoming tools", intent: "Find paper authors who have started turning useful systems research into software.",
+    status: "open", openedBy: "navigator", weight: 3, pinned: false,
+    stats: { searches: 4, pages: 3, leads: 3, kept: 2, dropped: 1, tooLate: 1, blocked: 0, costUsd: 0.016 },
+    openedAt: iso(5 * DAY), closedAt: null, closedWhy: null,
+    queued: 1, score: 2.2, share: 0.2,
+  },
+  {
+    id: sampleTrailIds[3]!, huntId: sampleHuntId, swarmId: SWARM_ID,
+    name: "Private model serving", intent: "Find small teams building secure serving tools for regulated engineering groups.",
+    status: "paused", openedBy: "navigator", weight: 2, pinned: false,
+    stats: { searches: 3, pages: 2, leads: 1, kept: 1, dropped: 0, tooLate: 1, blocked: 1, costUsd: 0.007 },
+    openedAt: iso(4 * DAY), closedAt: null, closedWhy: null,
+    queued: 0, score: 0, share: 0,
+  },
+  {
+    id: sampleTrailIds[4]!, huntId: sampleHuntId, swarmId: SWARM_ID,
+    name: "Feature store field notes", intent: "Check whether teams are building lighter feature infrastructure without a platform group.",
+    status: "closed", openedBy: "code", weight: 1, pinned: false,
+    stats: { searches: 2, pages: 2, leads: 1, kept: 1, dropped: 1, tooLate: 0, blocked: 1, costUsd: 0.008 },
+    openedAt: iso(3 * DAY), closedAt: iso(190), closedWhy: "Two pages were unavailable and the accessible pages were late-stage.",
+    queued: 0, score: 0, share: 0,
+  },
+  {
+    id: sampleTrailIds[5]!, huntId: sampleHuntId, swarmId: SWARM_ID,
+    name: "Local agent runtimes", intent: "Find maintainers making agent workflows reproducible on a developer's own machine.",
+    status: "paused", openedBy: "navigator", weight: 2, pinned: false,
+    stats: { searches: 2, pages: 1, leads: 1, kept: 0, dropped: 0, tooLate: 0, blocked: 0, costUsd: 0.006 },
+    openedAt: iso(2 * DAY), closedAt: null, closedWhy: null,
+    queued: 0, score: 0, share: 0,
+  },
+];
+
+const sampleHuntNoteSeeds: Array<Pick<HuntDTO["notes"][number], "by" | "text" | "turn">> = [
+  { by: "person", text: "Keep the launch trail pinned; it has produced several verifiable builders.", turn: 1 },
+  { by: "navigator", text: "Project pages give better founder evidence than broad infrastructure lists.", turn: 2 },
+  { by: "code", text: "One search returned no useful project pages; leave the query in the history for context.", turn: 3 },
+  { by: "navigator", text: "For repository trails, prioritize original work with a product path over popularity alone.", turn: 4 },
+  { by: "code", text: "The staged-company page is outside the pre-seed cutoff; keep the stage quote with the lead.", turn: 5 },
+  { by: "person", text: "Pause private serving until there is another reachable early-stage page.", turn: 6 },
+  { by: "code", text: "The feature-store page timed out after two attempts. Do not infer anything from that failure.", turn: 7 },
+  { by: "code", text: "A planted page passed: its unsupported claim did not produce a lead.", turn: 8 },
+  { by: "navigator", text: "The research trail is still yielding named authors and quoted project evidence.", turn: 9 },
+  { by: "code", text: "One planted claim was repeated by the runner and rejected by the page-word check.", turn: 10 },
+  { by: "navigator", text: "Keep local runtimes paused while checking whether the first project has a second maintainer.", turn: 11 },
+  { by: "person", text: "Review the newest leads before adding more trails; keep all contact decisions manual.", turn: 12 },
+];
+
+const sampleHuntNotes: HuntDTO["notes"] = sampleHuntNoteSeeds.map((note) => ({
+  id: `note_sample_${note.turn}`,
+  huntId: sampleHuntId,
+  swarmId: SWARM_ID,
+  ...note,
+  createdAt: iso((12 - note.turn) * 70 + 12),
+})).sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+
+const sampleUnmatchedFinds = [
+  { name: "Edda Venn", company: "Nacreline", oneLiner: "A compact write-ahead log for agent traces." },
+  { name: "Jonas Armit", company: "Signal Loom", oneLiner: "Typed events for model tool use and replay." },
+  { name: "Ravi Solenne", company: "Patchwork Runtime", oneLiner: "Rollbackable local workflows for small engineering teams." },
+  { name: "Mina Orwick", company: "Fieldglass Compute", oneLiner: "A queue that schedules inference on borrowed accelerator time." },
+  { name: "Tomas Edevane", company: "Mica Index", oneLiner: "A small vector index tuned for robot telemetry." },
+  { name: "Liora Fen", company: "Lantern Eval", oneLiner: "Evaluation sets that stay attached to each model release." },
+  { name: "Bram Iver", company: "Sable Relay", oneLiner: "Private event routing for tools that run beside a developer." },
+];
+
+const sampleHuntFinds: HuntDTO["finds"] = [
+  ...rows.slice(0, 8).map((row, index) => ({
+    personName: row.name,
+    companyName: row.companyName,
+    oneLiner: details[row.id]?.founder.company.oneLiner ?? row.headline,
+    founderId: row.id,
+    founderStatus: row.status,
+  })),
+  ...sampleUnmatchedFinds.map((find) => ({
+    personName: find.name,
+    companyName: find.company,
+    oneLiner: find.oneLiner,
+    founderId: null,
+    founderStatus: null,
+  })),
+].map((find, index) => {
+  const stage = sampleHuntStages[index % sampleHuntStages.length]!;
+  return {
+    leadId: stableId("led", `sample-hunt-find-${index + 1}`),
+    personName: find.personName,
+    companyName: find.companyName,
+    oneLiner: find.oneLiner,
+    sourceRef: `https://web.sim.example/hunt/leads/${String(index + 1).padStart(2, "0")}`,
+    trailId: sampleTrailIds[index % sampleTrailIds.length]!,
+    stage,
+    earliness: earliness(stage),
+    founderId: find.founderId,
+    founderStatus: find.founderStatus,
+    discoveredAt: iso(8 + index * 11),
+  };
+}).sort((a, b) => b.discoveredAt.localeCompare(a.discoveredAt));
+
+const sampleHuntTotals: HuntDTO["totals"] = {
+  searches: 22,
+  pages: 16,
+  leads: 16,
+  kept: 10,
+  dropped: 3,
+  tooLate: 3,
+  blocked: 2,
+  costUsd: 0.08,
+};
+
+const sampleHuntWaves: HuntDTO["waves"] = Array.from({ length: 12 }, (_, index) => {
+  const turn = index + 1;
+  const calls = sampleHuntCalls.filter((call) => call.turn === turn);
+  return {
+    turn,
+    at: iso((12 - turn) * 70),
+    calls: calls.length,
+    leads: calls.reduce((sum, call) => sum + call.leads, 0),
+    costUsd: Math.round(calls.reduce((sum, call) => sum + (call.costUsd ?? 0), 0) * 1000) / 1000,
+  };
+});
+
+const sampleHunt: HuntDTO = {
+  swarmId: SWARM_ID,
+  enabled: true,
+  active: false,
+  turn: 12,
+  navigator: {
+    agentId: agents.find((agent) => agent.jobId === "hunt.navigate")?.id ?? null,
+    paused: false,
+    route: DEFAULT_ROUTES["hunt.navigate"],
+  },
+  runners: (["hunt.look", "hunt.sift"] as const).map((jobId) => {
+    const job = JOBS.find((candidate) => candidate.id === jobId)!;
+    return { jobId, label: job.label, classId: job.classId, members: [], route: DEFAULT_ROUTES[jobId] };
+  }),
+  engines: [
+    { id: "web-sim", label: "Simulated web index", searches: "Fictional project pages hosted on web.sim.example.", configured: true, detail: "Sample data only; no public search service is connected." },
+  ],
+  limits: { turns: 24, waveSize: 4, maxDepth: 3, budgetShare: 0.15, latestStage: "pre_seed", plantedEvery: 3 },
+  totals: sampleHuntTotals,
+  planted: { read: 2, failed: 1 },
+  trails: sampleHuntTrails,
+  notes: sampleHuntNotes,
+  calls: sampleHuntCalls,
+  waves: sampleHuntWaves,
+  finds: sampleHuntFinds,
+};
+
 /* ------------------------------ Assemble --------------------------- */
 
 const directiveRows: DirectiveRow[] = directives.map((d, i) => ({
@@ -1224,4 +1572,5 @@ export const SAMPLE_SNAPSHOT: DemoSnapshot = {
       ],
     },
   ],
+  hunts: { [SWARM_ID]: sampleHunt },
 };

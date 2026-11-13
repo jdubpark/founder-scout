@@ -9,6 +9,7 @@ const FounderDetail = lazy(() => import("./pages/FounderDetail"));
 const Companies = lazy(() => import("./pages/Companies"));
 const CompanyDetail = lazy(() => import("./pages/CompanyDetail"));
 const Swarm = lazy(() => import("./pages/Swarm"));
+const Hunt = lazy(() => import("./pages/Hunt"));
 const Steering = lazy(() => import("./pages/Steering"));
 const Approvals = lazy(() => import("./pages/Approvals"));
 const Improve = lazy(() => import("./pages/Improve"));
@@ -31,6 +32,7 @@ export const routes: RouteObject[] = [
       { path: "companies", element: page(<Companies />) },
       { path: "companies/:companyId", element: page(<CompanyDetail />) },
       { path: "swarm", element: page(<Swarm />) },
+      { path: "hunt", element: page(<Hunt />) },
       { path: "steering", element: page(<Steering />) },
       { path: "approvals", element: page(<Approvals />) },
       { path: "improve", element: page(<Improve />) },

@@ -7,6 +7,7 @@ import {
   Building2,
   BookOpen,
   BookOpenText,
+  Compass,
   Eye,
   File,
   FileCode,
@@ -47,7 +48,9 @@ import { cn } from "../lib/cn";
 import { StateMark } from "./ui/marks";
 
 const CLASS_ICON: Record<ClassId, LucideIcon> = {
+  navigator: Compass,
   scout: Radar,
+  runner: Eye,
   resolver: GitMerge,
   screener: ListFilter,
   investigator: FileSearch,

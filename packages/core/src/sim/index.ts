@@ -26,6 +26,7 @@ import type {
   SourceFetchRequest,
   SourceRegistry,
 } from "../contracts";
+import { createSimWeb } from "./web";
 
 const DEFAULT_SEED = 7;
 const DEFAULT_FOUNDERS = 600;
@@ -967,6 +968,8 @@ export function createSimWorld(options: { seed?: number; founders?: number; days
     return founder ? makeCompany(founder, seed) : undefined;
   };
 
+  const web = createSimWeb({ seed, founders: founderList, company: companyFor });
+
   const companyEvidenceFor = (simId: string, jobId: JobId, depth: InvestigationDepth): CompanyEvidenceDraft[] => {
     const founder = founderById.get(simId);
     if (!founder) return [];
@@ -1062,6 +1065,9 @@ export function createSimWorld(options: { seed?: number; founders?: number; days
       return result;
     },
     company: companyFor,
+    page: web.page,
+    search: web.search,
+    engines: web.engines,
     companyEvidenceFor,
     repos: (simId) => repos(simId).map(copyRepo),
     transcript: (simId: string, kind: OutreachKind, targetName: string) => {

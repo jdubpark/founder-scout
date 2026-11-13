@@ -110,6 +110,8 @@
     <symbol id="i-link" viewBox="0 0 24 24"><path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1"/></symbol>
     <symbol id="i-building" viewBox="0 0 24 24"><path d="M5 21V4.5h9V21M14 9h5v12M3 21h18"/><path d="M8.5 8h2M8.5 12h2M8.5 16h2"/></symbol>
     <symbol id="i-quote" viewBox="0 0 24 24"><path d="M5 17c2-1.2 3-3 3-6V7H4v5h3M14 17c2-1.2 3-3 3-6V7h-4v5h3"/></symbol>
+    <symbol id="i-compass" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="m15.5 8.5-2 5-5 2 2-5z"/></symbol>
+    <symbol id="i-page" viewBox="0 0 24 24"><path d="M6 3.5h8l4 4V20.5H6z"/><path d="M14 3.5v4h4M9 12h6M9 15.5h6"/></symbol>
     <symbol id="i-stop" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><rect x="9" y="9" width="6" height="6" rx="0.5"/></symbol>
   </defs>
 </svg>
@@ -212,6 +214,8 @@
     <section>
       <h2>Models</h2>
       <table>
+        <tr><td>Navigator</td><td><span class="chip">Claude Opus 5.5</span> <span class="chip">or Codex</span></td></tr>
+        <tr><td>Runners</td><td><span class="chip">DeepSeek Flash</span> <span class="chip">Meta Muse Ember</span></td></tr>
         <tr><td>Scouts, Screeners</td><td><span class="chip">Claude Haiku 5.5</span></td></tr>
         <tr><td>Investigators, Researchers</td><td><span class="chip">Claude Sonnet 5.5</span></td></tr>
         <tr><td>Code review</td><td><span class="chip">Codex, GPT-6 Astra</span></td></tr>
@@ -222,6 +226,75 @@
     </section>
 
   </div>
+
+  <section>
+    <h2>The hunt</h2>
+    <div class="scroll">
+      <svg viewBox="0 0 1040 250" role="img" aria-label="A navigator decides where on the open web to look and keeps a notebook between days. It sends out many small, fast runners. Each runner reads one public page and reports the people starting something, in the page's own words. Code checks every person against the page, and leaves out companies that are too far along, before the person joins the teams above. You can open, pin or close a trail and write in the notebook.">
+        <rect class="tile-you" x="20" y="14" width="168" height="62" rx="12"/>
+        <use href="#i-user" class="ic-grey" x="34" y="31" width="28" height="28"/>
+        <text class="name" x="74" y="42">You</text>
+        <text class="verb" x="74" y="60">trails and notes</text>
+        <path class="steer" d="M104 76V108" marker-end="url(#mp)"/>
+
+        <rect class="tile" x="20" y="110" width="168" height="62" rx="12"/>
+        <use href="#i-compass" class="ic" x="34" y="127" width="28" height="28"/>
+        <text class="name" x="74" y="138">Navigator</text>
+        <text class="verb" x="74" y="156">where to look</text>
+
+        <rect class="tile-grey" x="20" y="186" width="168" height="50" rx="12"/>
+        <use href="#i-book" class="ic-grey" x="36" y="199" width="24" height="24"/>
+        <text class="name" x="74" y="208">Notebook</text>
+        <text class="verb" x="74" y="225">kept between days</text>
+        <path class="flow" d="M104 172V184"/>
+
+        <path class="flow" d="M188 141H252" marker-end="url(#m)"/>
+
+        <g>
+          <rect class="tile" x="256" y="74" width="168" height="38" rx="10"/>
+          <use href="#i-page" class="ic" x="268" y="82" width="22" height="22"/>
+          <text class="name" x="300" y="98">Runner</text>
+          <rect class="tile" x="256" y="122" width="168" height="38" rx="10"/>
+          <use href="#i-page" class="ic" x="268" y="130" width="22" height="22"/>
+          <text class="name" x="300" y="146">Runner</text>
+          <rect class="tile" x="256" y="170" width="168" height="38" rx="10"/>
+          <use href="#i-search" class="ic" x="268" y="178" width="22" height="22"/>
+          <text class="name" x="300" y="194">Runner</text>
+          <text class="verb" x="256" y="228">one page each, then gone</text>
+        </g>
+
+        <path class="flow" d="M424 93H488" marker-end="url(#m)"/>
+        <path class="flow" d="M424 141H488" marker-end="url(#m)"/>
+        <path class="flow" d="M424 189H488" marker-end="url(#m)"/>
+
+        <rect class="tile-grey" x="492" y="110" width="168" height="62" rx="12"/>
+        <use href="#i-link" class="ic-grey" x="506" y="127" width="28" height="28"/>
+        <text class="name" x="546" y="138">Public pages</text>
+        <text class="verb" x="546" y="156">site rules kept</text>
+
+        <path class="flow" d="M660 141H724" marker-end="url(#m)"/>
+
+        <rect class="tile" x="728" y="110" width="168" height="62" rx="12"/>
+        <use href="#i-shield" class="ic" x="742" y="127" width="28" height="28"/>
+        <text class="name" x="782" y="138">Checked</text>
+        <text class="verb" x="782" y="156">against the page</text>
+
+        <path class="flow" d="M896 141H946" marker-end="url(#m)"/>
+
+        <rect class="tile" x="950" y="110" width="70" height="62" rx="12"/>
+        <use href="#i-merge" class="ic" x="971" y="127" width="28" height="28"/>
+        <text class="verb" x="950" y="192">joins the</text>
+        <text class="verb" x="950" y="208">teams above</text>
+      </svg>
+    </div>
+    <div class="chips">
+      <span class="chip">Named on the page</span>
+      <span class="chip">In the page's own words</span>
+      <span class="chip">Earliest stage only</span>
+      <span class="chip">Trick pages test the runners</span>
+      <span class="chip">No logins, no disguises</span>
+    </div>
+  </section>
 
   <section>
     <h2>How it gets better</h2>
@@ -286,7 +359,7 @@
       <li><span class="sq"><svg width="20" height="20" class="ic"><use href="#i-link"/></svg></span>Every claim has a source</li>
       <li><span class="sq"><svg width="20" height="20" class="ic"><use href="#i-quote"/></svg></span>Quotes checked at the source</li>
       <li><span class="sq"><svg width="20" height="20" class="ic"><use href="#i-shield"/></svg></span>A second AI checks, and is tested</li>
-      <li><span class="sq"><svg width="20" height="20" class="ic"><use href="#i-db"/></svg></span>No scraping. Vendor data only</li>
+      <li><span class="sq"><svg width="20" height="20" class="ic"><use href="#i-db"/></svg></span>Never reads LinkedIn. Public pages, by each site's rules</li>
       <li><span class="sq"><svg width="20" height="20" class="ic"><use href="#i-user"/></svg></span>No personal attributes</li>
       <li><span class="sq"><svg width="20" height="20" class="ic"><use href="#i-stop"/></svg></span>Spend cap and stop switch</li>
     </ul>

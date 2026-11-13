@@ -47,6 +47,8 @@ function fakeService() {
     startRun: vi.fn(async () => run),
     listEvalFlows: vi.fn(async () => [{ id: "flow-1" }]),
     getEvalFlow: vi.fn(async () => flow),
+    getRun: vi.fn(async () => ({ stages: [{ stage: "scout", tasks: 1 }], tasks: [] })),
+    getHunt: vi.fn(async () => ({ calls: [], trails: [] })),
     getSettings: vi.fn(async () => ({ sources: [{ id: "github", configured: false, detail: "No token" }] } as unknown as SettingsDTO)),
   } as unknown as ApiClient;
   const service = {
@@ -72,6 +74,24 @@ describe("CLI commands", () => {
     expect(api.startRun).toHaveBeenCalledWith({ swarmId: "swarm-1", brain: "sim", sources: "sim" });
     expect(service.runs.wait).toHaveBeenCalledWith(run.id);
     expect(lines[0]).toContain("succeeded leads=3 screened=2 investigated=1 surfaced=1 cost=$0.12");
+  });
+
+  it("prints hunt pages, leads and open trails when a run enters the hunt stage", async () => {
+    const { service, api } = fakeService();
+    Object.assign(api, {
+      getRun: vi.fn(async () => ({ stages: [{ stage: "hunt", tasks: 101 }], tasks: [] })),
+      getHunt: vi.fn()
+        .mockResolvedValueOnce({ totals: { pages: 10, leads: 6 } })
+        .mockResolvedValueOnce({ totals: { pages: 111, leads: 109 }, trails: [{ status: "open" }, { status: "paused" }] }),
+    });
+    const lines: string[] = [];
+
+    expect(await runCliCommand(service, ["run", "--brain", "sim"], (line) => lines.push(line))).toBe(0);
+    expect(lines).toEqual([
+      expect.stringContaining("succeeded leads=3"),
+      "hunt pages=101 leads=103 trails_open=1",
+    ]);
+    expect(api.getHunt).toHaveBeenCalledTimes(2);
   });
 
   it("prints provider and source readiness without making live calls", async () => {

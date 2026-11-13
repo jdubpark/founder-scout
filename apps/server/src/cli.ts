@@ -29,6 +29,7 @@ import {
   type FounderRow,
   type PastCase,
   type Run,
+  runnerPools,
 } from "@agentswarm/shared";
 import { resolveConfig } from "./config";
 import { createCronHelper } from "./cron";
@@ -87,13 +88,22 @@ export async function runCommand(
   const swarm = await selectedSwarm(api, options.swarm);
   const days = options.days ?? 1;
   for (let day = 0; day < days; day += 1) {
+    const huntBefore = await api.getHunt(swarm.id);
     const started = await api.startRun({
       swarmId: swarm.id,
       ...(options.brain ? { brain: options.brain } : {}),
       ...(options.sources ? { sources: options.sources } : {}),
       ...(options.budget ? { budgetUsd: options.budget } : {}),
     });
-    outputRun(await service.runs.wait(started.id), write);
+    const run = await service.runs.wait(started.id);
+    outputRun(run, write);
+    const detail = await api.getRun(run.id);
+    if (detail.stages.some((stage) => stage.stage === "hunt" && stage.tasks > 0)) {
+      const hunt = await api.getHunt(swarm.id);
+      const pagesRead = hunt.totals.pages - huntBefore.totals.pages;
+      const leadsFound = hunt.totals.leads - huntBefore.totals.leads;
+      write(`hunt pages=${pagesRead} leads=${leadsFound} trails_open=${hunt.trails.filter((trail) => trail.status === "open").length}`);
+    }
   }
 }
 
@@ -395,6 +405,12 @@ async function collectSnapshot(service: SwarmService, days: number, clock: DemoC
     { id: "sol", route: { provider: "openai-api", model: "gpt-6.1-sol" }, share: 0.5 },
     { id: "luna", route: { provider: "codex-cli", model: "gpt-6-luna" }, share: 0.5 },
   ] });
+  const huntRunnerDefaults = runnerPools(() => true);
+  for (const jobId of ["hunt.look", "hunt.sift"] as const) {
+    await api.setPool(swarm.id, jobId, {
+      members: (huntRunnerDefaults[jobId] ?? []).map(({ id, route, share, status }) => ({ id, route, share, status })),
+    });
+  }
 
   // One run per day, the last one this morning. The partner's calls come two days before
   // the end, so the next run drafts outreach for the Yes calls and the last one acts on
@@ -451,6 +467,7 @@ async function collectSnapshot(service: SwarmService, days: number, clock: DemoC
   const founderDetails: DemoSnapshot["founderDetails"] = {};
   const companies: NonNullable<DemoSnapshot["companies"]> = {};
   const companyDetails: NonNullable<DemoSnapshot["companyDetails"]> = {};
+  const hunts: NonNullable<DemoSnapshot["hunts"]> = {};
   const directiveGroups = await Promise.all(
     (["active", "paused", "archived"] as const).map((status) => api.listDirectives({ status })),
   );
@@ -459,6 +476,7 @@ async function collectSnapshot(service: SwarmService, days: number, clock: DemoC
   for (const current of swarms) {
     overview[current.id] = await api.getOverview(current.id);
     tree[current.id] = await api.getTree(current.id);
+    hunts[current.id] = await api.getHunt(current.id);
     const rows = await allFounderRows(api, current.id);
     founders[current.id] = rows;
     outreach[current.id] = await api.listOutreach({ swarmId: current.id, status: "all" });
@@ -505,6 +523,7 @@ async function collectSnapshot(service: SwarmService, days: number, clock: DemoC
     evalFlows,
     assumptions,
     pools,
+    hunts,
     ...(preview ? { preview } : {}),
   };
 }

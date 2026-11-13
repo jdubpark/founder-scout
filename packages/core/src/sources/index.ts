@@ -4,7 +4,7 @@
  */
 
 import { SOURCES, type SourceId, type SourceStatus } from "@agentswarm/shared";
-import type { RepoFinder, SourceAdapter, SourceRegistry } from "../contracts";
+import type { RepoFinder, SearchEngine, SimWorld, SourceAdapter, SourceRegistry, WebAccess } from "../contracts";
 import type { PeopleLookup } from "../contracts";
 import { createArxivAdapter } from "./arxiv";
 import { createGitHubAdapter } from "./github";
@@ -12,6 +12,8 @@ import { createHackerNewsAdapter } from "./hackernews";
 import { createPeopleDataAdapter } from "./people_data";
 import { createPdlVendor, createRecordAllowance, type RecordAllowance } from "./pdl";
 import { createLiveRepoFinder as buildRepoFinder, type RepoFinderOptions } from "./repo-finder";
+import { createWebReader } from "./web";
+import { createGitHubSearchEngine, createHnSearchEngine, createHuggingFaceSearchEngine } from "./search";
 
 export { createArxivAdapter } from "./arxiv";
 export { createGitHubAdapter } from "./github";
@@ -19,6 +21,8 @@ export { createHackerNewsAdapter } from "./hackernews";
 export { createPeopleDataAdapter, type ProfileDataVendor } from "./people_data";
 export { createPdlVendor, createRecordAllowance, type PdlOptions, type RecordAllowance } from "./pdl";
 export { createQuoteChecker } from "./quote-check";
+export { createWebReader, type WebReaderOptions } from "./web";
+export { createGitHubSearchEngine, createHnSearchEngine, createHuggingFaceSearchEngine, type SearchOptions } from "./search";
 export { looksLikeFounder, parseConnectionsCsv, type ParsedContact } from "./connections";
 export { sanitizeCheckout, type SanitizeResult } from "./sanitize";
 export { parseRepoUrl, parseGitHubLogin, type RepoFinderOptions } from "./repo-finder";
@@ -46,6 +50,42 @@ export {
 
 /** Records a day from the vendor when PDL_RECORDS_PER_DAY is not set. Each record costs a credit. */
 export const DEFAULT_PDL_RECORDS_PER_DAY = 50;
+
+/** Live web access used by the hunt. The reader keeps its own address and robots rules. */
+export function createLiveWebAccess(options: { env?: NodeJS.ProcessEnv; extraEngines?: SearchEngine[] } = {}): WebAccess {
+  const env = options.env ?? process.env;
+  return {
+    reader: createWebReader({ userAgent: env.HUNT_USER_AGENT }),
+    engines: [createHnSearchEngine(), createGitHubSearchEngine({ env }), createHuggingFaceSearchEngine({ env }), ...(options.extraEngines ?? [])],
+  };
+}
+
+/** Simulated web access delegates only to the supplied world and never opens a network request. */
+export function createSimWebAccess(world: SimWorld): WebAccess {
+  return {
+    reader: {
+      async read(url, options) {
+        return world.page(url, options?.simDay ?? 0) ?? {
+          status: "unreachable",
+          detail: "No such page.",
+          url,
+          title: "",
+          text: "",
+          links: [],
+        };
+      },
+    },
+    engines: world.engines().map((info) => ({
+      ...info,
+      async status() {
+        return { configured: true, detail: "Simulated search engine." };
+      },
+      async search(query, limit, options) {
+        return world.search(info.id, query, options?.simDay ?? 0, limit);
+      },
+    })),
+  };
+}
 
 // One allowance per key for the life of the process, so the scout and the lookups share it.
 const allowances = new Map<string, RecordAllowance>();

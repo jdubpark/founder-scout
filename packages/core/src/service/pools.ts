@@ -13,6 +13,7 @@ import {
   producesEvidence,
   rebalance,
   stableId,
+  withDefaultPools,
   type JobId,
   type ModelJobId,
   type PoolChange,
@@ -30,6 +31,7 @@ export const POOL_WINDOW_DAYS = 14;
 
 export interface PoolsDeps {
   store: Pick<Store, "getSwarm" | "getConfig" | "saveConfig" | "updateSwarm" | "transaction" | "memberStats">;
+  defaultPools?: () => Promise<Pools>;
   now: () => Date;
 }
 
@@ -76,9 +78,10 @@ function savePoolsConfig(
   return next;
 }
 
-export function poolsView(deps: PoolsDeps, swarmId: string): PoolsDTO {
+export async function poolsView(deps: PoolsDeps, swarmId: string): Promise<PoolsDTO> {
+  const defaults = await deps.defaultPools?.() ?? {};
   const swarm = requireSwarm(deps, swarmId);
-  const config = swarmConfig(deps, swarm.configId);
+  const config = withDefaultPools(swarmConfig(deps, swarm.configId), defaults);
   const since = windowStart(deps.now());
   const pools = JOBS.filter((job) => modelJobIds.has(job.id)).map((job) => {
     const members = config.pools?.[job.id as ModelJobId];
@@ -145,34 +148,41 @@ export function setPool(deps: PoolsDeps, swarmId: string, jobId: string, input: 
 
   const current = swarmConfig(deps, swarm.configId);
   const pools = copyPools(current.pools);
-  if (members.length === 0) delete pools[jobId as ModelJobId];
-  else pools[jobId as ModelJobId] = members;
+  // An empty entry deliberately masks a default pool and sends the job by its ordinary route.
+  pools[jobId as ModelJobId] = members;
   return savePoolsConfig(deps, swarmId, current.id, pools);
 }
 
-export function rebalancePools(
+export async function rebalancePools(
   deps: PoolsDeps,
   swarmId: string,
   options: { apply: boolean },
-): { report: RebalanceReport; config: SwarmConfig | null } {
+): Promise<{ report: RebalanceReport; config: SwarmConfig | null }> {
+  requireSwarm(deps, swarmId);
+  const defaults = await deps.defaultPools?.() ?? {};
+  // Read again after resolving defaults so a pool saved while the provider check was pending survives.
   const swarm = requireSwarm(deps, swarmId);
   const config = swarmConfig(deps, swarm.configId);
+  const effective = withDefaultPools(config, defaults);
   const since = windowStart(deps.now());
-  const pools = copyPools(config.pools);
+  const savedPools = copyPools(config.pools);
   const changes: PoolChange[] = [];
   let changed = false;
 
   for (const job of JOBS) {
-    const members = config.pools?.[job.id];
+    const members = effective.pools?.[job.id];
     if (!members) continue;
     const result = rebalance(members, deps.store.memberStats(swarmId, job.id, since), DEFAULT_REBALANCE, producesEvidence(job.id));
     changes.push({ jobId: job.id, label: job.label, changes: result.changes, note: result.note });
-    if (JSON.stringify(result.members) !== JSON.stringify(members)) changed = true;
-    pools[job.id] = result.members;
+    if (JSON.stringify(result.members) !== JSON.stringify(members)) {
+      changed = true;
+      // Rebalanced defaults become an explicit config choice for this job only.
+      savedPools[job.id] = result.members;
+    }
   }
 
   if (options.apply && changed) {
-    const saved = savePoolsConfig(deps, swarmId, config.id, pools);
+    const saved = savePoolsConfig(deps, swarmId, config.id, savedPools);
     return { report: { applied: true, pools: changes }, config: saved };
   }
   return { report: { applied: false, pools: changes }, config: null };

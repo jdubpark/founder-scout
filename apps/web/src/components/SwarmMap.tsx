@@ -1,5 +1,5 @@
 import { Fragment, type ReactNode } from "react";
-import { ChevronRight, Database, SlidersHorizontal, UserRound } from "lucide-react";
+import { ArrowDown, ChevronRight, Database, SlidersHorizontal, UserRound } from "lucide-react";
 import {
   isClassId,
   isJobId,
@@ -56,6 +56,9 @@ const JOB_SHORT: Record<JobId, string> = {
   "scout.github": "GitHub",
   "scout.research": "Research",
   "scout.talent": "Talent moves",
+  "hunt.navigate": "Navigate",
+  "hunt.look": "Page reader",
+  "hunt.sift": "Result sifter",
   "resolve.identity": "Identity",
   "screen.fit": "Thesis fit",
   "investigate.background": "Background",
@@ -77,16 +80,18 @@ const JOB_SHORT: Record<JobId, string> = {
 };
 
 /** Which class is working during each stage of a run. */
-const STAGE_CLASS: Partial<Record<StageId, ClassId>> = {
-  scout: "scout",
-  resolve: "resolver",
-  screen: "screener",
-  investigate: "investigator",
-  verify: "verifier",
-  assess: "analyst",
-  memo: "analyst",
-  outreach: "outreach",
-  debrief: "outreach",
+const STAGE_CLASSES: Partial<Record<StageId, readonly ClassId[]>> = {
+  plan: ["navigator"],
+  scout: ["scout"],
+  hunt: ["navigator", "runner"],
+  resolve: ["resolver"],
+  screen: ["screener"],
+  investigate: ["investigator"],
+  verify: ["verifier"],
+  assess: ["analyst"],
+  memo: ["analyst"],
+  outreach: ["outreach"],
+  debrief: ["outreach"],
 };
 
 /** What each class handed on in the last run, with its unit. */
@@ -110,6 +115,7 @@ function classFigure(classId: ClassId, stats: RunStats | null): { value: number;
     case "outreach":
       return { value: stats.outreachProposed, unit: "drafts" };
   }
+  return null;
 }
 
 const HEALTH_WORD: Record<NodeHealth, string> = {
@@ -151,8 +157,13 @@ export function SwarmMap({
   compact = false,
   className,
 }: SwarmMapProps) {
-  const activeClass = activeStage ? (STAGE_CLASS[activeStage] ?? null) : null;
+  const activeClasses = new Set(activeStage ? (STAGE_CLASSES[activeStage] ?? []) : []);
   const interactive = Boolean(onSelect);
+  const upstreamIds = new Set<ClassId>(["navigator", "scout", "runner"]);
+  const scouts = tree.classes.find((node) => node.cls.id === "scout");
+  const navigator = tree.classes.find((node) => node.cls.id === "navigator");
+  const runner = tree.classes.find((node) => node.cls.id === "runner");
+  const downstream = tree.classes.filter((node) => !upstreamIds.has(node.cls.id));
 
   // The class whose jobs are open: the selected class, or the class of the selected job or agent.
   const open =
@@ -168,24 +179,54 @@ export function SwarmMap({
         ) ?? null)
       : null;
 
+  const makeClassCard = (node: ClassNode, className?: string) => (
+    <ClassCard
+      node={node}
+      figure={classFigure(node.cls.id, stats)}
+      running={activeClasses.has(node.cls.id)}
+      selected={sameNode(selected, { kind: "class", classId: node.cls.id })}
+      open={open?.cls.id === node.cls.id}
+      onSelect={onSelect}
+      interactive={interactive}
+      compact={compact}
+      className={className}
+    />
+  );
+
   return (
     <div className={cn("min-w-0", className)}>
       <div className="min-w-0 overflow-x-auto">
-        <div className="flex min-w-[48rem] items-stretch gap-0.5">
+        <div className="flex min-w-[62rem] items-stretch gap-0.5">
           <EndCap icon={<Database className="size-4" aria-hidden />} label="Sources" />
-          {tree.classes.map((c) => (
+          {scouts || navigator || runner ? (
+            <>
+              <ChevronRight className="size-3.5 shrink-0 self-center text-rule-strong" aria-hidden />
+              {/* Two ways of finding people, side by side: the fixed scouts, and the runners the
+                  navigator steers. Each column is as wide as any other team's card. */}
+              <div
+                className={cn("flex min-w-0 basis-0 items-stretch gap-0.5", scouts && (navigator || runner) ? "flex-[2]" : "flex-1")}
+                role="group"
+                aria-label="Lead finding"
+              >
+                {scouts ? makeClassCard(scouts) : null}
+                {navigator || runner ? (
+                  <div className="flex min-w-0 flex-1 basis-0 flex-col items-stretch gap-0.5">
+                    {navigator ? makeClassCard(navigator) : null}
+                    {navigator && runner ? (
+                      <span className="inline-flex h-3.5 shrink-0 items-center justify-center text-ink-3" role="img" aria-label="Steers">
+                        <ArrowDown className="size-3" aria-hidden />
+                      </span>
+                    ) : null}
+                    {runner ? makeClassCard(runner) : null}
+                  </div>
+                ) : null}
+              </div>
+            </>
+          ) : null}
+          {downstream.map((c) => (
             <Fragment key={c.cls.id}>
               <ChevronRight className="size-3.5 shrink-0 self-center text-rule-strong" aria-hidden />
-              <ClassCard
-                node={c}
-                figure={classFigure(c.cls.id, stats)}
-                running={activeClass === c.cls.id}
-                selected={sameNode(selected, { kind: "class", classId: c.cls.id })}
-                open={open?.cls.id === c.cls.id}
-                onSelect={onSelect}
-                interactive={interactive}
-                compact={compact}
-              />
+              {makeClassCard(c)}
             </Fragment>
           ))}
           <ChevronRight className="size-3.5 shrink-0 self-center text-rule-strong" aria-hidden />
@@ -236,6 +277,7 @@ function ClassCard({
   onSelect,
   interactive,
   compact,
+  className,
 }: {
   node: ClassNode;
   figure: { value: number; unit: string } | null;
@@ -245,6 +287,7 @@ function ClassCard({
   onSelect?: (node: SwarmNodeRef) => void;
   interactive: boolean;
   compact: boolean;
+  className?: string;
 }) {
   const mark = running ? "running" : healthMark(node.health);
   const steering = node.directiveCount;
@@ -282,6 +325,7 @@ function ClassCard({
     compact ? "py-2.5" : "py-3",
     lit ? "border-navy bg-blue-tint" : "border-rule bg-surface",
     interactive && !lit && "transition-colors duration-150 hover:bg-sunk",
+    className,
   );
 
   return interactive ? (

@@ -1,6 +1,7 @@
 import {
   ACTOR_HEADER,
   type AddFounderInput,
+  type AddTrailInput,
   type ApiClient,
   type ApiErrorBody,
   type CompanyQuery,
@@ -9,6 +10,7 @@ import {
   type FounderQuery,
   type NetworkImportInput,
   type OutreachQuery,
+  type UpdateTrailInput,
 } from "@agentswarm/shared";
 
 /** A failed API call, carrying the server's message and any per-field problems. */
@@ -140,5 +142,14 @@ export function createHttpClient(options: { baseUrl?: string; getActor: () => st
     getPools: (swarmId) => get(`/api/swarms/${encodeURIComponent(swarmId)}/pools`),
     setPool: (swarmId, jobId, input) => call("PUT", `/api/swarms/${encodeURIComponent(swarmId)}/pools/${encodeURIComponent(jobId)}`, input),
     rebalancePools: (swarmId, input) => call("POST", `/api/swarms/${encodeURIComponent(swarmId)}/pools/rebalance`, input ?? {}),
+
+    getHunt: (swarmId) => get(`/api/swarms/${encodeURIComponent(swarmId)}/hunt`),
+    addHuntTrail: (swarmId, input: AddTrailInput) =>
+      call("POST", `/api/swarms/${encodeURIComponent(swarmId)}/hunt/trails`, input),
+    updateHuntTrail: (swarmId, trailId, input: UpdateTrailInput) =>
+      call("PATCH", `/api/swarms/${encodeURIComponent(swarmId)}/hunt/trails/${encodeURIComponent(trailId)}`, input),
+    addHuntNote: (swarmId, input) => call("POST", `/api/swarms/${encodeURIComponent(swarmId)}/hunt/notes`, input),
+    removeHuntNote: (swarmId, noteId) =>
+      call("DELETE", `/api/swarms/${encodeURIComponent(swarmId)}/hunt/notes/${encodeURIComponent(noteId)}`),
   };
 }

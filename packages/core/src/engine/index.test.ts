@@ -430,6 +430,10 @@ function timelineWorld(): SimWorld {
     transcript: (simId, kind, targetName) => base.transcript(simId, kind, targetName),
     company: (simId) => base.company(simId),
     companyEvidenceFor: (simId, jobId, depth) => base.companyEvidenceFor(simId, jobId, depth),
+    // This fixture is about the fixed feeds' timeline: its web is the base world's, unused here.
+    page: (url, day) => base.page(url, day),
+    search: (engine, query, day, limit) => base.search(engine, query, day, limit),
+    engines: () => base.engines(),
   };
 }
 

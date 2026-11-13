@@ -31,6 +31,22 @@ import type {
 } from "./domain";
 import type { JobId, SourceId } from "./registry";
 import type { Decision, DimensionScore } from "./scoring";
+import {
+  FUNDING_LEVELS,
+  PAGE_KINDS,
+  PROGRESS_LEVELS,
+  TEAM_LEVELS,
+  type HitText,
+  type HuntBrief,
+  type HuntNote,
+  type LatestStage,
+  type LookResult,
+  type NavigateTurn,
+  type PageText,
+  type SiftResult,
+  type TrailDigest,
+  type WaveDigest,
+} from "./hunt";
 
 const nullableString = z.string().nullable();
 
@@ -487,6 +503,88 @@ export const CompanyAssessOutputSchema = z.object({
 export type CompanyJudgmentDraft = z.infer<typeof CompanyJudgmentDraftSchema>;
 export type CompanyAssessOutput = z.infer<typeof CompanyAssessOutputSchema>;
 
+/* ------------------------------- Hunt ------------------------------ */
+
+/** One turn of the navigator. Everything here is counts, names and short labels: no page text. */
+export interface NavigateInput {
+  thesis: Thesis;
+  brief: HuntBrief;
+  /** Which turn this is, counted since the hunt began. */
+  turn: number;
+  trails: TrailDigest[];
+  /** The latest lines of the notebook, newest first. */
+  notes: Array<{ by: HuntNote["by"]; text: string }>;
+  lastWave: WaveDigest | null;
+  budget: { turnsLeft: number; callsLeft: number };
+}
+
+const StartSearchSchema = z.object({ engine: z.string(), query: z.string() });
+
+export const NavigateOutputSchema = z.object({
+  open: z.array(z.object({ name: z.string(), intent: z.string(), searches: z.array(StartSearchSchema), pages: z.array(z.string()) })),
+  extend: z.array(z.object({ trailId: z.string(), searches: z.array(StartSearchSchema), pages: z.array(z.string()) })),
+  close: z.array(z.object({ trailId: z.string(), why: z.string() })),
+  focus: z.array(z.object({ trailId: z.string(), weight: z.number() })),
+  notes: z.array(z.string()),
+  done: z.boolean(),
+}) satisfies z.ZodType<NavigateTurn>;
+export type NavigateOutput = z.infer<typeof NavigateOutputSchema>;
+
+/** One page for a runner to read. `notes` is a few lines of the notebook that code picked. */
+export interface LookInput {
+  thesis: Thesis;
+  /** What the trail is looking for, in the navigator's or a person's words. */
+  intent: string;
+  notes: string[];
+  page: PageText;
+  latestStage: LatestStage;
+}
+
+const PickSchema = z.object({ index: z.number(), label: z.string(), priority: z.number() });
+
+const StageReadSchema = z.object({
+  funding: z.enum(FUNDING_LEVELS),
+  fundingQuote: nullableString,
+  team: z.enum(TEAM_LEVELS),
+  teamQuote: nullableString,
+  progress: z.enum(PROGRESS_LEVELS),
+  progressQuote: nullableString,
+});
+
+const PersonFoundSchema = z.object({
+  name: z.string(),
+  role: nullableString,
+  companyName: nullableString,
+  companyUrl: nullableString,
+  oneLiner: nullableString,
+  links: ProfileLinksSchema,
+  why: z.string(),
+  /** Words copied from the page. Code looks for them there. */
+  quote: z.string(),
+});
+
+export const LookOutputSchema = z.object({
+  kind: z.enum(PAGE_KINDS),
+  people: z.array(PersonFoundSchema),
+  aboutCompany: z.boolean(),
+  stage: StageReadSchema,
+  follow: z.array(PickSchema),
+}) satisfies z.ZodType<LookResult>;
+export type LookOutput = z.infer<typeof LookOutputSchema>;
+
+/** One list of search results for a runner to sift. */
+export interface SiftInput {
+  thesis: Thesis;
+  intent: string;
+  notes: string[];
+  query: string;
+  hits: HitText[];
+  latestStage: LatestStage;
+}
+
+export const SiftOutputSchema = z.object({ open: z.array(PickSchema) }) satisfies z.ZodType<SiftResult>;
+export type SiftOutput = z.infer<typeof SiftOutputSchema>;
+
 /* --------------------------- Job I/O map --------------------------- */
 
 /** Input and output types per model-backed job. */
@@ -495,6 +593,9 @@ export interface JobIO {
   "scout.github": { input: ScoutInput; output: ScoutOutput };
   "scout.research": { input: ScoutInput; output: ScoutOutput };
   "scout.talent": { input: ScoutInput; output: ScoutOutput };
+  "hunt.navigate": { input: NavigateInput; output: NavigateOutput };
+  "hunt.look": { input: LookInput; output: LookOutput };
+  "hunt.sift": { input: SiftInput; output: SiftOutput };
   "screen.fit": { input: ScreenInput; output: ScreenOutput };
   "investigate.background": { input: InvestigateInput; output: InvestigateOutput };
   "investigate.code": { input: InvestigateInput; output: InvestigateOutput };
@@ -522,6 +623,9 @@ export const MODEL_JOB_IDS = [
   "scout.github",
   "scout.research",
   "scout.talent",
+  "hunt.navigate",
+  "hunt.look",
+  "hunt.sift",
   "screen.fit",
   "investigate.background",
   "investigate.code",
@@ -545,6 +649,9 @@ export const JOB_OUTPUT_SCHEMAS = {
   "scout.github": ScoutOutputSchema,
   "scout.research": ScoutOutputSchema,
   "scout.talent": ScoutOutputSchema,
+  "hunt.navigate": NavigateOutputSchema,
+  "hunt.look": LookOutputSchema,
+  "hunt.sift": SiftOutputSchema,
   "screen.fit": ScreenOutputSchema,
   "investigate.background": InvestigateOutputSchema,
   "investigate.code": InvestigateOutputSchema,

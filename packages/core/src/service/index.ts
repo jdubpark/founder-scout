@@ -1,10 +1,10 @@
 import { join } from "node:path";
 import {
-  AGENT_CLASSES, BASE_CONFIG, JOBS, SOURCES, STAGES,
+  AGENT_CLASSES, BASE_CONFIG, JOBS, SOURCES, STAGES, runnerPools,
   buildEffectiveSteering, coerceParam, effectiveRoute, getParamDef, isClassId, isCompanyReasonFor, isJobId,
   isNeverFetchUrl, isReasonFor, newId, normalizeCompanyName, normalizeScope, overlayConfig, paramsFor, scopeLabel,
   scopeLevel, stableId, suggestSteering, suggestionTextKey, summarizeCalls, swarmIdentity,
-  type Agent, type AgentIdentity, type ApiClient,
+  type Agent, type AgentIdentity, type ApiClient, type AddTrailInput, type UpdateTrailInput, type Pools,
   type AddFounderInput, type CallExample, type ClassId, type CoachReport, type CompanyFeedback, type CompanyQuery, type Directive, type DirectiveFilter,
   type DirectiveRow, type EffectiveSteeringQuery, type Evidence, type Feedback,
   type Founder, type FounderRow, type NetworkContact, type NodeHealth, type NodeStats, type ProfileLinks, type CompanyRow,
@@ -17,12 +17,13 @@ import type {
 import { ServiceError } from "../contracts";
 import { openStore } from "../db";
 import { createSimRepoFinder, createSimSources, createSimWorld } from "../sim";
-import { createLivePeopleLookup, createLiveRepoFinder, createLiveSources, createQuoteChecker, looksLikeFounder, parseConnectionsCsv } from "../sources";
+import { createLivePeopleLookup, createLiveRepoFinder, createLiveSources, createQuoteChecker, createLiveWebAccess, createSimWebAccess, looksLikeFounder, parseConnectionsCsv } from "../sources";
 import { createProviderRegistry } from "../providers";
 import { createJobRegistry, createExecuteJob, findSensitive, redactSensitive } from "../jobs";
 import { createRunController } from "../engine";
 import { createEvalService } from "../eval";
 import { poolsView, rebalancePools, setPool } from "./pools";
+import { addHuntNote, addHuntTrail, huntView, removeHuntNote, updateHuntTrail } from "./hunt";
 import { assumptionsFor } from "./assumptions";
 import { previewConfig } from "./preview";
 
@@ -114,6 +115,14 @@ export function createSwarmService(deps: ServiceDeps): SwarmService {
   const now = deps.now ?? (() => new Date());
   const audit = (actor: string, action: string, target: string, detail: Record<string, unknown> = {}) =>
     store.audit({ actor: trimmed(actor) || "Partner", action, target, detail });
+  const poolDeps = { store, now, ...(deps.defaultPools ? { defaultPools: deps.defaultPools } : {}) };
+  const huntDeps = {
+    store,
+    now,
+    ...(deps.defaultPools ? { defaultPools: deps.defaultPools } : {}),
+    ...(deps.web ? { web: deps.web } : {}),
+    audit,
+  };
   const getSwarm = (id: string): Swarm => {
     const found = store.getSwarm(id);
     if (!found) fail(404, "Swarm not found. Choose a swarm that exists.");
@@ -987,8 +996,24 @@ export function createSwarmService(deps: ServiceDeps): SwarmService {
         return assumptionsFor({ store, evals: deps.evals }, swarmId);
       },
 
+      async getHunt(swarmId) {
+        return huntView(huntDeps, swarmId);
+      },
+      async addHuntTrail(swarmId, input: AddTrailInput) {
+        return addHuntTrail(huntDeps, actor, swarmId, input);
+      },
+      async updateHuntTrail(swarmId, trailId: string, input: UpdateTrailInput) {
+        return updateHuntTrail(huntDeps, actor, swarmId, trailId, input);
+      },
+      async addHuntNote(swarmId, input: { text: string }) {
+        return addHuntNote(huntDeps, actor, swarmId, input);
+      },
+      async removeHuntNote(swarmId, noteId: string) {
+        return removeHuntNote(huntDeps, actor, swarmId, noteId);
+      },
+
       async getPools(swarmId) {
-        return poolsView({ store, now }, swarmId);
+        return poolsView(poolDeps, swarmId);
       },
       async setPool(swarmId, jobId, input) {
         const config = setPool({ store, now }, swarmId, jobId, input);
@@ -997,10 +1022,10 @@ export function createSwarmService(deps: ServiceDeps): SwarmService {
           configId: config.id,
           members: input.members.map((member) => ({ id: member.id, model: member.route.model, share: member.share })),
         });
-        return poolsView({ store, now }, swarmId);
+        return poolsView(poolDeps, swarmId);
       },
       async rebalancePools(swarmId, input) {
-        const { report, config } = rebalancePools({ store, now }, swarmId, { apply: input?.apply === true });
+        const { report, config } = await rebalancePools(poolDeps, swarmId, { apply: input?.apply === true });
         if (config) audit(actor, "pool.rebalance", swarmId, { configId: config.id, pools: report.pools.filter((pool) => pool.changes.length > 0) });
         return report;
       },
@@ -1169,7 +1194,7 @@ export function createSwarmService(deps: ServiceDeps): SwarmService {
       // In "apply" the shares are moved; in "suggest" the report says what would move.
       if (!settings.killSwitch && settings.autopilot.mode !== "off") {
         try {
-          const moved = rebalancePools({ store, now }, swarm.id, { apply: settings.autopilot.mode === "apply" });
+          const moved = await rebalancePools(poolDeps, swarm.id, { apply: settings.autopilot.mode === "apply" });
           const changed = moved.report.pools.filter((pool) => pool.changes.length > 0);
           if (changed.length > 0) report.pools = changed;
           if (moved.config) audit("Swarm", "pool.rebalance", swarm.id, { configId: moved.config.id, pools: changed });
@@ -1194,6 +1219,8 @@ export function createSwarmService(deps: ServiceDeps): SwarmService {
     },
     close() { store.close(); },
   };
+  // Existing databases may predate newly enabled jobs such as the hunt navigator and runners.
+  for (const swarm of store.listSwarms()) ensureEnabledJobAgents(swarm.id);
   return service;
 }
 
@@ -1205,9 +1232,18 @@ export function createApp(options: AppOptions): App {
   const simRepos = createSimRepoFinder(world);
   const liveRepos = createLiveRepoFinder({ env: options.env, workDir: join(options.dataDir, "repos") });
   const providers = createProviderRegistry(options.env);
+  const web = { sim: createSimWebAccess(world), live: createLiveWebAccess({ env: options.env }) };
+  let defaultPoolsPromise: Promise<Pools> | null = null;
+  const defaultPools = (): Promise<Pools> => {
+    defaultPoolsPromise ??= providers.statuses().then((statuses) => {
+      const configured = new Set(statuses.filter((provider) => provider.configured).map((provider) => provider.id));
+      return runnerPools((provider) => configured.has(provider));
+    });
+    return defaultPoolsPromise;
+  };
   const jobs = createJobRegistry();
   const executeJob = createExecuteJob({ jobs, providers });
-  const runs = createRunController({ store, jobs, executeJob, quotes: createQuoteChecker(), people: createLivePeopleLookup(options.env ?? process.env), sources: { sim: simSources, live: liveSources }, repos: { sim: simRepos, live: liveRepos }, simWorld: world, fundName: options.fundName ?? "the fund", now: options.now, logger: options.logger });
+  const runs = createRunController({ store, jobs, executeJob, quotes: createQuoteChecker(), people: createLivePeopleLookup(options.env ?? process.env), sources: { sim: simSources, live: liveSources }, repos: { sim: simRepos, live: liveRepos }, web, defaultPools, simWorld: world, fundName: options.fundName ?? "the fund", now: options.now, logger: options.logger });
   const evals = createEvalService({
     store,
     jobs,
@@ -1219,6 +1255,6 @@ export function createApp(options: AppOptions): App {
     now: options.now,
     logger: options.logger,
   }, { pastJudge: options.evalJudge ?? null });
-  const service = createSwarmService({ store, runs, evals, providers, liveSources, cron: options.cron, now: options.now, logger: options.logger });
+  const service = createSwarmService({ store, runs, evals, providers, liveSources, web, defaultPools, cron: options.cron, now: options.now, logger: options.logger });
   return { service, store, providers, close: () => store.close() };
 }

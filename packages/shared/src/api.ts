@@ -39,6 +39,7 @@ import type {
 import type { ContaminationReport } from "./past";
 import type { MemberStats, PoolMember } from "./pools";
 import type { AssumptionsDTO } from "./assumptions";
+import type { HuntCall, HuntNote, LatestStage, StageRead, Trail, TrailStats, TrailStatus } from "./hunt";
 import type { ClassId, ClassMeta, JobId, JobMeta, ModelRoute, ProviderId, SourceId } from "./registry";
 import type { ParamValue } from "./params";
 import type { Decision } from "./scoring";
@@ -794,6 +795,103 @@ export interface ApiClient {
   setPool(swarmId: string, jobId: JobId, input: SetPoolInput): Promise<PoolsDTO>;
   /** POST /api/swarms/:id/pools/rebalance  With `apply` false, reports what would change and saves nothing. */
   rebalancePools(swarmId: string, input?: { apply?: boolean }): Promise<RebalanceReport>;
+
+  /** GET /api/swarms/:id/hunt */
+  getHunt(swarmId: string): Promise<HuntDTO>;
+  /** POST /api/swarms/:id/hunt/trails  A person opens a trail. It needs a name and somewhere to start. */
+  addHuntTrail(swarmId: string, input: AddTrailInput): Promise<HuntDTO>;
+  /** PATCH /api/swarms/:id/hunt/trails/:trailId */
+  updateHuntTrail(swarmId: string, trailId: string, input: UpdateTrailInput): Promise<HuntDTO>;
+  /** POST /api/swarms/:id/hunt/notes  A line for the notebook. The navigator reads it on its next turn. */
+  addHuntNote(swarmId: string, input: { text: string }): Promise<HuntDTO>;
+  /** DELETE /api/swarms/:id/hunt/notes/:noteId */
+  removeHuntNote(swarmId: string, noteId: string): Promise<HuntDTO>;
+}
+
+/* ------------------------------ The hunt --------------------------- */
+
+/** A trail with what is waiting on it and how much of the next wave code would give it. */
+export interface HuntTrailView extends Trail {
+  /** Searches and pages waiting. */
+  queued: number;
+  /** `trailScore`: attention times yield. */
+  score: number;
+  /** Share of the next wave, 0 to 1. 0 for a trail that is not open or has nothing waiting. */
+  share: number;
+}
+
+/** A person the hunt found, for the list of recent finds. */
+export interface HuntFind {
+  leadId: string;
+  personName: string;
+  companyName: string | null;
+  oneLiner: string | null;
+  /** The page the person was found on. */
+  sourceRef: string;
+  trailId: string | null;
+  stage: StageRead | null;
+  earliness: number | null;
+  /** The founder record the lead was matched to, once it was. */
+  founderId: string | null;
+  /** That founder's status, so the list can show who the screener kept. */
+  founderStatus: FounderStatus | null;
+  discoveredAt: string;
+}
+
+export interface HuntEngineView {
+  id: string;
+  label: string;
+  /** What it searches, in a line. */
+  searches: string;
+  configured: boolean;
+  detail: string;
+}
+
+/** Everything the Hunt page shows for one swarm. */
+export interface HuntDTO {
+  swarmId: string;
+  /** false when a person turned the hunt off for this swarm. */
+  enabled: boolean;
+  /** true while a run of this swarm is in its hunt stage. */
+  active: boolean;
+  /** Turns the navigator has taken since the hunt began. */
+  turn: number;
+  navigator: { agentId: string | null; paused: boolean; route: ModelRoute | null };
+  /** The runner jobs with the models that share them. */
+  runners: PoolView[];
+  /** Search engines in the mode the swarm's scheduled runs use. */
+  engines: HuntEngineView[];
+  limits: { turns: number; waveSize: number; maxDepth: number; budgetShare: number; latestStage: LatestStage; plantedEvery: number };
+  /** Sums over every trail, open or closed. */
+  totals: TrailStats;
+  /** Planted pages read, and how many a runner fell for. */
+  planted: { read: number; failed: number };
+  /** Open trails first, by score, then paused, then closed. */
+  trails: HuntTrailView[];
+  /** Newest first. */
+  notes: HuntNote[];
+  /** Newest first, at most a hundred. */
+  calls: HuntCall[];
+  /** One entry per navigator turn, oldest first, at most thirty. */
+  waves: Array<{ turn: number; at: string; calls: number; leads: number; costUsd: number }>;
+  /** Newest first, at most thirty. */
+  finds: HuntFind[];
+}
+
+export interface AddTrailInput {
+  name: string;
+  /** What to look for. Defaults to the name. */
+  intent?: string;
+  searches?: Array<{ engine: string; query: string }>;
+  pages?: string[];
+}
+
+export interface UpdateTrailInput {
+  /** "open" re-opens a closed or paused trail. */
+  status?: TrailStatus;
+  pinned?: boolean;
+  /** 1 to 5. */
+  weight?: number;
 }
 
 /* -------------------------------- Demo ----------------------------- */
@@ -835,6 +933,8 @@ export interface DemoSnapshot {
   assumptions?: AssumptionsDTO;
   pools?: PoolsDTO;
   preview?: PreviewDTO;
+  /** Keyed by swarm id. */
+  hunts?: Record<string, HuntDTO>;
 }
 
 /** Error body every non-2xx API response uses. */

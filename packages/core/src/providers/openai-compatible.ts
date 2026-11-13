@@ -33,6 +33,15 @@ export interface CompatibleSpec {
   requiresBaseUrl: boolean;
   modeEnv: string;
   defaultMode: StructuredMode;
+  /**
+   * Sent with a request whose route names no effort, which is how a job says "answer fast".
+   * Both of these models reason by default, and a runner call that reasons takes tens of
+   * seconds to start answering (docs/research/rapid-runner-models.md). A route that names an
+   * effort sends that instead.
+   */
+  fastParams: Record<string, unknown>;
+  /** A JSON object that replaces `fastParams`, for a host that spells the switch differently. "{}" sends nothing. */
+  fastParamsEnv: string;
 }
 
 export const COMPATIBLE_SPECS: Record<CompatibleProviderId, CompatibleSpec> = {
@@ -44,6 +53,8 @@ export const COMPATIBLE_SPECS: Record<CompatibleProviderId, CompatibleSpec> = {
     requiresBaseUrl: false,
     modeEnv: "OPENAI_STRUCTURED_MODE",
     defaultMode: "json_schema",
+    fastParams: {},
+    fastParamsEnv: "OPENAI_FAST_PARAMS",
   },
   "deepseek-api": {
     id: "deepseek-api",
@@ -54,7 +65,12 @@ export const COMPATIBLE_SPECS: Record<CompatibleProviderId, CompatibleSpec> = {
     defaultBaseUrl: null,
     requiresBaseUrl: true,
     modeEnv: "DEEPSEEK_STRUCTURED_MODE",
+    // DeepSeek documents valid JSON, not JSON that matches a schema, and says the answer can
+    // come back blank. The schema goes in the prompt and one repair covers both.
     defaultMode: "json_object",
+    // Thinking is on unless it is switched off, in DeepSeek's own spelling.
+    fastParams: { thinking: { type: "disabled" } },
+    fastParamsEnv: "DEEPSEEK_FAST_PARAMS",
   },
   "meta-api": {
     id: "meta-api",
@@ -63,7 +79,11 @@ export const COMPATIBLE_SPECS: Record<CompatibleProviderId, CompatibleSpec> = {
     defaultBaseUrl: null,
     requiresBaseUrl: true,
     modeEnv: "META_STRUCTURED_MODE",
-    defaultMode: "json_object",
+    // Meta documents a strict schema mode with constrained decoding.
+    defaultMode: "json_schema",
+    // Reasoning cannot be switched off on these models ("none" is refused); this is the floor.
+    fastParams: { reasoning_effort: "minimal" },
+    fastParamsEnv: "META_FAST_PARAMS",
   },
 };
 
@@ -98,6 +118,7 @@ export interface ResolvedConfig {
   apiKey: string | null;
   baseURL: string | undefined;
   mode: StructuredMode;
+  fastParams: Record<string, unknown>;
 }
 
 export function resolveConfig(spec: CompatibleSpec, env: NodeJS.ProcessEnv): ResolvedConfig {
@@ -105,7 +126,21 @@ export function resolveConfig(spec: CompatibleSpec, env: NodeJS.ProcessEnv): Res
   const rawMode = env[spec.modeEnv];
   const mode: StructuredMode = rawMode === "json_schema" || rawMode === "json_object" ? rawMode : spec.defaultMode;
   const baseURL = env[spec.baseUrlEnv] || spec.defaultBaseUrl || undefined;
-  const base = { apiKey, baseURL, mode };
+  const rawFast = env[spec.fastParamsEnv];
+  let fastParams = spec.fastParams;
+  let fastProblem: string | null = null;
+  if (rawFast !== undefined && rawFast.trim() !== "") {
+    try {
+      const parsed: unknown = JSON.parse(rawFast);
+      if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error("not an object");
+      fastParams = parsed as Record<string, unknown>;
+    } catch {
+      fastProblem = `${spec.fastParamsEnv} must be a JSON object, for example {} to send nothing extra`;
+    }
+  }
+  const base = { apiKey, baseURL, mode, fastParams };
+
+  if (fastProblem) return { ...base, configured: false, detail: fastProblem };
 
   if (rawMode !== undefined && rawMode !== "" && rawMode !== "json_schema" && rawMode !== "json_object") {
     return { ...base, configured: false, detail: `${spec.modeEnv} must be json_schema or json_object` };
@@ -239,7 +274,7 @@ export class OpenAICompatibleProvider implements ModelProvider {
       { role: "system", content: system },
       { role: "user", content: req.prompt },
     ];
-    const effortParams = req.route.effort ? { reasoning_effort: req.route.effort } : {};
+    const effortParams = req.route.effort ? { reasoning_effort: req.route.effort } : config.fastParams;
 
     const trace: TraceTurn[] = [
       { role: "system", content: system },

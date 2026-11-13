@@ -4,10 +4,12 @@ import {
   EMPTY_MEMBER_STATS,
   JOBS,
   MODEL_JOB_IDS,
+  runnerPools,
   type MemberStats,
   type ModelJobId,
   type ModelRoute,
   type PoolMember,
+  type Pools,
   type Swarm,
   type SwarmConfig,
 } from "@agentswarm/shared";
@@ -33,7 +35,7 @@ function stats(memberId: string, overrides: Partial<MemberStats> = {}): MemberSt
   return { ...EMPTY_MEMBER_STATS(memberId), ...overrides };
 }
 
-function harness(config: SwarmConfig = BASE_CONFIG) {
+function harness(config: SwarmConfig = BASE_CONFIG, defaultPools?: () => Promise<Pools>) {
   const configs = new Map<string, SwarmConfig>([[config.id, config]]);
   let swarm: Swarm = {
     id: "swarm-test",
@@ -62,7 +64,7 @@ function harness(config: SwarmConfig = BASE_CONFIG) {
     },
   };
   return {
-    deps: { store, now: () => fixedNow },
+    deps: { store, now: () => fixedNow, ...(defaultPools ? { defaultPools } : {}) },
     configs,
     swarm: () => swarm,
     setStats: (jobId: string, rows: MemberStats[]) => { memberStats.set(jobId, rows); },
@@ -85,7 +87,7 @@ function expectRefusal(work: () => unknown, status: number, field?: string): Ser
 }
 
 describe("pools service functions", () => {
-  it("views pooled and unpooled model jobs with stats, yield and model label fallback", () => {
+  it("views pooled and unpooled model jobs with stats, yield and model label fallback", async () => {
     const configuredRoute = route("sim-model");
     const config: SwarmConfig = {
       ...BASE_CONFIG,
@@ -96,7 +98,7 @@ describe("pools service functions", () => {
     const h = harness(config);
     h.setStats(firstJob, [stats("alpha", { tasks: 12, items: 3, supported: 6, costUsd: 3 })]);
 
-    const view = poolsView(h.deps, "swarm-test");
+    const view = await poolsView(h.deps, "swarm-test");
 
     expect(view.windowDays).toBe(POOL_WINDOW_DAYS);
     expect(view.pools.map((pool) => pool.jobId)).toEqual(
@@ -119,7 +121,7 @@ describe("pools service functions", () => {
     expect(h.statsCalls).toEqual([{ swarmId: "swarm-test", jobId: firstJob, sinceIso: "2026-10-30T12:00:00.000Z" }]);
   });
 
-  it("saves a new config for replacement and removal without changing prior configs", () => {
+  it("saves a new config for replacement and empty-list route fallback without changing prior configs", () => {
     const original: SwarmConfig = { ...BASE_CONFIG, id: "cfg_original", label: "Original", pools: { [firstJob]: [member("old", 1)] } };
     const h = harness(original);
     const before = structuredClone(original);
@@ -134,7 +136,7 @@ describe("pools service functions", () => {
 
     const removed = setPool(h.deps, "swarm-test", firstJob, { members: [] });
     expect(removed).not.toBe(saved);
-    expect(removed).not.toHaveProperty("pools");
+    expect(removed.pools?.[firstJob]).toEqual([]);
     expect(h.configs.get(saved.id)).toEqual(saved);
     expect(h.swarm().configId).toBe(removed.id);
   });
@@ -164,7 +166,7 @@ describe("pools service functions", () => {
     }), 400, "members");
   });
 
-  it("reports share changes without saving when apply is false", () => {
+  it("reports share changes without saving when apply is false", async () => {
     const config: SwarmConfig = { ...BASE_CONFIG, id: "cfg_preview", pools: { [firstJob]: [member("alpha", 0.5), member("beta", 0.5)] } };
     const h = harness(config);
     h.setStats(firstJob, [
@@ -172,7 +174,7 @@ describe("pools service functions", () => {
       stats("beta", { tasks: 20, items: 2, supported: 2, costUsd: 1 }),
     ]);
 
-    const result = rebalancePools(h.deps, "swarm-test", { apply: false });
+    const result = await rebalancePools(h.deps, "swarm-test", { apply: false });
 
     expect(result.report).toEqual({ applied: false, pools: [{
       jobId: firstJob,
@@ -188,7 +190,7 @@ describe("pools service functions", () => {
     expect(h.swarm().configId).toBe(config.id);
   });
 
-  it("saves and points the swarm at a rebalanced config when changes are applied", () => {
+  it("saves and points the swarm at a rebalanced config when changes are applied", async () => {
     const config: SwarmConfig = { ...BASE_CONFIG, id: "cfg_apply", pools: { [firstJob]: [member("alpha", 0.5), member("beta", 0.5)] } };
     const h = harness(config);
     h.setStats(firstJob, [
@@ -196,7 +198,7 @@ describe("pools service functions", () => {
       stats("beta", { tasks: 20, items: 2, supported: 2, costUsd: 1 }),
     ]);
 
-    const result = rebalancePools(h.deps, "swarm-test", { apply: true });
+    const result = await rebalancePools(h.deps, "swarm-test", { apply: true });
 
     expect(result.report.applied).toBe(true);
     expect(result.config?.pools?.[firstJob]?.map((item) => item.share)).toEqual([0.6, 0.4]);
@@ -205,7 +207,7 @@ describe("pools service functions", () => {
     expect(h.swarm()).toMatchObject({ configId: result.config!.id, updatedAt: stamp });
   });
 
-  it("does not save when shares already match the measured yields", () => {
+  it("does not save when shares already match the measured yields", async () => {
     const config: SwarmConfig = { ...BASE_CONFIG, id: "cfg_matched", pools: { [firstJob]: [member("alpha", 0.6), member("beta", 0.4)] } };
     const h = harness(config);
     h.setStats(firstJob, [
@@ -213,7 +215,7 @@ describe("pools service functions", () => {
       stats("beta", { tasks: 20, items: 2, supported: 2, costUsd: 1 }),
     ]);
 
-    const result = rebalancePools(h.deps, "swarm-test", { apply: true });
+    const result = await rebalancePools(h.deps, "swarm-test", { apply: true });
 
     expect(result.report).toEqual({ applied: false, pools: [{
       jobId: firstJob,
@@ -226,7 +228,7 @@ describe("pools service functions", () => {
     expect(h.swarm().configId).toBe(config.id);
   });
 
-  it("benches a member that accepts planted false claims and preserves the final member", () => {
+  it("benches a member that accepts planted false claims and preserves the final member", async () => {
     const config: SwarmConfig = { ...BASE_CONFIG, id: "cfg_control", pools: { [firstJob]: [member("unreliable", 0.5), member("steady", 0.5)] } };
     const h = harness(config);
     h.setStats(firstJob, [
@@ -234,7 +236,7 @@ describe("pools service functions", () => {
       stats("steady"),
     ]);
 
-    const result = rebalancePools(h.deps, "swarm-test", { apply: true });
+    const result = await rebalancePools(h.deps, "swarm-test", { apply: true });
 
     expect(result.report.applied).toBe(true);
     expect(result.report.pools[0]?.changes).toEqual([
@@ -247,21 +249,55 @@ describe("pools service functions", () => {
     expect(h.swarm().configId).toBe(result.config?.id);
   });
 
-  it("returns an empty report and saves nothing when the swarm has no pools", () => {
+  it("returns an empty report and saves nothing when the swarm has no pools", async () => {
     const h = harness();
 
-    const result = rebalancePools(h.deps, "swarm-test", { apply: true });
+    const result = await rebalancePools(h.deps, "swarm-test", { apply: true });
 
     expect(result).toEqual({ report: { applied: false, pools: [] }, config: null });
     expect(h.configs.size).toBe(1);
     expect(h.swarm().configId).toBe(BASE_CONFIG.id);
   });
-  it("leaves the shares of a job that produces no evidence alone, and can still bench one of its members", () => {
+
+  it("rebalances configured defaults and saves only the changed job pool", async () => {
+    const h = harness(BASE_CONFIG, async () => runnerPools(() => true));
+    h.setStats("hunt.look", [
+      stats("deepseek-flash", { tasks: 20, items: 10, supported: 10, costUsd: 1 }),
+      stats("muse-ember", { tasks: 20, items: 2, supported: 2, costUsd: 1 }),
+    ]);
+
+    const result = await rebalancePools(h.deps, "swarm-test", { apply: true });
+
+    expect(result.report.applied).toBe(true);
+    expect(result.report.pools.find((pool) => pool.jobId === "hunt.look")?.changes).toHaveLength(2);
+    expect(result.config?.pools?.["hunt.look"]?.map((item) => item.share)).toEqual([0.6, 0.4]);
+    expect(result.config?.pools?.["hunt.sift"]).toBeUndefined();
+  });
+
+  it("keeps a pool saved while default pool resolution is pending", async () => {
+    let releaseDefaults!: (pools: Pools) => void;
+    const defaults = new Promise<Pools>((resolve) => { releaseDefaults = resolve; });
+    const h = harness(BASE_CONFIG, () => defaults);
+    h.setStats("hunt.look", [
+      stats("deepseek-flash", { tasks: 20, items: 10, supported: 10, costUsd: 1 }),
+      stats("muse-ember", { tasks: 20, items: 2, supported: 2, costUsd: 1 }),
+    ]);
+
+    const pending = rebalancePools(h.deps, "swarm-test", { apply: true });
+    setPool(h.deps, "swarm-test", firstJob, { members: [{ id: "custom", route: route("custom-model"), share: 1 }] });
+    releaseDefaults(runnerPools(() => true));
+    const result = await pending;
+
+    expect(result.config?.pools?.[firstJob]?.map((item) => item.id)).toEqual(["custom"]);
+    expect(result.config?.pools?.["hunt.look"]?.map((item) => item.share)).toEqual([0.6, 0.4]);
+  });
+
+  it("leaves the shares of a job that produces no evidence alone, and can still bench one of its members", async () => {
     const checker = "verify.claims" as const;
     const config: SwarmConfig = { ...BASE_CONFIG, id: "cfg_checker", pools: { [checker]: [member("careful", 0.5), member("credulous", 0.5)] } };
     const h = harness(config);
     h.setStats(checker, [stats("careful", { tasks: 40, costUsd: 4 }), stats("credulous", { tasks: 40, costUsd: 0.4 })]);
-    const steady = rebalancePools(h.deps, "swarm-test", { apply: true });
+    const steady = await rebalancePools(h.deps, "swarm-test", { apply: true });
     expect(steady.report).toEqual({ applied: false, pools: [{
       jobId: checker,
       label: JOBS.find((job) => job.id === checker)!.label,
@@ -270,7 +306,7 @@ describe("pools service functions", () => {
     }] });
 
     h.setStats(checker, [stats("careful", { tasks: 40, controls: 40, controlsFailed: 1 }), stats("credulous", { tasks: 40, controls: 40, controlsFailed: 16 })]);
-    const benched = rebalancePools(h.deps, "swarm-test", { apply: true });
+    const benched = await rebalancePools(h.deps, "swarm-test", { apply: true });
     expect(benched.report.applied).toBe(true);
     expect(benched.config?.pools?.[checker]?.map((item) => [item.id, item.status, item.share])).toEqual([["careful", "active", 1], ["credulous", "benched", 0]]);
   });

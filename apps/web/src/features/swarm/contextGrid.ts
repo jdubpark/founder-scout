@@ -66,6 +66,7 @@ export const CARRIER_LABEL: Record<Crossing["by"], string> = {
   code: "Code",
   person: "Person",
   scouts: "Scouts",
+  runners: "Runners",
   "fact-checker": "Fact-checker",
   eval: "Eval",
 };

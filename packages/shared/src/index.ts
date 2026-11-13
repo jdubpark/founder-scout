@@ -18,3 +18,4 @@ export * from "./stats";
 export * from "./context";
 export * from "./pools";
 export * from "./assumptions";
+export * from "./hunt";

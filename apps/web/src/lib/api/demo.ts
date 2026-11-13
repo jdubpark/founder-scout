@@ -8,11 +8,15 @@ import {
   suggestSteering,
   summarizeCalls,
   newId,
+  cleanUrl,
   normalizeScope,
   scopeLabel,
   scopeLevel,
   scopeMatches,
   swarmIdentity,
+  trailScore,
+  ZERO_TRAIL_STATS,
+  type AddTrailInput,
   type AgentIdentity,
   type ApiClient,
   type CallExample,
@@ -23,6 +27,7 @@ import {
   type CompanyRow,
   type Feedback,
   isCompanyReasonFor,
+  type HuntDTO,
   type SteeringSuggestion,
   type DemoSnapshot,
   type Directive,
@@ -32,6 +37,7 @@ import {
   type ScopeNames,
   type ScopeSelector,
   type SwarmTreeDTO,
+  type UpdateTrailInput,
   judgeAssumptions,
 } from "@agentswarm/shared";
 import { ApiError } from "./http";
@@ -125,6 +131,105 @@ export function createDemoClient(snapshot: DemoSnapshot, getActor: () => string)
 
   function founderRows(swarmId: string): FounderRow[] {
     return state.founders[swarmId] ?? [];
+  }
+
+  function emptyHunt(swarmId: string): HuntDTO {
+    return {
+      swarmId,
+      enabled: false,
+      active: false,
+      turn: 0,
+      navigator: { agentId: null, paused: false, route: null },
+      runners: [],
+      engines: [],
+      limits: { turns: 4, waveSize: 12, maxDepth: 2, budgetShare: 0.25, latestStage: "seed", plantedEvery: 12 },
+      totals: { searches: 0, pages: 0, leads: 0, kept: 0, dropped: 0, tooLate: 0, blocked: 0, costUsd: 0 },
+      planted: { read: 0, failed: 0 },
+      trails: [],
+      notes: [],
+      calls: [],
+      waves: [],
+      finds: [],
+    };
+  }
+
+  function requireSwarm(swarmId: string): void {
+    if (!state.swarms.some((swarm) => swarm.id === swarmId)) throw new ApiError(404, "That swarm does not exist.");
+  }
+
+  function mutableHunt(swarmId: string): HuntDTO {
+    requireSwarm(swarmId);
+    state.hunts ??= {};
+    state.hunts[swarmId] ??= emptyHunt(swarmId);
+    return state.hunts[swarmId];
+  }
+
+  function huntId(hunt: HuntDTO): string {
+    return hunt.trails[0]?.huntId ?? hunt.notes[0]?.huntId ?? `hunt_${globalThis.crypto.randomUUID()}`;
+  }
+
+  function updateHuntViews(hunt: HuntDTO): void {
+    const trails = hunt.trails.map((trail) => ({ ...trail, score: trailScore(trail), share: 0 }));
+    const queuedOpen = trails.filter((trail) => trail.status === "open" && trail.queued > 0);
+    const totalScore = queuedOpen.reduce((total, trail) => total + trail.score, 0);
+    for (const trail of trails) {
+      if (trail.status === "open" && trail.queued > 0 && totalScore > 0) trail.share = trail.score / totalScore;
+    }
+    const rank = { open: 0, paused: 1, closed: 2 } as const;
+    hunt.trails = trails.sort((a, b) => rank[a.status] - rank[b.status] || b.score - a.score || a.openedAt.localeCompare(b.openedAt));
+  }
+
+  function checkHuntTrailInput(hunt: HuntDTO, input: AddTrailInput) {
+    const fields: Record<string, string> = {};
+    const name = typeof input?.name === "string" ? input.name.replace(/\s+/g, " ").trim() : "";
+    if (!name) fields.name = "Give this trail a name.";
+    else if (name.length > 60) fields.name = "Use 60 characters or fewer.";
+
+    const intent = typeof input?.intent === "string" ? input.intent.replace(/\s+/g, " ").trim() : "";
+    if (intent.length > 200) fields.intent = "Use 200 characters or fewer.";
+
+    const searches: Array<{ engine: string; query: string }> = [];
+    for (const search of input?.searches ?? []) {
+      const engine = typeof search?.engine === "string" ? search.engine.trim() : "";
+      const query = typeof search?.query === "string" ? search.query.replace(/\s+/g, " ").trim() : "";
+      if (!query) {
+        fields.searches = "Enter words to search for.";
+        continue;
+      }
+      if (query.length > 200) {
+        fields.searches = "Searches must be 200 characters or fewer.";
+        continue;
+      }
+      if (!hunt.engines.some((candidate) => candidate.id === engine && candidate.configured)) {
+        fields.searches = "Choose a configured search engine.";
+        continue;
+      }
+      searches.push({ engine, query });
+    }
+
+    const pages: string[] = [];
+    for (const page of input?.pages ?? []) {
+      const url = typeof page === "string" ? cleanUrl(page) : null;
+      if (!url) {
+        fields.pages = "Enter a public web page address that can be fetched.";
+        continue;
+      }
+      pages.push(url);
+    }
+
+    const starts = [
+      ...new Set(searches.map((search) => `search:${search.engine}:${search.query.toLowerCase()}`)),
+      ...new Set(pages.map((url) => `page:${url}`)),
+    ];
+    if (!starts.length) fields.searches = "Add a search or a public page to start this trail.";
+    else if (starts.length > 4) fields.searches = "A trail can start with up to four searches and pages.";
+
+    const normalizedName = name.toLocaleLowerCase();
+    if (name && hunt.trails.some((trail) => trail.status !== "closed" && trail.name.replace(/\s+/g, " ").trim().toLocaleLowerCase() === normalizedName)) {
+      fields.name = "A trail with this name is already open or paused.";
+    }
+    if (Object.keys(fields).length) throw new ApiError(400, "Check the highlighted fields.", fields);
+    return { name, intent: intent || name, searches, pages, queued: starts.length };
   }
 
   /** Every call recorded in the demo, across the dossiers the snapshot holds. */
@@ -576,6 +681,90 @@ export function createDemoClient(snapshot: DemoSnapshot, getActor: () => string)
     },
     async rebalancePools() {
       throw new ApiError(400, READ_ONLY);
+    },
+    async getHunt(swarmId) {
+      requireSwarm(swarmId);
+      return clone(state.hunts?.[swarmId] ?? emptyHunt(swarmId));
+    },
+    async addHuntTrail(swarmId, input) {
+      const hunt = mutableHunt(swarmId);
+      const checked = checkHuntTrailInput(hunt, input);
+      const stamp = now();
+      hunt.trails.push({
+        id: `trail_${globalThis.crypto.randomUUID()}`,
+        huntId: huntId(hunt),
+        swarmId,
+        name: checked.name,
+        intent: checked.intent,
+        status: "open",
+        openedBy: "person",
+        weight: 3,
+        pinned: false,
+        stats: { ...ZERO_TRAIL_STATS },
+        openedAt: stamp,
+        closedAt: null,
+        closedWhy: null,
+        queued: checked.queued,
+        score: 0,
+        share: 0,
+      });
+      updateHuntViews(hunt);
+      return clone(hunt);
+    },
+    async updateHuntTrail(swarmId, trailId, input: UpdateTrailInput) {
+      requireSwarm(swarmId);
+      const hunt = state.hunts?.[swarmId];
+      if (!hunt) throw new ApiError(404, "That trail does not exist.");
+      const trail = hunt.trails.find((candidate) => candidate.id === trailId);
+      if (!trail) throw new ApiError(404, "That trail does not exist.");
+
+      const fields: Record<string, string> = {};
+      if (input.status !== undefined && !["open", "paused", "closed"].includes(input.status)) {
+        fields.status = "Choose open, paused, or closed.";
+      }
+      if (input.pinned !== undefined && typeof input.pinned !== "boolean") fields.pinned = "Choose whether to pin this trail.";
+      if (input.weight !== undefined && (!Number.isInteger(input.weight) || input.weight < 1 || input.weight > 5)) {
+        fields.weight = "Attention must be a whole number from 1 to 5.";
+      }
+      if (Object.keys(fields).length) throw new ApiError(400, "Check the highlighted fields.", fields);
+      if (input.status === "closed" && (input.pinned ?? trail.pinned)) {
+        throw new ApiError(409, "Unpin this trail before closing it.");
+      }
+
+      if (input.status !== undefined) {
+        trail.status = input.status;
+        trail.closedAt = input.status === "closed" ? now() : null;
+        trail.closedWhy = input.status === "closed" ? "Closed by a person." : null;
+      }
+      if (input.pinned !== undefined) trail.pinned = input.pinned;
+      if (input.weight !== undefined) trail.weight = input.weight;
+      updateHuntViews(hunt);
+      return clone(hunt);
+    },
+    async addHuntNote(swarmId, input) {
+      const hunt = mutableHunt(swarmId);
+      const text = typeof input?.text === "string" ? input.text.replace(/\s+/g, " ").trim() : "";
+      if (!text) throw new ApiError(400, "Write a note for the navigator.", { text: "Write a note." });
+      if (text.length > 240) throw new ApiError(400, "Keep notes to 240 characters or fewer.", { text: "Use 240 characters or fewer." });
+      hunt.notes.unshift({
+        id: `note_${globalThis.crypto.randomUUID()}`,
+        huntId: huntId(hunt),
+        swarmId,
+        by: "person",
+        text,
+        turn: hunt.turn,
+        createdAt: now(),
+      });
+      return clone(hunt);
+    },
+    async removeHuntNote(swarmId, noteId) {
+      requireSwarm(swarmId);
+      const hunt = state.hunts?.[swarmId];
+      if (!hunt) throw new ApiError(404, "That note does not exist.");
+      const noteIndex = hunt.notes.findIndex((note) => note.id === noteId);
+      if (noteIndex === -1) throw new ApiError(404, "That note does not exist.");
+      hunt.notes.splice(noteIndex, 1);
+      return clone(hunt);
     },
   };
 

@@ -23,7 +23,12 @@ export type IdPrefix =
   | "mem" // company team member
   | "cas" // company assessment
   | "cfb" // company feedback
-  | "net"; // contact from a partner's uploaded list
+  | "net" // contact from a partner's uploaded list
+  | "hnt" // hunt: a swarm's notebook
+  | "trl" // trail
+  | "frn" // frontier item: a search or a page waiting on a trail
+  | "hcl" // hunt call: one use of a runner or a search engine
+  | "hnn"; // hunt note
 
 export function newId(prefix: IdPrefix): string {
   const bytes = new Uint8Array(12);

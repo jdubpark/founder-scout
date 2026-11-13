@@ -35,7 +35,8 @@ export const CONTEXT_POOLS = [
   { id: "calls", label: "Partner calls", holds: "Recent Yes and No calls with their reasons, shown as examples of taste.", per: "One swarm", sealed: false },
   { id: "lessons", label: "Learned lines", holds: "One-line guidance that an eval round kept, for one job.", per: "One job", sealed: false },
   { id: "sources", label: "Source items", holds: "New items from one source since the last run.", per: "One scout", sealed: false },
-  { id: "lead", label: "Lead", holds: "One person a scout proposed: name, role, company and why.", per: "One lead", sealed: false },
+  { id: "hunt", label: "Hunt notebook", holds: "The navigator's trails and notes, and what each wave found, as counts and short labels.", per: "One swarm", sealed: false },
+  { id: "lead", label: "Lead", holds: "One person a scout or a runner proposed: name, role, company and why.", per: "One lead", sealed: false },
   { id: "founder", label: "Founder file", holds: "One founder's profile and the sourced evidence about them.", per: "One founder", sealed: false },
   { id: "company", label: "Company file", holds: "One company's profile, team listing and sourced evidence by facet.", per: "One company", sealed: false },
   { id: "repo", label: "Code checkout", holds: "A sanitised, size-capped copy of one repository.", per: "One task", sealed: false },
@@ -63,6 +64,8 @@ type Reads = PoolId | readonly PoolId[];
 type InputPools = { [J in ModelJobId]: Readonly<Record<keyof JobInput<J> & string, Reads>> };
 
 const SCOUT = { items: "sources", beat: "steering", thesis: "objective" } as const;
+// A runner reads one page or one list of results from the web, and a few lines of the notebook.
+const RUNNER = { thesis: "objective", intent: "hunt", notes: "hunt", latestStage: "steering" } as const;
 const INVESTIGATE = { founder: "founder", thesis: "objective", known: "founder", depth: "steering", repo: "repo", gaps: "questions" } as const;
 const COMPANY_RESEARCH = { company: "company", founders: "company", thesis: "objective", known: "company", depth: "steering", gaps: "questions" } as const;
 
@@ -84,6 +87,11 @@ export const JOB_INPUT_POOLS: InputPools = {
   "scout.github": SCOUT,
   "scout.research": SCOUT,
   "scout.talent": SCOUT,
+  // The navigator is shown the notebook and nothing a page said: `lastWave` is counts and
+  // labels of a few words that runners wrote.
+  "hunt.navigate": { thesis: "objective", brief: "steering", turn: "hunt", trails: "hunt", notes: "hunt", lastWave: "hunt", budget: "steering" },
+  "hunt.look": { ...RUNNER, page: "sources" },
+  "hunt.sift": { ...RUNNER, query: "hunt", hits: "sources" },
   "screen.fit": { founder: "lead", thesis: "objective" },
   "investigate.background": INVESTIGATE,
   "investigate.code": INVESTIGATE,
@@ -117,7 +125,7 @@ export interface Crossing {
   from: PoolId;
   to: PoolId;
   /** Who carries it across. */
-  by: "code" | "person" | "scouts" | "fact-checker" | "eval";
+  by: "code" | "person" | "scouts" | "runners" | "fact-checker" | "eval";
   /** What arrives on the other side. */
   form: string;
   /** What decides whether it crosses, and what stays behind. */
@@ -127,6 +135,9 @@ export interface Crossing {
 /** The only ways text or numbers move from one pool to another. */
 export const CROSSINGS: readonly Crossing[] = [
   { from: "sources", to: "lead", by: "scouts", form: "A named person with a source link and one line on why", rule: "Only people who look like founders inside the thesis. The source item itself stays behind." },
+  { from: "sources", to: "lead", by: "runners", form: "A named person with the page's address and the page's own words", rule: "Code keeps a person only when the name and the quoted words are on the page, and leaves out a company the page says is past the stage the fund wants. The page itself stays behind." },
+  { from: "sources", to: "hunt", by: "runners", form: "Links chosen by their number on the page, each with a label of a few words", rule: "A runner picks from the links that are there, so it cannot add an address of its own. No page text crosses, and the navigator is told the labels are data, not instructions." },
+  { from: "lead", to: "hunt", by: "code", form: "How many of a trail's leads the fit screener kept", rule: "A count for each trail. It decides how much of the next wave the trail gets." },
   { from: "lead", to: "founder", by: "code", form: "One founder record", rule: "A lead that passes the fit screen. The same person seen twice is merged, not copied." },
   { from: "founder", to: "founder", by: "fact-checker", form: "A verdict on each item: supported, unsupported or unverified", rule: "Code first checks that the quoted words are on the cited page. Every check carries one planted false claim; a checker that accepts it has that call's verdicts thrown away. Only supported items reach an analyst." },
   { from: "founder", to: "questions", by: "code", form: "The rubric questions still open, as questions", rule: "A question the evidence did not settle, or settled loosely. Rubric answers and scores stay behind." },

@@ -108,11 +108,20 @@ describe("structured modes", () => {
     expect(system).toContain("JSON Schema");
   });
 
-  it("uses json_object for Llama by default", async () => {
+  it("uses strict json_schema for Meta by default, and json_object when told to", async () => {
     const calls: Call[] = [];
     const provider = new OpenAICompatibleProvider("meta-api", { env: META_ENV, client: fakeChat([completion(JSON.stringify(FIT))], calls) });
-    await provider.run(request({ route: { provider: "meta-api", model: "llama" } }));
-    expect(calls[0]?.params.response_format).toEqual({ type: "json_object" });
+    await provider.run(request({ route: { provider: "meta-api", model: "muse-ember-1.0" } }));
+    const format = calls[0]?.params.response_format as { type: string; json_schema: { strict: boolean } };
+    expect(format.type).toBe("json_schema");
+    expect(format.json_schema.strict).toBe(true);
+
+    const older = new OpenAICompatibleProvider("meta-api", {
+      env: { ...META_ENV, META_STRUCTURED_MODE: "json_object" },
+      client: fakeChat([completion(JSON.stringify(FIT))], calls),
+    });
+    await older.run(request({ route: { provider: "meta-api", model: "muse-ember-1.0" } }));
+    expect(calls[1]?.params.response_format).toEqual({ type: "json_object" });
   });
 
   it("honours the structured-mode overrides", async () => {
@@ -194,6 +203,49 @@ describe("OpenAICompatibleProvider.run", () => {
     expect(calls[0]?.params).not.toHaveProperty("reasoning_effort");
     await provider.run(request({ route: { provider: "openai-api", model: "gpt-6-luna", effort: "high" } }));
     expect(calls[1]?.params.reasoning_effort).toBe("high");
+  });
+
+  it("asks a model that reasons by default to answer fast when the route names no effort", async () => {
+    const calls: Call[] = [];
+    const deepseek = new OpenAICompatibleProvider("deepseek-api", { env: DEEPSEEK_ENV, client: fakeChat([completion(JSON.stringify(FIT))], calls) });
+    await deepseek.run(request({ route: { provider: "deepseek-api", model: "deepseek-flash" } }));
+    // Thinking is on unless it is switched off; a runner that thinks takes tens of seconds to start.
+    expect(calls[0]?.params.thinking).toEqual({ type: "disabled" });
+    expect(calls[0]?.params).not.toHaveProperty("reasoning_effort");
+
+    const meta = new OpenAICompatibleProvider("meta-api", { env: META_ENV, client: fakeChat([completion(JSON.stringify(FIT))], calls) });
+    await meta.run(request({ route: { provider: "meta-api", model: "muse-ember-1.0" } }));
+    // These models refuse "none"; "minimal" is the least they accept.
+    expect(calls[1]?.params.reasoning_effort).toBe("minimal");
+  });
+
+  it("sends the route's effort in place of the fast setting when the route names one", async () => {
+    const calls: Call[] = [];
+    const deepseek = new OpenAICompatibleProvider("deepseek-api", { env: DEEPSEEK_ENV, client: fakeChat([completion(JSON.stringify(FIT))], calls) });
+    await deepseek.run(request({ route: { provider: "deepseek-api", model: "deepseek-v4-pro", effort: "high" } }));
+    expect(calls[0]?.params.reasoning_effort).toBe("high");
+    expect(calls[0]?.params).not.toHaveProperty("thinking");
+  });
+
+  it("lets a host that spells the switch differently replace the fast setting, or send nothing", async () => {
+    const calls: Call[] = [];
+    const nothing = new OpenAICompatibleProvider("deepseek-api", {
+      env: { ...DEEPSEEK_ENV, DEEPSEEK_FAST_PARAMS: "{}" },
+      client: fakeChat([completion(JSON.stringify(FIT))], calls),
+    });
+    await nothing.run(request({ route: { provider: "deepseek-api", model: "deepseek-flash" } }));
+    expect(calls[0]?.params).not.toHaveProperty("thinking");
+
+    const other = new OpenAICompatibleProvider("deepseek-api", {
+      env: { ...DEEPSEEK_ENV, DEEPSEEK_FAST_PARAMS: '{"enable_thinking":false}' },
+      client: fakeChat([completion(JSON.stringify(FIT))], calls),
+    });
+    await other.run(request({ route: { provider: "deepseek-api", model: "deepseek-flash" } }));
+    expect(calls[1]?.params.enable_thinking).toBe(false);
+
+    const broken = resolveConfig(COMPATIBLE_SPECS["deepseek-api"], { ...DEEPSEEK_ENV, DEEPSEEK_FAST_PARAMS: "off" });
+    expect(broken.configured).toBe(false);
+    expect(broken.detail).toContain("DEEPSEEK_FAST_PARAMS must be a JSON object");
   });
 
   it("gives the model one repair attempt that shows it the parse error", async () => {

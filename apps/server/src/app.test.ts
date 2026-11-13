@@ -202,6 +202,29 @@ const routeCases: RouteCase[] = [
     args: ["sw-1", { apply: true }],
     body: { apply: true },
   },
+  { method: "GET", url: "/api/swarms/sw-1/hunt", apiMethod: "getHunt", args: ["sw-1"] },
+  {
+    method: "POST",
+    url: "/api/swarms/sw-1/hunt/trails",
+    apiMethod: "addHuntTrail",
+    args: ["sw-1", { name: "Seed founders", intent: "Find early founders", searches: [{ engine: "exa", query: "founder launch" }], pages: ["https://founders.example/about"] }],
+    body: { name: "Seed founders", intent: "Find early founders", searches: [{ engine: "exa", query: "founder launch" }], pages: ["https://founders.example/about"] },
+  },
+  {
+    method: "PATCH",
+    url: "/api/swarms/sw-1/hunt/trails/trail-1",
+    apiMethod: "updateHuntTrail",
+    args: ["sw-1", "trail-1", { status: "paused", pinned: true, weight: 3 }],
+    body: { status: "paused", pinned: true, weight: 3 },
+  },
+  {
+    method: "POST",
+    url: "/api/swarms/sw-1/hunt/notes",
+    apiMethod: "addHuntNote",
+    args: ["sw-1", { text: "Prioritize technical founders." }],
+    body: { text: "Prioritize technical founders." },
+  },
+  { method: "DELETE", url: "/api/swarms/sw-1/hunt/notes/note-1", apiMethod: "removeHuntNote", args: ["sw-1", "note-1"] },
 ];
 
 describe("buildServer routes", () => {
@@ -288,6 +311,83 @@ describe("buildServer routes", () => {
     expect(malformedScope.json().fields.scope).toBe("Scope must be valid JSON");
     expect(badScopeShape.json().fields.scope).toBe("Scope has an invalid shape");
     expect(calls).toHaveLength(0);
+  });
+
+  it("validates Hunt trail, update, and note bodies before calling the service", async () => {
+    const { service, calls } = fakeService();
+    const app = await serverFor(service);
+    const invalidTrail = await app.inject({
+      method: "POST",
+      url: "/api/swarms/sw-1/hunt/trails",
+      payload: { name: "  ", searches: [{ engine: "exa", query: "founders" }] },
+    });
+    const invalidTrailStart = await app.inject({
+      method: "POST",
+      url: "/api/swarms/sw-1/hunt/trails",
+      payload: { name: "Seed founders" },
+    });
+    const invalidTrailShape = await app.inject({
+      method: "POST",
+      url: "/api/swarms/sw-1/hunt/trails",
+      payload: { name: "Seed founders", searches: [{ engine: "exa", query: "  " }] },
+    });
+    const invalidUpdate = await app.inject({
+      method: "PATCH",
+      url: "/api/swarms/sw-1/hunt/trails/trail-1",
+      payload: { status: "running", weight: 6 },
+    });
+    const invalidNote = await app.inject({
+      method: "POST",
+      url: "/api/swarms/sw-1/hunt/notes",
+      payload: { text: "n".repeat(241) },
+    });
+
+    for (const response of [invalidTrail, invalidTrailStart, invalidTrailShape, invalidUpdate, invalidNote]) {
+      expect(response.statusCode).toBe(400);
+      expect(response.json()).toMatchObject({ error: "Request validation failed", fields: expect.any(Object) });
+      expect(Object.keys(response.json().fields).length).toBeGreaterThan(0);
+    }
+    expect(invalidTrail.json().fields.name).toBeDefined();
+    expect(invalidTrailStart.json().fields.searches).toBeDefined();
+    expect(invalidTrailShape.json().fields["searches.0.query"]).toBeDefined();
+    expect(invalidUpdate.json().fields.status).toBeDefined();
+    expect(invalidUpdate.json().fields.weight).toBeDefined();
+    expect(invalidNote.json().fields.text).toBeDefined();
+    expect(calls).toHaveLength(0);
+  });
+
+  it("accepts six combined Hunt starting points and rejects a seventh", async () => {
+    const { service, calls } = fakeService();
+    const app = await serverFor(service);
+    const sixStarts = await app.inject({
+      method: "POST",
+      url: "/api/swarms/sw-1/hunt/trails",
+      payload: {
+        name: "Seed founders",
+        searches: [
+          { engine: "exa", query: "first" },
+          { engine: "exa", query: "second" },
+          { engine: "exa", query: "third" },
+        ],
+        pages: ["https://one.example", "https://two.example", "https://three.example"],
+      },
+    });
+    const sevenStarts = await app.inject({
+      method: "POST",
+      url: "/api/swarms/sw-1/hunt/trails",
+      payload: {
+        name: "Too many starts",
+        searches: Array.from({ length: 4 }, (_, index) => ({ engine: "exa", query: `query ${index}` })),
+        pages: ["https://one.example", "https://two.example", "https://three.example"],
+      },
+    });
+
+    expect(sixStarts.statusCode).toBe(200);
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.args[1]).toMatchObject({ searches: expect.arrayContaining([{ engine: "exa", query: "third" }]), pages: expect.arrayContaining(["https://three.example"]) });
+    expect(sevenStarts.statusCode).toBe(400);
+    expect(sevenStarts.json().fields.searches).toBe("A trail can have at most 6 starting points.");
+    expect(calls).toHaveLength(1);
   });
 
   it("strictly validates the company query contract", async () => {
@@ -406,10 +506,14 @@ describe("buildServer routes", () => {
     const { service } = fakeService();
     const app = await serverFor(service);
     const allowed = await app.inject({ method: "OPTIONS", url: "/api/settings", headers: { origin: "http://localhost:5317", "access-control-request-method": "GET" } });
+    const patchAllowed = await app.inject({ method: "OPTIONS", url: "/api/swarms/sw-1/hunt/trails/trail-1", headers: { origin: "http://localhost:5317", "access-control-request-method": "PATCH" } });
+    const deleteAllowed = await app.inject({ method: "OPTIONS", url: "/api/swarms/sw-1/hunt/notes/note-1", headers: { origin: "http://localhost:5317", "access-control-request-method": "DELETE" } });
     const otherHost = await app.inject({ method: "OPTIONS", url: "/api/settings", headers: { origin: "http://localhost:5318", "access-control-request-method": "GET" } });
     const allowedIp = await app.inject({ method: "OPTIONS", url: "/api/settings", headers: { origin: "http://127.0.0.1:5317", "access-control-request-method": "GET" } });
 
     expect(allowed.headers["access-control-allow-origin"]).toBe("http://localhost:5317");
+    expect(patchAllowed.headers["access-control-allow-methods"]).toContain("PATCH");
+    expect(deleteAllowed.headers["access-control-allow-methods"]).toContain("DELETE");
     expect(allowedIp.headers["access-control-allow-origin"]).toBe("http://127.0.0.1:5317");
     expect(otherHost.headers["access-control-allow-origin"]).toBeUndefined();
   });
@@ -421,6 +525,8 @@ describe("buildServer routes", () => {
     // Another site's name pointed at this computer (DNS rebinding).
     const rebound = await app.inject({ method: "GET", url: "/api/swarms", headers: { host: "evil.example" } });
     expect(rebound.statusCode).toBe(403);
+    const huntRebound = await app.inject({ method: "GET", url: "/api/swarms/sw-1/hunt", headers: { host: "evil.example" } });
+    expect(huntRebound.statusCode).toBe(403);
 
     // Another site's page posting here.
     const crossSite = await app.inject({

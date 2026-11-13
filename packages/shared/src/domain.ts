@@ -148,6 +148,14 @@ export interface Lead {
   why: string;
   discoveredByTaskId: string | null;
   discoveredAt: string;
+  /** Set for a lead a runner found on a hunt: the trail it was found on. */
+  trailId?: string | null;
+  /** The page's own words that show it. Code found them on the page before the lead was kept. */
+  quote?: string | null;
+  /** What the page says about how far along the company is, when it was about one. */
+  stage?: import("./hunt").StageRead | null;
+  /** 0 to 1 from `stage`, where 1 is as early as a company can be seen. Computed by code. */
+  earliness?: number | null;
 }
 
 /* ---------------------------- Evidence ----------------------------- */
@@ -543,6 +551,7 @@ export const STAGES = [
   { id: "plan", label: "Plan" },
   { id: "debrief", label: "Follow up" },
   { id: "scout", label: "Scout" },
+  { id: "hunt", label: "Hunt" },
   { id: "resolve", label: "Match" },
   { id: "screen", label: "Screen" },
   { id: "investigate", label: "Investigate" },

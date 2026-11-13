@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { DEFAULT_REBALANCE, EMPTY_MEMBER_STATS, memberYield, pickMember, poolProblems, producesEvidence, rebalance, surelyAbove, type MemberStats, type PoolMember } from "./pools";
+import { DEFAULT_REBALANCE, EMPTY_MEMBER_STATS, memberYield, pickMember, poolProblems, producesEvidence, rebalance, runnerPools, surelyAbove, withDefaultPools, type MemberStats, type PoolMember, type Pools } from "./pools";
 
 const member = (id: string, share: number, status: PoolMember["status"] = "active"): PoolMember => ({
   id, route: { provider: "claude-cli", model: `model-${id}` }, share, status, note: null,
@@ -162,5 +162,34 @@ describe("poolProblems", () => {
     expect(poolProblems([member("Has Space", 1)])).toEqual(["A member's name is 1 to 24 lower-case letters, digits or hyphens."]);
     expect(poolProblems([member("a", 1, "benched")])).toEqual(["At least one member must be active."]);
     expect(poolProblems([member("a", 0.2), member("b", 0.2), member("c", 0.2), member("d", 0.2), member("e", 0.2)])[0]).toBe("A pool holds at most 4 members.");
+  });
+});
+
+describe("the runner pool", () => {
+  it("shares each runner job equally between the runner models that are ready", () => {
+    const pools = runnerPools(() => true);
+    expect(Object.keys(pools).sort()).toEqual(["hunt.look", "hunt.sift"]);
+    expect(pools["hunt.look"]?.map((member) => [member.id, member.route.provider, member.share, member.status])).toEqual([
+      ["deepseek-flash", "deepseek-api", 0.5, "active"],
+      ["muse-ember", "meta-api", 0.5, "active"],
+    ]);
+    expect(poolProblems(pools["hunt.look"] ?? [])).toEqual([]);
+  });
+
+  it("is a pool of one when one key is set, and no pool at all when none is", () => {
+    const one = runnerPools((provider) => provider === "meta-api");
+    expect(one["hunt.look"]?.map((member) => [member.id, member.share])).toEqual([["muse-ember", 1]]);
+    expect(runnerPools(() => false)).toEqual({});
+  });
+
+  it("stays behind a pool the config names", () => {
+    const own = [{ id: "haiku", route: { provider: "claude-cli" as const, model: "claude-haiku-5-5" }, share: 1, status: "active" as const, note: null }];
+    const config: { id: string; pools?: Pools } = { id: "c", pools: { "hunt.look": own } };
+    const merged = withDefaultPools(config, runnerPools(() => true));
+    expect(merged.pools?.["hunt.look"]).toBe(own);
+    expect(merged.pools?.["hunt.sift"]?.length).toBe(2);
+    // Nothing to add leaves the config as it was.
+    const plain: { id: string; pools?: Pools } = { id: "c" };
+    expect(withDefaultPools(plain, {})).toBe(plain);
   });
 });

@@ -17,7 +17,8 @@
  *    again, and a change is small enough to undo.
  */
 
-import type { JobId, ModelRoute } from "./registry";
+import { RUNNER_JOBS, RUNNER_POOL } from "./models";
+import type { JobId, ModelRoute, ProviderId } from "./registry";
 import { textSeed } from "./stats";
 
 export interface PoolMember {
@@ -282,11 +283,13 @@ export function rebalance(
 }
 
 /**
- * Whether a job's output is evidence that the quote check and the fact-checker then judge.
- * Only such a job has something to balance its pool on.
+ * Whether a job's output is something another part of the system then judges: evidence, which
+ * the quote check and the fact-checker judge, or the leads a runner finds on a page, which
+ * code checks against the page and the fit screener then keeps or drops. Only such a job has
+ * something to balance its pool on.
  */
 export function producesEvidence(jobId: JobId): boolean {
-  return jobId.startsWith("investigate.") || jobId.startsWith("company.");
+  return jobId.startsWith("investigate.") || jobId.startsWith("company.") || jobId === "hunt.look";
 }
 
 /** Problems with a pool a person entered, as sentences. Empty when it can be used. */
@@ -302,4 +305,34 @@ export function poolProblems(members: readonly PoolMember[]): string[] {
   const total = active.reduce((sum, member) => sum + member.share, 0);
   if (active.length > 0 && Math.abs(total - 1) > 0.011) problems.push("The active members' shares must add up to 1.");
   return problems;
+}
+
+/**
+ * The pools a runner job gets when its config names none: the runner models whose provider
+ * is ready, in equal shares. With one ready there is a pool of one, so runners use the fast
+ * direct API and not the slower default route. With none there is no pool, and the job keeps
+ * its ordinary route.
+ */
+export function runnerPools(ready: (provider: ProviderId) => boolean): Pools {
+  const usable = RUNNER_POOL.filter((member) => ready(member.route.provider));
+  if (usable.length === 0) return {};
+  const share = Math.round((1 / usable.length) * 1000) / 1000;
+  const pools: Pools = {};
+  for (const jobId of RUNNER_JOBS) {
+    pools[jobId] = usable.map((member, index) => ({
+      id: member.id,
+      route: { ...member.route },
+      // The last member takes what rounding left, so the shares add up to exactly 1.
+      share: index === usable.length - 1 ? Math.round((1 - share * (usable.length - 1)) * 1000) / 1000 : share,
+      status: "active" as const,
+      note: null,
+    }));
+  }
+  return pools;
+}
+
+/** A config's pools with defaults behind them: a pool the config names always wins. */
+export function withDefaultPools<T extends { pools?: Pools }>(config: T, defaults: Pools): T {
+  const merged: Pools = { ...defaults, ...(config.pools ?? {}) };
+  return Object.keys(merged).length === 0 ? config : { ...config, pools: merged };
 }

@@ -150,7 +150,7 @@ export function createQuoteChecker(options: QuoteCheckOptions = {}): QuoteChecke
   };
 }
 
-function readableAddress(text: string): ReadableAddress | null {
+export function readableAddress(text: string): ReadableAddress | null {
   let url: URL;
   try {
     url = new URL(text);
@@ -312,7 +312,7 @@ function isLocalHostname(hostname: string): boolean {
   return host === "localhost" || [".localhost", ".local", ".internal"].some((suffix) => host.endsWith(suffix));
 }
 
-function isRestrictedIp(address: string): boolean {
+export function isRestrictedIp(address: string): boolean {
   const version = isIP(address);
   if (version === 4) return isRestrictedIpv4(address);
   if (version !== 6) return true;

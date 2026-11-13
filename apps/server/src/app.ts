@@ -6,7 +6,7 @@ import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest }
 import { z } from "zod";
 import { ServiceError, type SwarmService } from "@agentswarm/core";
 import { ACTOR_HEADER, AGENT_CLASSES, JOBS } from "@agentswarm/shared";
-import type { ApiClient, ClassId, CompanySort, CompanyStatus, DirectiveFilter, JobId, SetPoolInput } from "@agentswarm/shared";
+import type { AddTrailInput, ApiClient, ClassId, CompanySort, CompanyStatus, DirectiveFilter, JobId, SetPoolInput, UpdateTrailInput } from "@agentswarm/shared";
 
 const actorHeader = ACTOR_HEADER.toLowerCase();
 const allowedOrigins = ["http://localhost:5317", "http://127.0.0.1:5317"] as const;
@@ -98,6 +98,31 @@ const updateAgentSchema = z
     beat: nullableText.optional(),
   })
   .strict();
+const huntSearchSchema = z.object({ engine: requiredText, query: requiredText.max(200) }).strict();
+const addHuntTrailSchema: z.ZodType<AddTrailInput> = z
+  .object({
+    name: requiredText.max(60),
+    intent: optionalText.max(200).optional(),
+    searches: z.array(huntSearchSchema).max(6).optional(),
+    pages: z.array(requiredText).max(6).optional(),
+  })
+  .strict()
+  .superRefine((input, context) => {
+    const starts = (input.searches?.length ?? 0) + (input.pages?.length ?? 0);
+    if (starts === 0) {
+      context.addIssue({ code: "custom", path: ["searches"], message: "Add a search or a public page to start this trail." });
+    } else if (starts > 6) {
+      context.addIssue({ code: "custom", path: ["searches"], message: "A trail can have at most 6 starting points." });
+    }
+  });
+const updateHuntTrailSchema: z.ZodType<UpdateTrailInput> = z
+  .object({
+    status: z.enum(["open", "paused", "closed"]).optional(),
+    pinned: z.boolean().optional(),
+    weight: z.number().finite().min(1).max(5).optional(),
+  })
+  .strict();
+const addHuntNoteSchema = z.object({ text: requiredText.max(240) }).strict();
 
 const scopeSchema = z
   .object({
@@ -417,6 +442,12 @@ export function buildServer(options: {
   get("/api/swarms/:id/pools", emptySchema, (api, _input, params) => api.getPools(params.id!));
   post("/api/swarms/:id/pools/rebalance", rebalancePoolsSchema, (api, input, params) => api.rebalancePools(params.id!, input));
   put("/api/swarms/:id/pools/:jobId", setPoolSchema, (api, input, params) => api.setPool(params.id!, params.jobId as JobId, input as SetPoolInput));
+
+  get("/api/swarms/:id/hunt", emptySchema, (api, _input, params) => api.getHunt(params.id!));
+  post("/api/swarms/:id/hunt/trails", addHuntTrailSchema, (api, input, params) => api.addHuntTrail(params.id!, input));
+  patch("/api/swarms/:id/hunt/trails/:trailId", updateHuntTrailSchema, (api, input, params) => api.updateHuntTrail(params.id!, params.trailId!, input));
+  post("/api/swarms/:id/hunt/notes", addHuntNoteSchema, (api, input, params) => api.addHuntNote(params.id!, input));
+  del("/api/swarms/:id/hunt/notes/:noteId", emptySchema, (api, _input, params) => api.removeHuntNote(params.id!, params.noteId!));
 
   app.setNotFoundHandler((request, reply) => {
     const pathname = request.url.split("?", 1)[0] ?? request.url;

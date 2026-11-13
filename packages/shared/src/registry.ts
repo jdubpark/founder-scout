@@ -8,11 +8,25 @@
 
 export const AGENT_CLASSES = [
   {
+    id: "navigator",
+    label: "Navigator",
+    verb: "Steer",
+    description:
+      "A long-horizon agent that decides where on the open web the swarm looks: which trails to open and close, what to search for, where attention goes. It keeps a notebook between runs and never reads a page itself.",
+  },
+  {
     id: "scout",
     label: "Scouts",
     verb: "Find",
     description:
       "Watch public and licensed sources every day and flag people who are starting, or about to start, a company.",
+  },
+  {
+    id: "runner",
+    label: "Runners",
+    verb: "Read",
+    description:
+      "Small fast models the navigator uses as tools. A runner reads one page or one list of search results, returns a short record, and is gone.",
   },
   {
     id: "resolver",
@@ -184,6 +198,36 @@ export const JOBS = [
     enabled: true,
     description:
       "Uses licensed professional-profile data to spot strong people leaving a job to start something.",
+  },
+  {
+    id: "hunt.navigate",
+    classId: "navigator",
+    label: "Navigator",
+    kind: "structured",
+    source: null,
+    enabled: true,
+    description:
+      "Plans the hunt one turn at a time from its notebook: opens and closes trails, writes searches, sets where attention goes, and notes what it learned.",
+  },
+  {
+    id: "hunt.look",
+    classId: "runner",
+    label: "Page reader",
+    kind: "structured",
+    source: "web",
+    enabled: true,
+    description:
+      "Reads one public page and reports the people starting something, in the page's own words, how early the company is, and which links are worth opening.",
+  },
+  {
+    id: "hunt.sift",
+    classId: "runner",
+    label: "Result sifter",
+    kind: "structured",
+    source: "web",
+    enabled: true,
+    description:
+      "Reads one list of search results and picks the few worth opening.",
   },
   {
     id: "resolve.identity",

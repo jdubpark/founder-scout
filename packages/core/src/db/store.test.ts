@@ -13,10 +13,16 @@ import {
   type Directive,
   type Evidence,
   type Feedback,
+  type FrontierItem,
   type Founder,
+  type Hunt,
+  type HuntCall,
+  type HuntNote,
+  type Lead,
   type Run,
   type SwarmConfig,
   type TaskRun,
+  type Trail,
   type NetworkContact,
   ZERO_STATS,
 } from "@agentswarm/shared";
@@ -124,6 +130,50 @@ function task(id: string, overrides: Partial<TaskRun> = {}): TaskRun {
     error: null, startedAt: "2026-01-01T00:00:00.000Z", finishedAt: "2026-01-01T00:01:00.000Z",
     poolMember: null, ...overrides,
   } as TaskRun;
+}
+
+function hunt(id: string, swarmId = "swm_1", overrides: Partial<Hunt> = {}): Hunt {
+  return { id, swarmId, turn: 0, looks: 0, createdAt: "2026-01-01T00:00:00.000Z", updatedAt: "2026-01-01T00:00:00.000Z", ...overrides };
+}
+
+function trail(id: string, huntId = "hnt_1", overrides: Partial<Trail> = {}): Trail {
+  return {
+    id, huntId, swarmId: "swm_1", name: `Trail ${id}`, intent: "Find early founders", status: "open",
+    openedBy: "navigator", weight: 3, pinned: false,
+    stats: { searches: 0, pages: 0, leads: 0, kept: 0, dropped: 0, tooLate: 0, blocked: 0, costUsd: 0 },
+    openedAt: "2026-01-01T00:00:00.000Z", closedAt: null, closedWhy: null, ...overrides,
+  };
+}
+
+function frontier(id: string, overrides: Partial<FrontierItem> = {}): FrontierItem {
+  return {
+    id, huntId: "hnt_1", trailId: "trl_1", kind: "search", target: `founders ${id}`, engine: "brave",
+    label: "Founder search", priority: 2, depth: 0, from: "navigator", state: "queued",
+    addedAt: "2026-01-01T00:00:00.000Z", ...overrides,
+  };
+}
+
+function huntNote(id: string, createdAt: string, overrides: Partial<HuntNote> = {}): HuntNote {
+  return { id, huntId: "hnt_1", swarmId: "swm_1", by: "navigator", text: `Note ${id}`, turn: 1, createdAt, ...overrides };
+}
+
+function huntCall(id: string, at: string, overrides: Partial<HuntCall> = {}): HuntCall {
+  return {
+    id, huntId: "hnt_1", swarmId: "swm_1", runId: "run_1", taskId: null, trailId: "trl_1", turn: 1,
+    tool: "look", target: `https://example.test/${id}`, host: "example.test", result: "ok", detail: null,
+    leads: 1, dropped: 0, tooLate: 0, queued: 0, control: null, model: "runner", costUsd: 0.01,
+    latencyMs: 100, at, ...overrides,
+  };
+}
+
+function lead(id: string, discoveredAt: string, overrides: Partial<Lead> = {}): Lead {
+  return {
+    id, swarmId: "swm_1", founderId: null, source: "github", sourceRef: `https://example.test/${id}`,
+    sourceTitle: `Source ${id}`, personName: `Person ${id}`, role: "Founder", companyName: `Company ${id}`,
+    companyUrl: `https://company-${id}.test`, oneLiner: "Building tools",
+    links: { github: null, linkedin: null, x: null, site: null, scholar: null }, why: "Started building",
+    discoveredByTaskId: null, discoveredAt, ...overrides,
+  };
 }
 
 function directive(id: string, createdAt: string): Directive {
@@ -454,6 +504,195 @@ describe("SQLite store", () => {
     store.close();
   });
 
+  it("keeps one hunt per swarm and replaces saved hunts and trails", () => {
+    const store = openStore(":memory:");
+    const first = hunt("hnt_1");
+    store.saveHunt(first);
+    expect(store.getHunt("swm_1")).toEqual(first);
+    const updated = { ...first, turn: 4, looks: 12, updatedAt: "2026-01-05T00:00:00.000Z" };
+    store.saveHunt(updated);
+    expect(store.getHunt("swm_1")).toEqual(updated);
+    expect(() => store.saveHunt(hunt("hnt_other"))).toThrow();
+
+    const later = trail("trl_b", "hnt_1", { openedAt: "2026-01-02T00:00:00.000Z" });
+    const tiedAfter = trail("trl_z", "hnt_1", { openedAt: "2026-01-01T00:00:00.000Z" });
+    const tiedBefore = trail("trl_a", "hnt_1", { openedAt: "2026-01-01T00:00:00.000Z" });
+    store.saveTrail(later);
+    store.saveTrail(tiedAfter);
+    store.saveTrail(tiedBefore);
+    const revised = { ...later, name: "Revised trail", status: "paused" as const, weight: 5 };
+    store.saveTrail(revised);
+    expect(store.getTrail(later.id)).toEqual(revised);
+    expect(store.listTrails("hnt_1")).toEqual([tiedBefore, tiedAfter, revised]);
+    expect(store.listTrails("other-hunt")).toEqual([]);
+    store.close();
+  });
+
+  it("deduplicates frontier items across trails and states, returns inserts in input order, and filters in queue order", () => {
+    const store = openStore(":memory:");
+    const searched = frontier("frt_old", { target: "founder lists", state: "done", addedAt: "2026-01-01T00:00:00.000Z" });
+    const read = frontier("frt_page_old", {
+      kind: "page", target: "https://example.test/page", engine: null, state: "skipped", trailId: "trl_2",
+    });
+    expect(store.addFrontier([searched, read])).toEqual([searched, read]);
+
+    const duplicateSearch = frontier("frt_dup_search", { target: searched.target, trailId: "trl_2" });
+    const otherEngine = frontier("frt_other_engine", { target: searched.target, engine: "google", trailId: "trl_3", addedAt: "2026-01-04T00:00:00.000Z" });
+    const duplicatePage = frontier("frt_dup_page", { kind: "page", target: read.target, engine: null, trailId: "trl_1" });
+    const newPage = frontier("frt_new_page", {
+      kind: "page", target: "https://example.test/new", engine: null, state: "queued", addedAt: "2026-01-02T00:00:00.000Z",
+    });
+    const newSearch = frontier("frt_new_search", { target: "new founders", addedAt: "2026-01-03T00:00:00.000Z" });
+    expect(store.addFrontier([duplicateSearch, otherEngine, duplicatePage, newPage, newSearch]))
+      .toEqual([otherEngine, newPage, newSearch]);
+    expect(store.listFrontier("hnt_1").map((item) => item.id)).toEqual([
+      "frt_old", "frt_page_old", "frt_new_page", "frt_new_search", "frt_other_engine",
+    ]);
+    expect(store.listFrontier("hnt_1", { state: "queued", trailId: "trl_1" }).map((item) => item.id))
+      .toEqual(["frt_new_page", "frt_new_search"]);
+    store.setFrontierState("frt_page_old", "queued");
+    expect(store.listFrontier("hnt_1", { state: "queued", trailId: "trl_2" }).map((item) => item.id)).toEqual(["frt_page_old"]);
+    expect(store.listFrontier("other-hunt")).toEqual([]);
+    store.close();
+  });
+
+  it("moves an item that is still waiting to the trail that asks for it again", () => {
+    const store = openStore(":memory:");
+    // Queued on a trail that was then closed without reading it.
+    const page = frontier("frt_page", { kind: "page", target: "https://example.test/start", engine: null, trailId: "trl_closed", depth: 2, priority: 3, label: "Old label" });
+    const search = frontier("frt_search", { target: "show hn robotics", engine: "hn", trailId: "trl_closed" });
+    store.addFrontier([page, search]);
+
+    const asked = store.addFrontier([
+      frontier("frt_page_again", { kind: "page", target: page.target, engine: null, trailId: "trl_new", depth: 0, priority: 1, label: "Starting page", from: "person" }),
+      frontier("frt_search_again", { target: search.target, engine: "hn", trailId: "trl_new" }),
+    ]);
+    // The same records, under their first ids, now on the trail that asked: nothing is held twice.
+    expect(asked.map((item) => [item.id, item.trailId])).toEqual([["frt_page", "trl_new"], ["frt_search", "trl_new"]]);
+    expect(asked[0]).toMatchObject({ depth: 0, priority: 1, label: "Starting page", from: "person", state: "queued" });
+    expect(store.listFrontier("hnt_1", { trailId: "trl_closed" })).toEqual([]);
+    expect(store.listFrontier("hnt_1", { state: "queued", trailId: "trl_new" }).map((item) => item.id)).toEqual(["frt_page", "frt_search"]);
+    expect(store.listFrontier("hnt_1")).toHaveLength(2);
+    store.close();
+  });
+
+  it("queues a search again on a later day and never queues a page again", () => {
+    const store = openStore(":memory:");
+    const first = frontier("frt_search", { target: "show hn robotics", engine: "hn", trailId: "trl_1", addedAt: "2026-01-01T09:00:00.000Z" });
+    const page = frontier("frt_page", { kind: "page", target: "https://example.test/p", engine: null, addedAt: "2026-01-01T09:00:00.000Z" });
+    store.addFrontier([first, page]);
+
+    // While it is waiting, asking again changes nothing.
+    expect(store.addFrontier([frontier("frt_again", { target: first.target, engine: "hn", addedAt: "2026-01-05T09:00:00.000Z" })])).toEqual([]);
+
+    store.setFrontierState("frt_search", "done");
+    store.setFrontierState("frt_page", "done");
+    // The same day: the search has just been run, and running it again would find the same things.
+    expect(store.addFrontier([frontier("frt_same_day", { target: first.target, engine: "hn", addedAt: "2026-01-01T18:00:00.000Z" })])).toEqual([]);
+
+    // A later day: it goes back in the queue under its first id, on the trail that asked this time.
+    const nextWeek = frontier("frt_next_week", { target: first.target, engine: "hn", trailId: "trl_2", label: "Again", addedAt: "2026-01-08T09:00:00.000Z" });
+    expect(store.addFrontier([nextWeek])).toEqual([{ ...nextWeek, id: "frt_search" }]);
+    expect(store.listFrontier("hnt_1", { state: "queued" })).toEqual([{ ...nextWeek, id: "frt_search" }]);
+
+    // Another run on the same day counts as later too: simulated days share one real date.
+    store.setFrontierState("frt_search", "done");
+    const sameRun = frontier("frt_same_run", { target: first.target, engine: "hn", addedAt: "2026-01-08T10:00:00.000Z" });
+    expect(store.addFrontier([sameRun])).toEqual([]);
+    const otherRun = frontier("frt_other_run", { target: first.target, engine: "hn", addedAt: "2026-01-08T11:00:00.000Z", runId: "run_2" });
+    expect(store.addFrontier([otherRun])).toEqual([{ ...otherRun, id: "frt_search" }]);
+    expect(store.addFrontier([{ ...otherRun, id: "frt_other_run_again" }])).toEqual([]);
+
+    // What counts is when it ran. Queued by one run yesterday and run by another a minute
+    // ago, it has just been run: the run that ran it asking again gets nothing.
+    store.setFrontierState("frt_search", "done", { at: "2026-01-09T08:00:00.000Z", runId: "run_3" });
+    expect(store.getFrontierItem("frt_search")).toMatchObject({ state: "done", ranAt: "2026-01-09T08:00:00.000Z", ranBy: "run_3" });
+    expect(store.addFrontier([frontier("frt_ran_same", { target: first.target, engine: "hn", addedAt: "2026-01-09T08:01:00.000Z", runId: "run_3" })])).toEqual([]);
+    expect(store.addFrontier([frontier("frt_ran_other", { target: first.target, engine: "hn", addedAt: "2026-01-09T08:02:00.000Z", runId: "run_4" })])).toHaveLength(1);
+    expect(store.getFrontierItem("no-such-item")).toBeNull();
+
+    // A page that was read stays read, however much later it is asked for.
+    expect(store.addFrontier([frontier("frt_page_later", { kind: "page", target: page.target, engine: null, addedAt: "2026-03-01T09:00:00.000Z" })])).toEqual([]);
+    expect(store.listFrontier("hnt_1").filter((item) => item.kind === "page").map((item) => [item.id, item.state])).toEqual([["frt_page", "done"]]);
+    store.close();
+  });
+
+  it("lists hunt notes and calls newest first with limits and filters", () => {
+    const store = openStore(":memory:");
+    const noteOld = huntNote("hntn_a", "2026-01-01T00:00:00.000Z");
+    const noteNewA = huntNote("hntn_a2", "2026-01-03T00:00:00.000Z");
+    const noteNewZ = huntNote("hntn_z", "2026-01-03T00:00:00.000Z");
+    for (const note of [noteNewA, noteOld, noteNewZ]) store.insertHuntNote(note);
+    expect(store.listHuntNotes("hnt_1", 2)).toEqual([noteNewZ, noteNewA]);
+    expect(store.removeHuntNote(noteNewA.id)).toBe(true);
+    expect(store.removeHuntNote("missing-note")).toBe(false);
+    expect(store.listHuntNotes("hnt_1", 10)).toEqual([noteNewZ, noteOld]);
+
+    const callOld = huntCall("hcall_a", "2026-01-01T00:00:00.000Z", { runId: "run_old", turn: 1 });
+    const callRun2 = huntCall("hcall_b", "2026-01-02T00:00:00.000Z", { runId: "run_2", turn: 2 });
+    const callNew = huntCall("hcall_c", "2026-01-03T00:00:00.000Z", { runId: "run_2", turn: 1 });
+    for (const call of [callOld, callRun2, callNew]) store.insertHuntCall(call);
+    expect(store.listHuntCalls("hnt_1", { limit: 2 })).toEqual([callNew, callRun2]);
+    expect(store.listHuntCalls("hnt_1", { turn: 1 }).map((call) => call.id)).toEqual(["hcall_c", "hcall_a"]);
+    expect(store.listHuntCalls("hnt_1", { runId: "run_2" }).map((call) => call.id)).toEqual(["hcall_c", "hcall_b"]);
+    expect(store.listHuntCalls("hnt_1", { turn: 1, runId: "run_2", limit: 1 })).toEqual([callNew]);
+    store.close();
+  });
+
+  it("round-trips hunt lead fields, lists trail leads, and counts kept leads per trail", () => {
+    const store = openStore(":memory:");
+    const trailOne = trail("trl_1");
+    const trailTwo = trail("trl_2");
+    const emptyTrail = trail("trl_empty");
+    for (const item of [trailOne, trailTwo, emptyTrail]) store.saveTrail(item);
+    const queued = founder("fnd_queued", { status: "queued" });
+    const surfaced = founder("fnd_surfaced", { status: "surfaced" });
+    const rejected = founder("fnd_rejected", { status: "screened_out" });
+    const leadOnly = founder("fnd_lead", { status: "lead" });
+    for (const person of [queued, surfaced, rejected, leadOnly]) store.insertFounder(person);
+    const stagedLead = lead("lead_staged", "2026-01-04T00:00:00.000Z", {
+      founderId: queued.id, trailId: trailOne.id, quote: "I started this company",
+      stage: { funding: "says_unfunded", fundingQuote: "no funding", team: "solo", teamQuote: "just me", progress: "building", progressQuote: "in development" },
+      earliness: 0.95,
+    });
+    const anotherKept = lead("lead_kept_two", "2026-01-03T00:00:00.000Z", { founderId: surfaced.id, trailId: trailOne.id });
+    const dropped = lead("lead_rejected", "2026-01-02T00:00:00.000Z", { founderId: rejected.id, trailId: trailTwo.id });
+    const notKept = lead("lead_unstaged", "2026-01-01T00:00:00.000Z", { founderId: leadOnly.id, trailId: trailTwo.id });
+    const withoutTrail = lead("lead_elsewhere", "2026-01-05T00:00:00.000Z");
+    for (const item of [stagedLead, anotherKept, dropped, notKept, withoutTrail]) store.insertLead(item);
+    expect(store.listLeads({ swarmId: "swm_1", founderId: queued.id })).toEqual([stagedLead]);
+    expect(store.listHuntLeads("swm_1", 10)).toEqual([stagedLead, anotherKept, dropped, notKept]);
+    expect(store.listHuntLeads("swm_1", 2)).toEqual([stagedLead, anotherKept]);
+    expect(store.keptByTrail("hnt_1")).toEqual(new Map([[trailOne.id, 2]]));
+    store.close();
+  });
+
+  it("counts hunt look items from leads and preserves evidence counts for other jobs", () => {
+    const store = openStore(":memory:");
+    store.insertTask(task("tsk_hunt_failed", {
+      jobId: "hunt.look", poolMember: "haiku", status: "failed", costUsd: 0.3, control: "failed",
+    }));
+    store.insertTask(task("tsk_hunt_ok", { jobId: "hunt.look", poolMember: "haiku", costUsd: 0.2, control: "passed" }));
+    store.insertTask(task("tsk_background", { jobId: "investigate.background", poolMember: "sonnet", costUsd: 0.4 }));
+    store.insertFounder(founder("fnd_hunt_kept", { status: "queued" }));
+    store.insertFounder(founder("fnd_hunt_rejected", { status: "screened_out" }));
+    store.insertFounder(founder("fnd_hunt_lead", { status: "lead" }));
+    store.insertLead(lead("lead_hunt_kept", "2026-01-01T00:00:00.000Z", { founderId: "fnd_hunt_kept", discoveredByTaskId: "tsk_hunt_failed" }));
+    store.insertLead(lead("lead_hunt_rejected", "2026-01-01T00:00:00.000Z", { founderId: "fnd_hunt_rejected", discoveredByTaskId: "tsk_hunt_failed" }));
+    store.insertLead(lead("lead_hunt_pending", "2026-01-01T00:00:00.000Z", { founderId: "fnd_hunt_lead", discoveredByTaskId: "tsk_hunt_ok" }));
+    store.insertLead(lead("lead_hunt_unmatched", "2026-01-01T00:00:00.000Z", { discoveredByTaskId: "tsk_hunt_ok" }));
+    store.insertEvidence({ ...evidence("evd_background_supported", "fnd_background", "background-supported", "supported"), collectedByTaskId: "tsk_background" });
+    store.insertEvidence({ ...evidence("evd_background_rejected", "fnd_background", "background-rejected", "unsupported"), collectedByTaskId: "tsk_background" });
+
+    expect(store.memberStats("swm_1", "hunt.look", "2026-01-01T00:00:00.000Z")).toEqual([
+      { memberId: "haiku", tasks: 2, failed: 1, costUsd: 0.5, items: 4, supported: 1, rejected: 1, controls: 2, controlsFailed: 1 },
+    ]);
+    expect(store.memberStats("swm_1", "investigate.background", "2026-01-01T00:00:00.000Z")).toEqual([
+      { memberId: "sonnet", tasks: 1, failed: 0, costUsd: 0.4, items: 2, supported: 1, rejected: 1, controls: 0, controlsFailed: 0 },
+    ]);
+    store.close();
+  });
+
   it("rolls back nested transactions and names missing ids in update errors", () => {
     const store = openStore(":memory:");
     expect(() => store.transaction(() => {
@@ -475,6 +714,7 @@ describe("SQLite store", () => {
     const legacy = new Database(path);
     legacy.exec(`
       CREATE TABLE configs (id TEXT PRIMARY KEY, record TEXT NOT NULL);
+      CREATE TABLE leads (id TEXT PRIMARY KEY, swarm_id TEXT NOT NULL, founder_id TEXT, discovered_at TEXT NOT NULL, record TEXT NOT NULL);
       CREATE TABLE founders (
         id TEXT PRIMARY KEY, swarm_id TEXT NOT NULL, normalized_name TEXT NOT NULL,
         updated_at TEXT NOT NULL, next_recheck_at TEXT, status TEXT NOT NULL, record TEXT NOT NULL
@@ -524,10 +764,51 @@ describe("SQLite store", () => {
     expect(store.listEvidence(oldFounder.id)).toEqual([oldEvidence]);
     expect(store.getTask(oldTask.id, { withTrace: false })).toEqual({ ...oldTaskRecord, poolMember: null });
     expect(store.getRun(oldRun.id)).toEqual(oldRun);
+    expect(store.getHunt("swm_1")).toBeNull();
+    expect(store.listTrails("hnt_legacy")).toEqual([]);
+    expect(store.listFrontier("hnt_legacy")).toEqual([]);
+    expect(store.listHuntNotes("hnt_legacy", 10)).toEqual([]);
+    expect(store.listHuntCalls("hnt_legacy")).toEqual([]);
     store.close();
     const migrated = new Database(path, { readonly: true });
-    expect(migrated.pragma("user_version", { simple: true })).toBe(3);
+    expect(migrated.pragma("user_version", { simple: true })).toBe(4);
     migrated.close();
+  });
+
+  it("opens a version-3 database and makes all hunt tables usable", () => {
+    const dir = mkdtempSync(join(tmpdir(), "agentswarm-v3-db-"));
+    scratchDirs.push(dir);
+    const path = join(dir, "prior.sqlite");
+    openStore(path).close();
+    const prior = new Database(path);
+    prior.exec(`
+      DROP INDEX leads_by_swarm_discovered;
+      DROP TABLE hunt_calls;
+      DROP TABLE hunt_notes;
+      DROP TABLE hunt_frontier;
+      DROP TABLE hunt_trails;
+      DROP TABLE hunts;
+    `);
+    prior.pragma("user_version = 3");
+    prior.close();
+
+    const store = openStore(path);
+    const value = hunt("hnt_migrated", "swm_migrated");
+    store.saveHunt(value);
+    const pathTrail = trail("trl_migrated", value.id, { swarmId: value.swarmId });
+    store.saveTrail(pathTrail);
+    const item = frontier("frt_migrated", { huntId: value.id, trailId: pathTrail.id });
+    const note = huntNote("hntn_migrated", "2026-01-01T00:00:00.000Z", { huntId: value.id, swarmId: value.swarmId });
+    const call = huntCall("hcall_migrated", "2026-01-01T00:00:00.000Z", { huntId: value.id, swarmId: value.swarmId });
+    expect(store.addFrontier([item])).toEqual([item]);
+    store.insertHuntNote(note);
+    store.insertHuntCall(call);
+    expect(store.getHunt(value.swarmId)).toEqual(value);
+    expect(store.listTrails(value.id)).toEqual([pathTrail]);
+    expect(store.listFrontier(value.id)).toEqual([item]);
+    expect(store.listHuntNotes(value.id, 10)).toEqual([note]);
+    expect(store.listHuntCalls(value.id)).toEqual([call]);
+    store.close();
   });
 
   it("keeps file-backed data and saved configs across reopen without destructive migration reruns", () => {
@@ -546,7 +827,7 @@ describe("SQLite store", () => {
     expect(reopened.getConfig("cfg_base")).toEqual(config);
     reopened.close();
     const db = new Database(path, { readonly: true });
-    expect(db.pragma("user_version", { simple: true })).toBe(3);
+    expect(db.pragma("user_version", { simple: true })).toBe(4);
     db.close();
   });
 });

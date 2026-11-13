@@ -35,3 +35,47 @@ export function isNeverFetchUrl(url: string): boolean {
 export function claudeFetchDenyRules(): string[] {
   return NEVER_FETCH_HOSTS.flatMap((host) => [`WebFetch(domain:${host})`, `WebFetch(domain:*.${host})`]);
 }
+
+/**
+ * Sites the hunt does not read, because their own rules say automated readers may not, even
+ * where robots.txt would allow it. robots.txt is not the whole contract. Each entry gives the
+ * rule in a line; the sentences themselves and where they were read are in
+ * docs/research/open-web-hunting-grounds.md (2026-11-13). A link to one of these is not
+ * followed by a runner. It may still be stored as a pointer for a person to open.
+ *
+ * This list is a floor. A site missing from it is still read only as far as its robots.txt
+ * allows, and a refusal is never worked around.
+ */
+export const TERMS_BARRED_HOSTS: ReadonlyArray<{ host: string; except?: readonly string[]; why: string }> = [
+  { host: "devpost.com", why: "Its terms bar automated means of accessing, scraping, crawling or spidering the site." },
+  {
+    host: "ycombinator.com",
+    // Hacker News has a public API, and that is how it is read.
+    except: ["news.ycombinator.com"],
+    why: "Its terms bar data mining, robots and scraping on the site.",
+  },
+  { host: "substack.com", why: "Its terms bar any process that crawls, scrapes or spiders any page." },
+  { host: "reddit.com", why: "Its robots.txt disallows every page for every agent." },
+  { host: "indiehackers.com", why: "Its robots.txt disallows AI agents by name." },
+  { host: "producthunt.com", why: "Its API may not be used for a business without permission." },
+  { host: "x.com", why: "Reading at scale is through a paid API with limits on what may be collected." },
+  { host: "twitter.com", why: "Reading at scale is through a paid API with limits on what may be collected." },
+];
+
+const sameOrUnder = (host: string, parent: string) => host === parent || host.endsWith(`.${parent}`);
+
+/** The entry that bars this host, or null. Case and a trailing dot are ignored. */
+export function termsBar(hostname: string): { host: string; why: string } | null {
+  const host = hostname.trim().toLowerCase().replace(/\.$/, "");
+  for (const entry of TERMS_BARRED_HOSTS) {
+    if (!sameOrUnder(host, entry.host)) continue;
+    if (entry.except?.some((allowed) => sameOrUnder(host, allowed))) continue;
+    return { host: entry.host, why: entry.why };
+  }
+  return null;
+}
+
+/** true when the hunt may not read this host: the never-fetch list, or a site whose terms bar it. */
+export function isOffLimitsHost(hostname: string): boolean {
+  return isNeverFetchHost(hostname) || termsBar(hostname) !== null;
+}

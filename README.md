@@ -44,6 +44,49 @@ team and the stated plans. A company analyst answers nine rubric questions and w
 code combines the company's score with its lead founder's into one decision. The Companies page
 ranks them and takes a Yes / No with reasons, separate from the call on the founder.
 
+## The hunt
+
+The fixed scouts read three feeds. The hunt roams: it looks for people at the earliest stage,
+before a priced round and often before the company has a name.
+
+- A **navigator**, one long-horizon agent (Claude by default, Codex by changing its route),
+  decides where to look. It opens and closes trails, writes searches and keeps a notebook. Its
+  memory is that notebook, in the database, so it carries on from run to run for as long as
+  you let it and picks up after a restart.
+- **Runners**, small fast models used as tools, do the reading. Each reads one public page or
+  one list of search results, returns a short record and is gone.
+- **Code** does what has to be predictable. It spends each wave of runner calls across the
+  trails by what each has found, reads pages before it searches again, and never reads a page
+  twice. It keeps a person only when the name and the quoted words are on the page, and an
+  address only when the page has it. It leaves out a company whose page states a round later than you set ("Latest
+  stage worth a look", seed by default). One page in twelve that a runner reads is a planted
+  one that tells the reader to report a made-up founder, and a model that falls for it is
+  counted and, if it keeps doing it, benched.
+
+On the **Hunt** page you see the trails, what each found and cost, the notebook, the people
+found and the latest runner calls. You steer by opening a trail, pinning one so it cannot be
+closed, pausing or closing one, setting its attention, or writing a line in the notebook.
+
+**Which models.** With no keys set, runners use the small Claude model on your login. That
+works, and it is slow, because a headless agent takes seconds to start. Set `DEEPSEEK_API_KEY`
+with `DEEPSEEK_BASE_URL`, or `META_API_KEY` with `META_BASE_URL`, and the runner jobs are
+shared between DeepSeek Flash and Meta Muse Ember through their APIs, in equal parts at first;
+code then moves share toward the one whose finds the screener keeps for each dollar and away
+from one that fails planted pages. What was measured about the two is in
+`docs/research/rapid-runner-models.md`: DeepSeek Flash answers in about a second with thinking
+switched off, fastest on a US host; Muse Ember writes faster once it starts, enforces the
+answer's shape, and promises not to train on what it is sent. DeepSeek's own endpoint is
+governed by Chinese law and says its servers are in China, so point `DEEPSEEK_BASE_URL` at a
+host you have approved for data about named people.
+
+**What it reads.** Public pages only. The reader obeys robots.txt, waits between requests to
+one site, reads at most three of its pages in a wave, sends no login and no cookie, and treats
+a refusal as final. A site that asks for a pause is left alone for the rest of the run. It never requests
+LinkedIn, nor the sites whose terms forbid automated reading even where robots.txt allows it
+(the list, with each site's rule, is `TERMS_BARRED_HOSTS` in `packages/shared/src/policy.ts`).
+Set `HUNT_USER_AGENT` to a name and a contact address of your own before a live hunt, so a
+site can tell who is reading and say no by name.
+
 ## Professional profiles, without reading LinkedIn
 
 Nothing here requests linkedin.com, logged in or not; the design explains why
@@ -148,8 +191,8 @@ LIVE_PROVIDERS=1 pnpm exec vitest run packages/core/src/providers # real Claude 
 
 | Path | What |
 | --- | --- |
-| `packages/shared` | Types, the rubric, steering resolution, scoring, the Yes / No feedback loop. Pure and tested. |
-| `packages/core` | Store (SQLite), simulated world, jobs and prompts, model providers, sources, engine, evals, service. |
+| `packages/shared` | Types, the rubric, steering resolution, scoring, the Yes / No feedback loop, the hunt's rules. Pure and tested. |
+| `packages/core` | Store (SQLite), simulated world and web, jobs and prompts, model providers, sources and the page reader, engine, evals, service. |
 | `apps/server` | HTTP API, scheduler, command line. |
 | `apps/web` | The dashboard. Page-building rules are in `apps/web/BUILDING.md`. |
 | `evals/flows` | Eval state, one directory per flow. |
@@ -169,6 +212,19 @@ Verified by running it:
 - one live repository review through Codex in a read-only sandbox, which returned findings with
   file and line references;
 - the past-founders eval on real companies (2026-11-13, about $2.70 in all), described below;
+- the hunt in simulation: six simulated days from the command line, and in the dashboard a
+  trail added by hand, a note, its attention raised and pinned, then Run now, after which that
+  trail had read fifteen pages and found seven people;
+- the hunt live (2026-11-13, four runs on one notebook, $0.25): the navigator on Claude Opus
+  took five turns at about $0.04 each and on the fifth closed the trail that had found nobody;
+  Hacker News, GitHub and Hugging Face search returned results for 12 of 13 searches; runners
+  on Claude Haiku sifted 12 result lists and read 18 pages; 14 real pages were read after their
+  robots.txt, one was refused by robots.txt and one answered an error; 4 people were kept after
+  code found their names and quoted words on the page; all 4 planted pages were ignored by the
+  runner; the fit screen kept 3 of the 4;
+- the page reader against real sites: Wikipedia, GitHub and Hugging Face read; a Hacker News
+  post read through its API; Devpost, Reddit, LinkedIn and a cloud-metadata address refused
+  without a request;
 - pools of agents on a running server in simulation: tasks split between two models by share,
   each member's supported items, planted claims and failures counted, share moved by code;
 - the Assumptions page on the real eval's judgments, and the Improve page on its rounds.
@@ -209,6 +265,12 @@ Not verified against a live service either: the People Data Labs adapter, for th
 
 Not run: the past-founders eval with the analysts' own model as judge (tens of dollars), and
 autopilot in Apply mode over several days.
+
+Not verified for the hunt: runners on DeepSeek or Meta. No key for either was present, so what
+is sent to them (thinking off, the lowest reasoning, the answer's shape) has run only against a
+fake client, and "fast" is unmeasured here: on the headless login a runner call took a median
+of six seconds. Four live runs show the parts working together. They are far too few to say
+how many founders a hunt finds or which trails are worth their cost.
 
 Checked by running it on 2026-11-13: the rule that stops research agents opening linkedin.com
 (a rule for the bare host does not cover `www.`, so both forms are passed); headless Claude and
@@ -253,6 +315,21 @@ Known limits:
   ceiling beside the figure. The probe needs a wider span of years to mean something.
 - Every past case is a Y Combinator company that posted a launch. What the eval says about
   founders found elsewhere is unknown.
+- The hunt has no general web search. Its engines are Hacker News, GitHub and Hugging Face
+  search, the links on pages it reads, and any page a person or the navigator names. A web
+  search service is a contract with terms on keeping results; choosing one is yours.
+- The hunt's too-late rule reads a page that is about one company. A page that lists several
+  companies names people without saying how far along each is, and they go on to the fit
+  screen. A person shown only as a handle is not kept; the runner follows the profile link.
+- The first live hunt read no page at all, because searches went first and kept arriving.
+  Pages now go before searches. There is no eval flow for the hunt yet: its only measures are
+  each trail's and each model's yield on the Hunt page.
+- The hunt was reviewed twice by a second model, which found sixteen defects in all. Every one
+  is fixed and has a test. The fixes to the second review were not reviewed a third time.
+- A page tells a runner what it says, and a runner can be fooled by it. Code keeps a person
+  only when the name and the quoted words are on the page, and tests each model with planted
+  pages, but a page that states something false about a real person in plain words passes
+  both. The fact-checker and the quote check further on are what catch that.
 
 ## Rules the code enforces
 

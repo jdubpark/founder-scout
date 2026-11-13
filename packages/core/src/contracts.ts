@@ -78,6 +78,13 @@ import type {
   DimensionId,
   MemberStats,
   OutcomeEvidence,
+  FrontierItem,
+  Hunt,
+  HuntCall,
+  HuntNote,
+  PageLink,
+  Pools,
+  Trail,
 } from "@agentswarm/shared";
 
 /* ================================================================== */
@@ -195,6 +202,72 @@ export interface SourceRegistry {
   statuses(): Promise<SourceStatus[]>;
 }
 
+/* ================================================================== */
+/* The open web, for the hunt                                           */
+/* ================================================================== */
+
+/**
+ * What came back from asking for one page. `text` and `links` are the page as a runner will
+ * see it: readable text, and its links numbered in the order they appear.
+ */
+export interface PageRead {
+  /**
+   * ok          the page was read;
+   * blocked     it was not asked for, or the site said no: a host the system never requests,
+   *             a private address, robots.txt, a login wall, a refusal;
+   * unreachable no answer, an error, or too little text to read;
+   * not_text    not a page of text (an image, a download, a document format not read here).
+   */
+  status: "ok" | "blocked" | "unreachable" | "not_text";
+  /** One line a person can read, for anything other than ok. */
+  detail: string;
+  /** The address after redirects. */
+  url: string;
+  title: string;
+  text: string;
+  links: PageLink[];
+  /** Simulator only: the synthetic founders this page is about. Never placed in a prompt. */
+  simFounderIds?: string[];
+}
+
+/**
+ * Reads one public page for the hunt. Implemented in src/sources (live) and src/sim.
+ *
+ * The live reader is where the rules about addresses are kept, because the address comes from
+ * a model or from a page: it never requests a host on the deny list (`isNeverFetchHost`) or a
+ * private network address, it connects only to the address it validated, it reads robots.txt
+ * and obeys it, it waits between requests to the same host, it never sends a login or a
+ * cookie, and it gives up on a page that is too large or is not text.
+ */
+export interface WebReader {
+  read(url: string, options?: { simDay?: number | null; signal?: AbortSignal }): Promise<PageRead>;
+}
+
+export interface SearchHit {
+  url: string;
+  title: string;
+  snippet: string;
+  /** Simulator only. Never placed in a prompt. */
+  simFounderIds?: string[];
+}
+
+/** One way of searching: a site's own search API, or a web search service. */
+export interface SearchEngine {
+  /** Stable id the navigator names in a search, for example "hn", "github" or "web". */
+  readonly id: string;
+  readonly label: string;
+  /** What it searches, in a line, shown to the navigator so it can write a query for it. */
+  readonly searches: string;
+  status(): Promise<{ configured: boolean; detail: string }>;
+  search(query: string, limit: number, options?: { simDay?: number | null; signal?: AbortSignal }): Promise<SearchHit[]>;
+}
+
+/** How a hunt reaches the web in one source mode. */
+export interface WebAccess {
+  reader: WebReader;
+  engines: readonly SearchEngine[];
+}
+
 /** Finds a founder's repositories and prepares one for review. */
 export interface RepoFinder {
   /** The founder's own most significant repositories, best first. */
@@ -287,6 +360,18 @@ export interface SimWorld {
    * items whose hidden truth is not "supported", for the fact-checker to catch.
    */
   companyEvidenceFor(simId: string, jobId: JobId, depth: InvestigationDepth): CompanyEvidenceDraft[];
+  /**
+   * The simulated web, for the hunt. A page exists at an address or it does not; what it says
+   * is deterministic for (address, day). There are listing pages that link to project pages,
+   * project pages that name their founders and say how far along they are, and pages about
+   * nobody. Some places are rich in strong early founders and some are not, so a hunt has
+   * something to learn. null for an address the simulated web does not have.
+   */
+  page(url: string, day: number): PageRead | null;
+  /** What a simulated search engine returns. Deterministic for the inputs. Empty for an unknown engine. */
+  search(engine: string, query: string, day: number, limit: number): SearchHit[];
+  /** The search engines the simulated web has: the same ids as the live ones. */
+  engines(): Array<{ id: string; label: string; searches: string }>;
 }
 
 /* ================================================================== */
@@ -533,8 +618,61 @@ export interface Store {
   /**
    * What each pool member did for one job since a date, counted from tasks and from the
    * evidence those tasks collected. A task with no member recorded is counted under "".
+   *
+   * For "hunt.look", whose output is leads and not evidence, the three item counts are taken
+   * from leads instead: `items` is the leads its tasks found, `supported` those the fit
+   * screener kept (matched to a founder whose status is anything but "lead" or
+   * "screened_out"), and `rejected` those it dropped ("screened_out").
    */
   memberStats(swarmId: string, jobId: JobId, sinceIso: string): MemberStats[];
+
+  /* ---- The hunt: a navigator's notebook, kept between runs ---- */
+
+  /** The swarm's hunt, if it has started one. A swarm has at most one. */
+  getHunt(swarmId: string): Hunt | null;
+  /** Insert, or replace the one with the same id. */
+  saveHunt(hunt: Hunt): void;
+  /** Oldest first. */
+  listTrails(huntId: string): Trail[];
+  getTrail(id: string): Trail | null;
+  /** Insert, or replace the one with the same id. */
+  saveTrail(trail: Trail): void;
+  /**
+   * Queue searches and pages. The hunt holds an address, or a search's words on one engine,
+   * once. Asked for again:
+   *  - still waiting on the same trail: nothing changes;
+   *  - still waiting on another trail: it moves to the trail that asks now, because the first
+   *    may have been closed, and work left on a closed trail is never done;
+   *  - a page that was read or passed over: nothing. A page is never read twice;
+   *  - a search that was run: it is put back in the queue when it is asked for by a run other
+   *    than the one that ran it, or on a later day than it ran (`ranBy` and `ranAt`, which
+   *    `setFrontierState` records; for an item that never recorded them, `runId` and
+   *    `addedAt`), because a search run again later finds new people. Asked for by the run
+   *    that ran it, on the day it ran, nothing: it would find the same things.
+   * Returns the items that are waiting on the asking trail because of this call.
+   */
+  addFrontier(items: FrontierItem[]): FrontierItem[];
+  /** One item as it is stored now, or null. A wave is planned from a list that may have aged. */
+  getFrontierItem(id: string): FrontierItem | null;
+  /** Oldest first. */
+  listFrontier(huntId: string, filter?: { state?: FrontierItem["state"]; trailId?: string }): FrontierItem[];
+  /** `ran` is given when a search has just been run: when, and by which run. */
+  setFrontierState(id: string, state: FrontierItem["state"], ran?: { at: string; runId: string | null }): void;
+  insertHuntNote(note: HuntNote): void;
+  /** Newest first. */
+  listHuntNotes(huntId: string, limit: number): HuntNote[];
+  /** false when there was no such note. */
+  removeHuntNote(id: string): boolean;
+  insertHuntCall(call: HuntCall): void;
+  /** Newest first. */
+  listHuntCalls(huntId: string, filter?: { turn?: number; runId?: string; limit?: number }): HuntCall[];
+  /** Leads the swarm's hunt found (those with a trail), newest first. */
+  listHuntLeads(swarmId: string, limit: number): Lead[];
+  /**
+   * For each trail of a hunt, how many of its leads the fit screener kept: leads matched to a
+   * founder whose status is anything but "lead" or "screened_out". Trails with none are absent.
+   */
+  keptByTrail(huntId: string): Map<string, number>;
 }
 
 /* ================================================================== */
@@ -630,6 +768,13 @@ export interface EngineDeps {
   /** Source adapters for each source mode. */
   sources: { sim: SourceRegistry; live: SourceRegistry };
   repos: { sim: RepoFinder; live: RepoFinder };
+  /** How the hunt reaches the web in each source mode. Absent: a run has no hunt stage. */
+  web?: { sim: WebAccess; live: WebAccess };
+  /**
+   * Pools for jobs whose config names none, resolved once when a run starts: the runner pool
+   * of `runnerPools`, built from the providers that are ready. A pool in the config wins.
+   */
+  defaultPools?: () => Promise<Pools>;
   simWorld: SimWorld;
   /** How the fund is named in outreach drafts and disclosures. */
   fundName: string;
@@ -741,6 +886,10 @@ export interface ServiceDeps {
   providers: ProviderRegistry;
   /** Live source adapters, for the settings page's status list. */
   liveSources: SourceRegistry;
+  /** The hunt's search engines in each mode, for the Hunt page. */
+  web?: { sim: WebAccess; live: WebAccess };
+  /** The same defaults the engine uses, so the pools a person sees are the pools that run. */
+  defaultPools?: () => Promise<Pools>;
   cron: CronHelper;
   now?: () => Date;
   logger?: Logger;
