@@ -6,7 +6,7 @@ import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest }
 import { z } from "zod";
 import { ServiceError, type SwarmService } from "@agentswarm/core";
 import { ACTOR_HEADER, AGENT_CLASSES, JOBS } from "@agentswarm/shared";
-import type { ApiClient, ClassId, DirectiveFilter, JobId } from "@agentswarm/shared";
+import type { ApiClient, ClassId, CompanySort, CompanyStatus, DirectiveFilter, JobId } from "@agentswarm/shared";
 
 const actorHeader = ACTOR_HEADER.toLowerCase();
 const allowedOrigins = ["http://localhost:5317", "http://127.0.0.1:5317"] as const;
@@ -38,6 +38,8 @@ const queryInteger = z
   .pipe(z.number().int().nonnegative());
 const classIds = AGENT_CLASSES.map((cls) => cls.id) as [ClassId, ...ClassId[]];
 const jobIds = JOBS.map((job) => job.id) as [JobId, ...JobId[]];
+const companyStatuses = ["tracked", "surfaced", "needs_evidence", "watch", "passed", "archived"] as const satisfies readonly CompanyStatus[];
+const companySorts = ["deal", "company", "team", "recent"] as const satisfies readonly CompanySort[];
 
 const thesisSchema = z
   .object({
@@ -177,6 +179,27 @@ const feedbackSchema = z
     note: z.string().nullable().optional(),
   })
   .strict();
+const addFounderSchema = z
+  .object({
+    swarmId: requiredText,
+    name: requiredText,
+    companyName: nullableText.optional(),
+    companyUrl: nullableText.optional(),
+    link: nullableText.optional(),
+    why: nullableText.optional(),
+  })
+  .strict();
+const companyQuerySchema = z
+  .object({
+    swarmId: requiredText,
+    status: z.enum([...companyStatuses, "all"]).optional(),
+    q: z.string().optional(),
+    sort: z.enum(companySorts).optional(),
+    limit: queryInteger.optional(),
+    offset: queryInteger.optional(),
+  })
+  .strict();
+const networkImportSchema = z.object({ csv: z.string() }).strict();
 const outreachQuerySchema = z
   .object({
     swarmId: requiredText,
@@ -264,7 +287,7 @@ export function buildServer(options: {
   });
   app.register(cors, {
     origin: [...allowedOrigins],
-    methods: ["GET", "POST", "PATCH", "OPTIONS"],
+    methods: ["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
     allowedHeaders: ["content-type", actorHeader],
   });
 
@@ -294,10 +317,18 @@ export function buildServer(options: {
     });
   });
 
-  const register = <T>(method: "GET" | "POST" | "PATCH", url: string, part: InputPart, schema: z.ZodType<T>, handler: ApiHandler<T>) => {
+  const register = <T>(
+    method: "GET" | "POST" | "PATCH" | "DELETE",
+    url: string,
+    part: InputPart,
+    schema: z.ZodType<T>,
+    handler: ApiHandler<T>,
+    options?: { bodyLimit?: number },
+  ) => {
     app.route({
       method,
       url,
+      ...options,
       handler: async (request, reply) => {
         const requestInput = part === "body" ? (request.body === undefined ? {} : request.body) : request.query;
         const input = parseInput(schema, requestInput, reply);
@@ -309,6 +340,7 @@ export function buildServer(options: {
   const get = <T>(url: string, schema: z.ZodType<T>, handler: ApiHandler<T>) => register("GET", url, "query", schema, handler);
   const post = <T>(url: string, schema: z.ZodType<T>, handler: ApiHandler<T>) => register("POST", url, "body", schema, handler);
   const patch = <T>(url: string, schema: z.ZodType<T>, handler: ApiHandler<T>) => register("PATCH", url, "body", schema, handler);
+  const del = <T>(url: string, schema: z.ZodType<T>, handler: ApiHandler<T>) => register("DELETE", url, "query", schema, handler);
 
   app.get("/api/health", async () => ({ ok: true }));
   get("/api/settings", emptySchema, (api) => api.getSettings());
@@ -331,6 +363,13 @@ export function buildServer(options: {
   get("/api/founders", founderQuerySchema, (api, input) => api.listFounders(input));
   get("/api/founders/:id", emptySchema, (api, _input, params) => api.getFounder(params.id!));
   post("/api/founders/:id/feedback", feedbackSchema, (api, input, params) => api.addFeedback(params.id!, input));
+  post("/api/founders", addFounderSchema, (api, input) => api.addFounder(input));
+  get("/api/companies", companyQuerySchema, (api, input) => api.listCompanies(input));
+  get("/api/companies/:id", emptySchema, (api, _input, params) => api.getCompany(params.id!));
+  post("/api/companies/:id/feedback", feedbackSchema, (api, input, params) => api.addCompanyFeedback(params.id!, input));
+  get("/api/network", emptySchema, (api) => api.getNetwork());
+  register("POST", "/api/network/import", "body", networkImportSchema, (api, input) => api.importNetwork(input), { bodyLimit: 10 * 1024 * 1024 });
+  del("/api/network/:owner", emptySchema, (api, _input, params) => api.removeNetwork(params.owner!));
   get("/api/outreach", outreachQuerySchema, (api, input) => api.listOutreach(input));
   post("/api/outreach/:id/decision", outreachDecisionSchema, (api, input, params) => api.decideOutreach(params.id!, input));
   post("/api/outreach/:id/complete", outreachCompleteSchema, (api, input, params) => api.completeOutreach(params.id!, input));

@@ -23,6 +23,7 @@ export interface PlainTaskInput {
   model: string;
   inputSummary: string;
   founderId?: string | null;
+  companyId?: string | null;
   skipReason?: string | null;
   output?: unknown;
   outputSummary?: string | null;
@@ -43,6 +44,8 @@ export interface EngineRuntime {
   config: SwarmConfig;
   agents: Agent[];
   brain: Brain;
+  concurrency: number;
+  signal: AbortSignal;
   now(): Date;
   stopped(): boolean;
   persist(): void;
@@ -56,7 +59,37 @@ export interface EngineRuntime {
     jobId: J;
     input: JobInput<J>;
     founderId?: string | null;
+    /** Set for work on a company, so the company page can list it. */
+    companyId?: string | null;
     repoDir?: string | null;
   }): Promise<TaskResult<J> | null>;
+}
+
+/** Run independent stage work without starting more than the configured number at once. */
+export async function forEachConcurrent<T>(
+  items: readonly T[],
+  concurrency: number,
+  stopped: () => boolean,
+  work: (item: T) => Promise<void>,
+): Promise<void> {
+  let nextIndex = 0;
+  let failed = false;
+  let failure: unknown;
+  const worker = async () => {
+    while (!failed && !stopped()) {
+      const index = nextIndex++;
+      if (index >= items.length) return;
+      try {
+        await work(items[index]!);
+      } catch (error) {
+        if (!failed) {
+          failed = true;
+          failure = error;
+        }
+      }
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(items.length, Math.max(1, concurrency)) }, worker));
+  if (failed) throw failure;
 }
 

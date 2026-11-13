@@ -1,13 +1,13 @@
 import { join } from "node:path";
 import {
   AGENT_CLASSES, BASE_CONFIG, JOBS, SOURCES, STAGES,
-  buildEffectiveSteering, coerceParam, effectiveRoute, getParamDef, isClassId, isJobId,
-  isReasonFor, newId, normalizeScope, paramsFor, scopeLabel,
-  scopeLevel, suggestSteering, suggestionTextKey, summarizeCalls, swarmIdentity,
+  buildEffectiveSteering, coerceParam, effectiveRoute, getParamDef, isClassId, isCompanyReasonFor, isJobId,
+  isNeverFetchUrl, isReasonFor, newId, normalizeCompanyName, normalizeScope, paramsFor, scopeLabel,
+  scopeLevel, stableId, suggestSteering, suggestionTextKey, summarizeCalls, swarmIdentity,
   type Agent, type AgentIdentity, type ApiClient,
-  type CallExample, type ClassId, type Directive, type DirectiveFilter,
+  type AddFounderInput, type CallExample, type ClassId, type CompanyFeedback, type CompanyQuery, type Directive, type DirectiveFilter,
   type DirectiveRow, type EffectiveSteeringQuery, type Evidence, type Feedback,
-  type Founder, type NodeHealth, type NodeStats,
+  type Founder, type FounderRow, type NetworkContact, type NodeHealth, type NodeStats, type ProfileLinks, type CompanyRow,
   type OutreachRow, type Run, type SettingsPatch,
   type StageId, type Swarm, type TaskRun, type Thesis,
 } from "@agentswarm/shared";
@@ -17,7 +17,7 @@ import type {
 import { ServiceError } from "../contracts";
 import { openStore } from "../db";
 import { createSimRepoFinder, createSimSources, createSimWorld } from "../sim";
-import { createLiveRepoFinder, createLiveSources } from "../sources";
+import { createLivePeopleLookup, createLiveRepoFinder, createLiveSources, createQuoteChecker, looksLikeFounder, parseConnectionsCsv } from "../sources";
 import { createProviderRegistry } from "../providers";
 import { createJobRegistry, createExecuteJob, findSensitive, redactSensitive } from "../jobs";
 import { createRunController } from "../engine";
@@ -141,6 +141,33 @@ export function createSwarmService(deps: ServiceDeps): SwarmService {
     if (!found) fail(404, "Task not found. Choose a task that exists.");
     return found;
   };
+  const ensureEnabledJobAgents = (swarmId: string): void => {
+    const existing = new Set(store.listAgents(swarmId).map((agent) => agent.jobId));
+    const at = iso(now());
+    for (const job of JOBS) {
+      if (!job.enabled || existing.has(job.id)) continue;
+      store.insertAgent({ id: newId("agt"), swarmId, jobId: job.id, classId: job.classId, name: job.label, status: "active", beat: null, state: {}, createdAt: at });
+      existing.add(job.id);
+    }
+  };
+  const founderRow = (founder: Founder): FounderRow => {
+    const assessment = store.latestAssessment(founder.id);
+    const feedback = store.listFeedback(founder.id).at(-1);
+    const evidence = store.listEvidence(founder.id);
+    return {
+      id: founder.id, name: founder.name, headline: founder.headline, companyName: founder.company.name,
+      status: founder.status, decision: assessment?.decision ?? null, composite: assessment?.composite ?? null,
+      cracked: assessment?.cracked ?? null, founderScore: assessment?.founderScore ?? null,
+      fit: assessment?.fit ?? founder.fit, coverage: assessment?.coverage ?? null, sources: founder.sources,
+      evidenceCount: evidence.filter((item) => item.verification === "unverified" || item.verification === "supported").length,
+      flagCount: assessment?.flags.filter((flag) => flag.severity === "warning" || flag.severity === "critical").length ?? 0,
+      feedback: feedback?.verdict ?? null, feedbackReasons: feedback?.reasonTags ?? [],
+      companyId: founder.companyId ?? null, firstSeenAt: founder.firstSeenAt, updatedAt: founder.updatedAt,
+    };
+  };
+  const withCompanyIds = (rows: FounderRow[]): FounderRow[] => rows.map((row) => ({
+    ...row, companyId: store.getFounder(row.id)?.companyId ?? null,
+  }));
   const validateName = (name: unknown, field = "name"): string => {
     const value = trimmed(name);
     if (value.length < 1 || value.length > 80) fail(400, "Enter a name from 1 to 80 characters.", { [field]: "Enter a name from 1 to 80 characters." });
@@ -215,6 +242,7 @@ export function createSwarmService(deps: ServiceDeps): SwarmService {
   };
   const buildTree = (swarmId: string) => {
     const swarm = getSwarm(swarmId);
+    ensureEnabledJobAgents(swarm.id);
     const config = store.getConfig(swarm.configId) ?? BASE_CONFIG;
     const statsByAgent = new Map(store.nodeStats(swarm.id, iso(new Date(now().getTime() - 24 * 60 * 60 * 1000))).map((row) => [row.agentId, row]));
     const directives = store.listDirectives();
@@ -240,10 +268,12 @@ export function createSwarmService(deps: ServiceDeps): SwarmService {
         };
       });
       const enabledJobs = classJobs.filter((node) => node.job.enabled);
+      const stats = sumStats(classJobs.map((node) => node.stats));
+      if (cls.id === "company") stats.itemsOut = store.listCompanies({ swarmId: swarm.id }).filter((company) => company.status !== "archived").length;
       return {
         cls, health: worstHealth(enabledJobs.map((node) => node.health)),
         directiveCount: countScope({ classId: cls.id }),
-        stats: sumStats(classJobs.map((node) => node.stats)), jobs: classJobs,
+        stats, jobs: classJobs,
       };
     });
     return { swarm, config, swarmDirectiveCount, globalDirectiveCount, classes };
@@ -251,15 +281,28 @@ export function createSwarmService(deps: ServiceDeps): SwarmService {
 
   async function getOverview(swarmId: string) {
     const swarm = getSwarm(swarmId);
+    ensureEnabledJobAgents(swarm.id);
     const settings = store.getSettings();
     const allRuns = store.listRuns(swarm.id, 10000).sort((a, b) => a.startedAt.localeCompare(b.startedAt));
     const latestRun = allRuns.at(-1) ?? null;
+    const lastFinishedRun = [...allRuns].reverse().find((run) => run.status !== "queued" && run.status !== "running") ?? null;
     const activeRun = store.activeRun(swarm.id);
     const nextRunAt = settings.schedule.enabled ? deps.cron.next(settings.schedule.cron, settings.schedule.timezone, now()) : null;
     const outreach = store.listOutreach({ swarmId: swarm.id });
     const founderRows = store.founderRows({ swarmId: swarm.id, status: "all", sort: "composite", limit: 500 });
     const founders = founderRows.rows;
     const totalFounderCounts = founderRows.counts;
+    const waitingCompanyIds = new Set(store.listCompanies({ swarmId: swarm.id, statuses: ["surfaced"] })
+      .filter((company) => store.listCompanyFeedback(company.id).length === 0).map((company) => company.id));
+    const waitingCompanies: CompanyRow[] = [];
+    let companyOffset = 0;
+    let companyTotal = 0;
+    do {
+      const page = store.companyRows({ swarmId: swarm.id, status: "surfaced", sort: "deal", limit: 500, offset: companyOffset });
+      companyTotal = page.total;
+      waitingCompanies.push(...page.rows.filter((row) => waitingCompanyIds.has(row.id)));
+      companyOffset += page.rows.length;
+    } while (waitingCompanies.length < 5 && companyOffset < companyTotal && companyOffset > 0);
     const totals = allRuns.reduce((acc, run) => ({
       leads: acc.leads + run.stats.leads, screenedIn: acc.screenedIn + run.stats.screenedIn,
       investigated: acc.investigated + run.stats.investigated, surfaced: acc.surfaced + run.stats.surfaced,
@@ -311,6 +354,10 @@ export function createSwarmService(deps: ServiceDeps): SwarmService {
     if (latestRun?.status === "failed") alerts.push({ id: `run-failed-${latestRun.id}`, level: "error", title: "Latest run failed", detail: latestRun.error ?? "Review the run details and retry when ready.", at: alertAt, link: `/activity/${latestRun.id}` });
     if (latestRun?.status === "budget_stopped") alerts.push({ id: `run-budget-${latestRun.id}`, level: "warning", title: "Latest run reached its spend cap", detail: "Review the run's spend and raise the cap only if the remaining work is worth it.", at: alertAt, link: `/activity/${latestRun.id}` });
     if (latestRun && latestRun.stats.failures > 0) alerts.push({ id: `run-tasks-${latestRun.id}`, level: "warning", title: "Latest run had failed tasks", detail: `${latestRun.stats.failures} task${latestRun.stats.failures === 1 ? "" : "s"} failed. Review the run details.`, at: alertAt, link: `/activity/${latestRun.id}` });
+    if (lastFinishedRun && lastFinishedRun.stats.controlsFailed > 0) {
+      const count = lastFinishedRun.stats.controlsFailed;
+      alerts.push({ id: "control-failed", level: "warning", title: "The fact-checker failed a planted check", detail: `${count} fact-check call${count === 1 ? "" : "s"} in the last run accepted a made-up claim, so those verdicts were thrown away. Consider using another model for the fact-checker.`, at: lastFinishedRun.finishedAt ?? lastFinishedRun.startedAt, link: "/swarm?node=job:verify.claims" });
+    }
     if (settings.schedule.enabled && settings.schedule.sources === "live") {
       const statuses = await deps.liveSources.statuses();
       for (const job of JOBS.filter((item) => item.classId === "scout" && item.enabled && item.source)) {
@@ -343,7 +390,9 @@ export function createSwarmService(deps: ServiceDeps): SwarmService {
       },
       funnel,
       totals: { ...totals, founders: Object.values(totalFounderCounts).reduce((sum, count) => sum + (count ?? 0), 0) },
-      topFounders: founders.filter((row) => row.status === "surfaced").sort((a, b) => (b.composite ?? -1) - (a.composite ?? -1)).slice(0, 12),
+      topFounders: withCompanyIds(founders).filter((row) => row.status === "surfaced").sort((a, b) => (b.composite ?? -1) - (a.composite ?? -1)).slice(0, 12),
+      companiesWaiting: waitingCompanyIds.size,
+      topCompanies: waitingCompanies.slice(0, 5),
       alerts: alerts.sort((a, b) => b.at.localeCompare(a.at)), lastRun: latestRun, activeRun,
       nextRunAt: settings.schedule.enabled ? deps.cron.next(settings.schedule.cron, settings.schedule.timezone, now()) : null,
       classHealth: tree.classes.map((node) => ({ classId: node.cls.id, label: node.cls.label, health: node.health, note: node.health === "planned" ? "No enabled jobs in this class." : node.health === "error" ? "At least one agent is failing repeatedly." : node.health === "warn" ? "Some agent tasks have failed." : node.health === "idle" ? "No recent task activity." : node.health === "paused" ? "Agents in this class are paused." : "Agents are operating normally." })),
@@ -555,13 +604,15 @@ export function createSwarmService(deps: ServiceDeps): SwarmService {
         getSwarm(query.swarmId);
         const statuses = ["all", "lead", "screened_out", "queued", "surfaced", "needs_evidence", "watch", "passed", "contacted", "meeting", "archived"];
         if (query.status !== undefined && !statuses.includes(query.status)) fail(400, "Choose a valid founder status.", { status: "Choose a valid founder status." });
-        return store.founderRows({ ...query, q: query.q?.trim() });
+        const result = store.founderRows({ ...query, q: query.q?.trim() });
+        return { ...result, rows: withCompanyIds(result.rows) };
       },
       async getFounder(id) {
         const founder = getFounder(id);
         const evidence = store.listEvidence(id).sort((a, b) => b.capturedAt.localeCompare(a.capturedAt));
         const tasks = store.listTasks({ founderId: id }).sort((a, b) => (b.startedAt ?? "").localeCompare(a.startedAt ?? "")).map(({ trace: _trace, ...task }) => task);
-        return { founder, assessment: store.latestAssessment(id), history: store.assessmentHistory(id), evidence, leads: store.listLeads({ founderId: id }), outreach: store.listOutreach({ founderId: id }), feedback: store.listFeedback(id), tasks };
+        const knownPeople = founder.company.name ? store.networkAtCompany(normalizeCompanyName(founder.company.name)) : [];
+        return { founder, assessment: store.latestAssessment(id), history: store.assessmentHistory(id), evidence, leads: store.listLeads({ founderId: id }), outreach: store.listOutreach({ founderId: id }), feedback: store.listFeedback(id), tasks, knownPeople };
       },
       async addFeedback(founderId, input) {
         const founder = getFounder(founderId);
@@ -579,6 +630,164 @@ export function createSwarmService(deps: ServiceDeps): SwarmService {
         const status = input.verdict === "no" ? "passed" : founder.status === "surfaced" ? "surfaced" : ["passed", "watch", "needs_evidence"].includes(founder.status) ? "surfaced" : founder.status;
         if (status !== founder.status) store.updateFounder(founderId, { status, updatedAt: iso(now()) });
         audit(actor, "feedback.create", founderId, { verdict: feedback.verdict, reasonTags: feedback.reasonTags }); return feedback;
+      },
+      async listCompanies(query) {
+        if (!query || typeof query.swarmId !== "string") fail(400, "Choose a swarm to list companies.", { swarmId: "Choose a swarm." });
+        getSwarm(query.swarmId);
+        const statuses = ["all", "tracked", "surfaced", "needs_evidence", "watch", "passed", "archived"];
+        if (query.status !== undefined && !statuses.includes(query.status)) fail(400, "Choose a valid company status.", { status: "Choose a valid company status." });
+        return store.companyRows({ ...query, q: query.q?.trim() });
+      },
+      async getCompany(id) {
+        const company = store.getCompany(id);
+        if (!company) fail(404, "Company not found. Choose a company that exists.");
+        const assessment = store.latestCompanyAssessment(id);
+        const founders = store.foundersOfCompany(id)
+          .sort((a, b) => a.firstSeenAt.localeCompare(b.firstSeenAt) || a.id.localeCompare(b.id));
+        if (assessment?.leadFounderId) founders.sort((a, b) => Number(b.id === assessment.leadFounderId) - Number(a.id === assessment.leadFounderId)
+          || a.firstSeenAt.localeCompare(b.firstSeenAt) || a.id.localeCompare(b.id));
+        const evidence = store.listCompanyEvidence(id).sort((a, b) => b.capturedAt.localeCompare(a.capturedAt));
+        const tasks = store.listTasks({ companyId: id })
+          .sort((a, b) => (b.startedAt ?? "").localeCompare(a.startedAt ?? ""))
+          .map(({ trace: _trace, ...task }) => task);
+        return {
+          company, members: store.listCompanyMembers(id), founders: founders.map(founderRow), assessment,
+          history: store.companyAssessmentHistory(id), evidence, feedback: store.listCompanyFeedback(id), tasks,
+          knownPeople: store.networkAtCompany(normalizeCompanyName(company.name)),
+        };
+      },
+      async addCompanyFeedback(companyId, input) {
+        const company = store.getCompany(companyId);
+        if (!company) fail(404, "Company not found. Choose a company that exists.");
+        if (input.verdict !== "yes" && input.verdict !== "no") fail(400, "Choose yes or no.", { verdict: "Choose yes or no." });
+        if (input.reasonTags !== undefined && !Array.isArray(input.reasonTags)) fail(400, "Choose valid reasons for this company.", { reasonTags: "Choose valid reasons for this company." });
+        const suppliedTags = input.reasonTags ?? [];
+        if (suppliedTags.some((tag) => typeof tag !== "string" || !isCompanyReasonFor(input.verdict, tag))) {
+          fail(400, "Choose reasons that match your yes or no call.", { reasonTags: "Choose reasons that match your yes or no call." });
+        }
+        const reasonTags = [...new Set(suppliedTags)];
+        const note = input.note == null ? null : redactSensitive(trimmed(input.note));
+        if (note && note.length > 400) fail(400, "Keep the note to 400 characters or fewer.", { note: "Keep the note to 400 characters or fewer." });
+        const previous = store.listCompanyFeedback(companyId)[0];
+        const timestamp = new Date(now().getTime());
+        if (previous && Date.parse(previous.createdAt) >= timestamp.getTime()) timestamp.setTime(Date.parse(previous.createdAt) + 1);
+        const feedback: CompanyFeedback = { id: newId("cfb"), companyId, author: actor, verdict: input.verdict, reasonTags, note: note || null, createdAt: iso(timestamp) };
+        store.insertCompanyFeedback(feedback);
+        store.updateCompany(company.id, { status: input.verdict === "no" ? "passed" : "surfaced", updatedAt: iso(now()) });
+        audit(actor, "company_feedback.create", companyId, { verdict: feedback.verdict, reasonTags: feedback.reasonTags });
+        return feedback;
+      },
+      async addFounder(input: AddFounderInput) {
+        const swarm = getSwarm(input?.swarmId);
+        const name = trimmed(input?.name);
+        if (name.length < 1 || name.length > 200) fail(400, "Enter a name from 1 to 200 characters.", { name: "Enter a name from 1 to 200 characters." });
+        const checkedAddress = (value: string | null | undefined, field: string): string | null => {
+          if (value == null || !trimmed(value)) return null;
+          const address = trimmed(value);
+          try {
+            const parsed = new URL(address);
+            if ((parsed.protocol !== "http:" && parsed.protocol !== "https:") || !parsed.hostname) throw new Error("invalid address");
+          } catch {
+            fail(400, "Enter an http or https address.", { [field]: "Enter an http or https address." });
+          }
+          return address;
+        };
+        const companyUrl = checkedAddress(input.companyUrl, "companyUrl");
+        const link = checkedAddress(input.link, "link");
+        const companyName = trimmed(input.companyName) || null;
+        const why = trimmed(input.why);
+        if (why) refusePersonal(why, "why", "The reason");
+        const links: ProfileLinks = { github: null, linkedin: null, x: null, site: null, scholar: null };
+        if (link) {
+          const host = new URL(link).hostname.toLowerCase().replace(/^www\./, "");
+          if (["github.com", "gitlab.com", "codeberg.org", "bitbucket.org"].some((site) => host === site || host.endsWith(`.${site}`))) links.github = link;
+          else if (host === "x.com" || host.endsWith(".x.com") || host === "twitter.com" || host.endsWith(".twitter.com")) links.x = link;
+          else if (host === "scholar.google.com") links.scholar = link;
+          else if (isNeverFetchUrl(link)) links.linkedin = link;
+          else links.site = link;
+        }
+        const id = newId("led");
+        const lead = {
+          id, swarmId: swarm.id, founderId: null, source: "manual" as const,
+          sourceRef: link ?? companyUrl ?? `manual:${id}`, sourceTitle: `Added by ${actor}`,
+          personName: name, role: null, companyName, companyUrl, oneLiner: null, links,
+          why: why || `Added by ${actor}.`, discoveredByTaskId: null, discoveredAt: iso(now()),
+        };
+        store.insertLead(lead);
+        audit(actor, "founder.add", lead.id, { swarmId: swarm.id, source: "manual" });
+        return lead;
+      },
+      async getNetwork() {
+        // These contacts are personal data about people who are not founders; they are shown to the partner who uploaded them and are never placed in a prompt.
+        const contacts = store.listNetwork();
+        const owners = new Map<string, { owner: string; contacts: number; importedAt: string }>();
+        for (const contact of contacts) {
+          const row = owners.get(contact.owner);
+          if (row) {
+            row.contacts++;
+            if (contact.importedAt > row.importedAt) row.importedAt = contact.importedAt;
+          } else owners.set(contact.owner, { owner: contact.owner, contacts: 1, importedAt: contact.importedAt });
+        }
+        return { owners: [...owners.values()].sort((a, b) => a.owner.localeCompare(b.owner)), total: contacts.length };
+      },
+      async importNetwork(input) {
+        if (typeof input?.csv !== "string") fail(400, "Choose a connections export to import.", { csv: "Choose a connections export." });
+        if (input.csv.length > 8_000_000) fail(400, "The connections export must be 8,000,000 characters or fewer.", { csv: "Choose an export under 8,000,000 characters." });
+        let parsed: ReturnType<typeof parseConnectionsCsv>;
+        try { parsed = parseConnectionsCsv(input.csv); }
+        catch (error) {
+          const message = messageOf(error);
+          fail(400, message, { csv: message });
+        }
+        const importedAt = iso(now());
+        const contacts: NetworkContact[] = parsed.contacts.map((contact) => {
+          const identity = contact.profileUrl?.trim().toLowerCase() || contact.name.trim().toLowerCase();
+          const id = stableId("net", `${actor}\0${identity}`);
+          return { ...contact, id, owner: actor, importedAt, previous: null };
+        });
+        const fresh = store.replaceNetwork(actor, contacts);
+        let leadContacts = 0;
+        const activeSwarms = store.listSwarms().filter((swarm) => swarm.status === "active");
+        for (const contact of fresh) {
+          const previous = contact.previous;
+          if (!previous || !looksLikeFounder(contact.position)) continue;
+          const becameFounder = !looksLikeFounder(previous.position);
+          const companyChanged = normalizeCompanyName(previous.company) !== normalizeCompanyName(contact.company);
+          if (!becameFounder && !companyChanged) continue;
+          let createdForContact = false;
+          for (const swarm of activeSwarms) {
+            const sourceRef = contact.profileUrl ?? `network:${contact.id}`;
+            const duplicate = store.listLeads({ swarmId: swarm.id }).some((lead) => lead.sourceRef === sourceRef && lead.personName === contact.name);
+            if (duplicate) continue;
+            const links = { github: null, linkedin: contact.profileUrl, x: null, site: null, scholar: null };
+            const fromPosition = previous.position || "an unlisted role";
+            const fromCompany = previous.company || "an unlisted company";
+            const toPosition = contact.position || "an unlisted role";
+            const toCompany = contact.company || "an unlisted company";
+            const lead = {
+              id: newId("led"), swarmId: swarm.id, founderId: null, source: "network" as const,
+              // A lead's text reaches prompts later, so it passes the same boundary as everything else stored.
+              sourceRef, sourceTitle: `Contact list of ${actor}`, personName: contact.name,
+              role: contact.position === null ? null : redactSensitive(contact.position),
+              companyName: contact.company, companyUrl: null, oneLiner: null, links,
+              why: redactSensitive(`Changed from ${fromPosition} at ${fromCompany} to ${toPosition} at ${toCompany}.`),
+              discoveredByTaskId: null, discoveredAt: importedAt,
+            };
+            store.insertLead(lead);
+            createdForContact = true;
+          }
+          if (createdForContact) leadContacts++;
+        }
+        const changed = fresh.filter((contact) => contact.previous !== null).length;
+        const network = await api.getNetwork();
+        audit(actor, "network.import", actor, { imported: fresh.length, changed, leads: leadContacts });
+        return { owner: actor, imported: fresh.length, changed, leads: leadContacts, network };
+      },
+      async removeNetwork(owner) {
+        const normalizedOwner = trimmed(owner);
+        const removed = store.removeNetwork(normalizedOwner);
+        audit(actor, "network.remove", normalizedOwner, { removed });
+        return api.getNetwork();
       },
       async listOutreach(query) {
         if (!query || typeof query.swarmId !== "string") fail(400, "Choose a swarm to list outreach.", { swarmId: "Choose a swarm." });
@@ -642,10 +851,11 @@ export function createSwarmService(deps: ServiceDeps): SwarmService {
       },
       async getTask(id) { return getTask(id, true); },
       async startRun(input) {
-        getSwarm(input.swarmId);
+        const swarm = getSwarm(input.swarmId);
         if (input.budgetUsd !== undefined && (!Number.isFinite(input.budgetUsd) || input.budgetUsd <= 0)) fail(400, "Enter a positive spend cap.", { budgetUsd: "Enter a positive spend cap." });
         if (input.brain !== undefined && input.brain !== "sim" && input.brain !== "live") fail(400, "Choose simulation or live for the run brain.", { brain: "Choose simulation or live." });
         if (input.sources !== undefined && input.sources !== "sim" && input.sources !== "live") fail(400, "Choose simulated or live sources.", { sources: "Choose simulated or live sources." });
+        ensureEnabledJobAgents(swarm.id);
         try {
           const run = await deps.runs.start({ ...input, trigger: "manual" });
           audit(actor, "run.start", run.id, { swarmId: run.swarmId, trigger: "manual" }); return run;
@@ -719,6 +929,7 @@ export function createSwarmService(deps: ServiceDeps): SwarmService {
       const wanted = only ? new Set(only) : null;
       for (const swarm of store.listSwarms().filter((item) => item.status === "active" && !store.activeRun(item.id) && (wanted === null || wanted.has(item.id)))) {
         try {
+          ensureEnabledJobAgents(swarm.id);
           const run = await deps.runs.start({ swarmId: swarm.id, brain: settings.schedule.brain, sources: settings.schedule.sources, trigger: "schedule" });
           audit("Scheduler", "run.start", run.id, { swarmId: swarm.id, trigger: "schedule" });
           started.push(run);
@@ -755,7 +966,7 @@ export function createApp(options: AppOptions): App {
   const providers = createProviderRegistry(options.env);
   const jobs = createJobRegistry();
   const executeJob = createExecuteJob({ jobs, providers });
-  const runs = createRunController({ store, jobs, executeJob, sources: { sim: simSources, live: liveSources }, repos: { sim: simRepos, live: liveRepos }, simWorld: world, fundName: options.fundName ?? "the fund", now: options.now, logger: options.logger });
+  const runs = createRunController({ store, jobs, executeJob, quotes: createQuoteChecker(), people: createLivePeopleLookup(options.env ?? process.env), sources: { sim: simSources, live: liveSources }, repos: { sim: simRepos, live: liveRepos }, simWorld: world, fundName: options.fundName ?? "the fund", now: options.now, logger: options.logger });
   const evals = createEvalService({ store, jobs, executeJob, flowsDir: options.flowsDir, now: options.now, logger: options.logger });
   const service = createSwarmService({ store, runs, evals, providers, liveSources, cron: options.cron, now: options.now, logger: options.logger });
   return { service, store, providers, close: () => store.close() };

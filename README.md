@@ -1,7 +1,8 @@
 # Founder Scout
 
-A swarm of AI agents that finds startup founders every day, builds a sourced dossier on each,
-scores them against a rubric you control, and learns from your Yes / No.
+A swarm of AI agents that finds startup founders every day, builds a sourced dossier on each
+founder and on their company, scores both against rubrics you control, and learns from your
+Yes / No.
 
 - Picture for non-technical readers: `docs/architecture/founder-scout-architecture.html`
 - Design and decisions: `docs/superpowers/specs/2026-11-12-founder-scout-swarm-design.md`
@@ -34,6 +35,29 @@ pnpm swarm run --brain live --sources live --budget 5
 
 `--budget` is the spend cap for that run in dollars. The run stops starting new work when it is
 reached.
+
+## Companies
+
+Every founder with a company gets a company record, shared by co-founders. Company researchers
+collect the mission in the company's own words, what has shipped, dated milestones, the rest of the
+team and the stated plans. A company analyst answers nine rubric questions and writes a brief, and
+code combines the company's score with its lead founder's into one decision. The Companies page
+ranks them and takes a Yes / No with reasons, separate from the call on the founder.
+
+## Professional profiles, without reading LinkedIn
+
+Nothing here requests linkedin.com, logged in or not; the design explains why
+(section 9). The same information comes in three ways:
+
+- **A data vendor.** Put a People Data Labs key in `.env` as `PDL_API_KEY`. The talent-move scout
+  then searches for people who recently became founders, and company research can list a company's
+  team. Each record costs a vendor credit; `PDL_RECORDS_PER_DAY` (default 50) is the ceiling. The
+  adapter has not been run against the live service: no key was available.
+- **Your own connections.** Export your connections from your own account settings and upload the
+  file under Settings, Your network. The dashboard then shows who you know at each company, and a
+  contact whose title changes to a founder's between two uploads becomes a lead. Email addresses in
+  the file are never read.
+- **By hand.** "Add" on the Founders page takes a name, a company and a link.
 
 ## Run it every day
 
@@ -93,8 +117,18 @@ Verified by running it:
 Not verified against a live service, because no keys or accounts were available: the direct Claude
 API and the OpenAI-compatible adapters (OpenAI, DeepSeek, Meta).
 
-Not built: AI voice calling, audio or video transcription, and a licensed professional-profile
-data feed. Calls are planned and drafted for a person to make; their notes are read back in.
+Not verified against a live service either: the People Data Labs adapter, for the same reason.
+
+Checked by running it on 2026-11-13: the rule that stops research agents opening linkedin.com
+(a rule for the bare host does not cover `www.`, so both forms are passed); headless Claude and
+Codex still sign in after unrelated keys are removed from their environment; and the quote check,
+which found none of the first live run's nine excerpts on the pages they cited under the old
+"quote or paraphrase" prompt, and seven of eight under the exact-quote prompt (one was too short
+to check). One founder, so this shows the direction, not a rate.
+
+Not built: AI voice calling, audio or video transcription, a retention schedule, and the notice
+that people in the EU and UK are owed when data about them is held. Calls are planned and drafted
+for a person to make; their notes are read back in.
 
 Known limits:
 
@@ -122,5 +156,9 @@ Known limits:
 
 ## Rules the code enforces
 
-Nothing is sent or dialled without a person approving that item. No LinkedIn scraping. Professional,
-public information only. Every claim has a source. A spend cap per run and a stop switch.
+Nothing is sent or dialled without a person approving that item. Nothing requests LinkedIn.
+Professional, public information only. Every claim has a source, and code checks that a quote is on
+the page it cites before a model is asked about it. Every fact-check carries one planted false claim;
+a checker that accepts it has that call's verdicts thrown away. A spend cap per run, a ceiling on
+vendor records per day, and a stop switch. `CLAUDE.md` lists each rule with the test that enforces
+it.

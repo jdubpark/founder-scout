@@ -288,3 +288,32 @@ describe("CodexCliProvider.run", () => {
 function args(calls: ProcessRequest[]): readonly string[] {
   return calls[0]?.args ?? [];
 }
+
+describe("CodexCliProvider environment", () => {
+  it("passes the headless process only the environment it needs", async () => {
+    const calls: ProcessRequest[] = [];
+    const provider = new CodexCliProvider({
+      env: {
+        PATH: "/usr/bin",
+        HOME: "/Users/test",
+        OPENAI_API_KEY: "sk-own",
+        CODEX_HOME: "/Users/test/.codex",
+        ANTHROPIC_API_KEY: "sk-ant-other-vendor",
+        GITHUB_TOKEN: "ghp_secret",
+        SOME_DATA_VENDOR_SECRET: "vendor-secret",
+      },
+      runner: fakeCodex({ finalText: JSON.stringify(FIT) }, calls),
+    });
+    await provider.run(request());
+
+    const env = calls[0]?.env ?? {};
+    expect(env.ANTHROPIC_API_KEY).toBeUndefined();
+    expect(env.GITHUB_TOKEN).toBeUndefined();
+    expect(env.SOME_DATA_VENDOR_SECRET).toBeUndefined();
+    expect(env.OPENAI_API_KEY).toBe("sk-own");
+    expect(env.CODEX_HOME).toBe("/Users/test/.codex");
+    expect(env.PATH).toBe("/usr/bin");
+    expect(env.HOME).toBe("/Users/test");
+  });
+});
+

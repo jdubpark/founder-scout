@@ -41,7 +41,7 @@ export default function FounderDetailPage() {
 
   return (
     <div className="flex flex-col gap-10">
-      <DossierHeader founder={founder} feedback={feedback} backTo={backTo} />
+      <DossierHeader founder={founder} feedback={feedback} backTo={backTo} knownPeople={detail.data.knownPeople ?? []} />
       <Verdict assessment={assessment} thesisNotes={founder.fitReasons.join(" · ")} />
       <MemoPanel memo={assessment?.memo ?? null} />
       <Panel title="Rubric">

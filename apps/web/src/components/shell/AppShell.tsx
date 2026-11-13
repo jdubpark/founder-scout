@@ -1,6 +1,7 @@
 import { Link, NavLink, Outlet } from "react-router-dom";
 import {
   Activity,
+  Building2,
   ClipboardCheck,
   Hash,
   House,
@@ -32,6 +33,7 @@ interface NavItem {
 const WORK: NavItem[] = [
   { to: "/", label: "Home", icon: House, end: true },
   { to: "/founders", label: "Founders", icon: Users },
+  { to: "/companies", label: "Companies", icon: Building2 },
   { to: "/approvals", label: "Approvals", icon: ClipboardCheck },
 ];
 
@@ -114,6 +116,7 @@ function Sidebar() {
   const { demo } = useApi();
   const pending = overview.data?.today.pendingApprovals ?? 0;
   const waiting = overview.data?.calls.waiting ?? 0;
+  const companiesWaiting = overview.data?.companiesWaiting ?? 0;
 
   return (
     <aside className="flex w-60 shrink-0 flex-col bg-rail text-on-rail lg:sticky lg:top-0 lg:h-dvh">
@@ -125,7 +128,8 @@ function Sidebar() {
         <ul className="m-0 flex list-none flex-col gap-0.5 p-0">
           <NavRow item={WORK[0]!} />
           <NavRow item={WORK[1]!} badge={{ count: waiting, label: "founders waiting for your call" }} />
-          <NavRow item={WORK[2]!} badge={{ count: pending, label: "drafts waiting for approval" }} />
+          <NavRow item={WORK[2]!} badge={{ count: companiesWaiting, label: "companies waiting for your call" }} />
+          <NavRow item={WORK[3]!} badge={{ count: pending, label: "drafts waiting for approval" }} />
         </ul>
 
         <SectionLabel
@@ -173,7 +177,8 @@ function Sidebar() {
 
       <div className="flex flex-col gap-2 border-t border-white/10 px-2 py-3">
         <RunStatus />
-        {demo ? (
+        {/* Shown in the demo, and on a real server whenever the swarm's last run was a simulation. */}
+        {demo || overview.data?.lastRun?.brain === "sim" || overview.data?.lastRun?.sources === "sim" ? (
           <p className="mx-2.5 rounded-sm bg-gold px-2 py-1 text-center text-xs font-black text-ink">Simulated data</p>
         ) : null}
       </div>

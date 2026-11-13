@@ -212,6 +212,29 @@ async function addDemoCalls(api: ApiClient, swarmId: string): Promise<void> {
   }
 }
 
+/**
+ * A simulated partner's calls on companies. The rule is simple and fixed so the demo is the same
+ * every time: yes when both the company and its founders score well, no otherwise. One surfaced
+ * company is left without a call so the demo shows what "waiting" looks like.
+ */
+async function addDemoCompanyCalls(api: ApiClient, swarmId: string): Promise<void> {
+  const rows = (await api.listCompanies({ swarmId, status: "all", sort: "deal", limit: 200 })).rows
+    .filter((row) => row.deal !== null)
+    .slice(0, 30);
+  const surfaced = rows.filter((row) => row.status === "surfaced");
+  const leaveWaiting = new Set(surfaced.length >= 2 ? surfaced.slice(-1).map((row) => row.id) : []);
+  for (const row of rows) {
+    if (leaveWaiting.has(row.id)) continue;
+    const company = row.company ?? 0;
+    const team = row.team ?? 0;
+    if (company >= 0.55 && team >= 0.5) {
+      await api.addCompanyFeedback(row.id, { verdict: "yes", reasonTags: [company >= team ? "strong_product" : "complete_team"] });
+    } else {
+      await api.addCompanyFeedback(row.id, { verdict: "no", reasonTags: [company < 0.45 ? "no_pull" : "team_gap"] });
+    }
+  }
+}
+
 async function collectSnapshot(service: SwarmService, days: number, clock: DemoClock | null): Promise<DemoSnapshot> {
   clock?.startDay(days);
   await service.ensureSeeded();
@@ -229,6 +252,7 @@ async function collectSnapshot(service: SwarmService, days: number, clock: DemoC
   const before = Math.max(1, days - 2);
   for (let day = 0; day < before; day += 1) await runDay(day);
   await addDemoCalls(api, swarm.id);
+  await addDemoCompanyCalls(api, swarm.id);
   if (days >= 2) await runDay(before);
   const proposed = await api.listOutreach({ swarmId: swarm.id, status: "proposed" });
   const firstEmail = proposed.find((item) => item.kind === "email_founder");
@@ -263,6 +287,8 @@ async function collectSnapshot(service: SwarmService, days: number, clock: DemoC
   const runDetails: DemoSnapshot["runDetails"] = {};
   const tasks: DemoSnapshot["tasks"] = {};
   const founderDetails: DemoSnapshot["founderDetails"] = {};
+  const companies: NonNullable<DemoSnapshot["companies"]> = {};
+  const companyDetails: NonNullable<DemoSnapshot["companyDetails"]> = {};
   const directiveGroups = await Promise.all(
     (["active", "paused", "archived"] as const).map((status) => api.listDirectives({ status })),
   );
@@ -276,6 +302,9 @@ async function collectSnapshot(service: SwarmService, days: number, clock: DemoC
     outreach[current.id] = await api.listOutreach({ swarmId: current.id, status: "all" });
     const top = [...rows].sort((a, b) => (b.composite ?? -1) - (a.composite ?? -1)).slice(0, 40);
     for (const row of top) founderDetails[row.id] = await api.getFounder(row.id);
+    const companyRows = (await api.listCompanies({ swarmId: current.id, status: "all", sort: "deal", limit: 500 })).rows;
+    companies[current.id] = companyRows;
+    for (const row of companyRows.slice(0, 30)) companyDetails[row.id] = await api.getCompany(row.id);
     const recentRuns = await api.listRuns(current.id, 10);
     runs[current.id] = recentRuns;
     for (const run of recentRuns.slice(0, 3)) runDetails[run.id] = await api.getRun(run.id);
@@ -298,6 +327,8 @@ async function collectSnapshot(service: SwarmService, days: number, clock: DemoC
     directives: directiveRows,
     founders,
     founderDetails,
+    companies,
+    companyDetails,
     outreach,
     runs,
     runDetails,

@@ -1,6 +1,7 @@
 import { EmptyState, ErrorNote, PageHeader, Panel, SkeletonRows } from "../components/ui/layout";
 import { DailyRunPanel } from "../features/settings/DailyRunPanel";
 import { EmergencyPanel, OperatorPanel } from "../features/settings/SafetyPanels";
+import { NetworkPanel } from "../features/settings/NetworkPanel";
 import { SwarmPanel, NewSwarmPanel } from "../features/settings/SwarmPanels";
 import { ModelsPanel, ProvidersPanel, SourcesPanel } from "../features/settings/StatusTables";
 import { useSettings, useTree } from "../lib/queries";
@@ -25,6 +26,7 @@ export default function SettingsPage() {
             <DailyRunPanel dto={settings.data} />
             <EmergencyPanel saved={settings.data.settings.killSwitch} />
             <OperatorPanel saved={settings.data.settings.operatorName} />
+            <NetworkPanel />
 
             {swarm ? (
               <SwarmPanel swarm={swarm} />

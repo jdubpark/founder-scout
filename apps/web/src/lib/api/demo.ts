@@ -16,7 +16,13 @@ import {
   type AgentIdentity,
   type ApiClient,
   type CallExample,
+  type CompanyDetailDTO,
+  type CompanyFeedback,
+  type CompanyListDTO,
+  type CompanyQuery,
+  type CompanyRow,
   type Feedback,
+  isCompanyReasonFor,
   type SteeringSuggestion,
   type DemoSnapshot,
   type Directive,
@@ -389,6 +395,79 @@ export function createDemoClient(snapshot: DemoSnapshot, getActor: () => string)
         if (input.verdict === "no") row.status = "passed";
       }
       return clone(feedback);
+    },
+
+    async addFounder() {
+      throw new ApiError(400, READ_ONLY);
+    },
+
+    async listCompanies(query: CompanyQuery): Promise<CompanyListDTO> {
+      const all = state.companies?.[query.swarmId] ?? [];
+      const counts: Record<string, number> = {};
+      for (const r of all) counts[r.status] = (counts[r.status] ?? 0) + 1;
+
+      let rows = all;
+      if (query.status && query.status !== "all") rows = rows.filter((r) => r.status === query.status);
+      if (query.q?.trim()) {
+        const q = query.q.trim().toLowerCase();
+        rows = rows.filter((r) => [r.name, r.oneLiner ?? "", r.sector ?? ""].some((v) => v.toLowerCase().includes(q)));
+      }
+      const sort = query.sort ?? "deal";
+      const recent = (a: CompanyRow, b: CompanyRow) => b.updatedAt.localeCompare(a.updatedAt);
+      const pick = (r: CompanyRow) => (sort === "company" ? r.company : sort === "team" ? r.team : r.deal);
+      rows = [...rows].sort((a, b) => {
+        if (sort === "recent") return recent(a, b);
+        const x = pick(a);
+        const y = pick(b);
+        if (x === null && y === null) return recent(a, b);
+        if (x === null) return 1;
+        if (y === null) return -1;
+        return y - x || recent(a, b);
+      });
+      const offset = query.offset ?? 0;
+      const limit = Math.min(query.limit ?? 50, 500);
+      return clone({ rows: rows.slice(offset, offset + limit), total: rows.length, counts: counts as CompanyListDTO["counts"] });
+    },
+    async getCompany(id): Promise<CompanyDetailDTO> {
+      const detail = state.companyDetails?.[id];
+      if (!detail) {
+        throw new ApiError(404, "The demo snapshot holds full records only for the highest-ranked companies.");
+      }
+      return clone(detail);
+    },
+    async addCompanyFeedback(companyId, input): Promise<CompanyFeedback> {
+      const tags = (input.reasonTags ?? []).filter((t) => isCompanyReasonFor(input.verdict, t));
+      const feedback: CompanyFeedback = {
+        id: newId("fbk"),
+        companyId,
+        author: getActor(),
+        verdict: input.verdict,
+        reasonTags: tags,
+        note: input.note?.trim() || null,
+        createdAt: now(),
+      };
+      const detail = state.companyDetails?.[companyId];
+      detail?.feedback.unshift(feedback);
+      // A no takes the company off the list. A yes keeps it surfaced.
+      if (detail && input.verdict === "no") detail.company.status = "passed";
+      for (const rows of Object.values(state.companies ?? {})) {
+        const row = rows.find((r) => r.id === companyId);
+        if (!row) continue;
+        row.feedback = input.verdict;
+        row.feedbackReasons = tags;
+        if (input.verdict === "no") row.status = "passed";
+      }
+      return clone(feedback);
+    },
+
+    async getNetwork() {
+      return { owners: [], total: 0 };
+    },
+    async importNetwork() {
+      throw new ApiError(400, READ_ONLY);
+    },
+    async removeNetwork() {
+      throw new ApiError(400, READ_ONLY);
     },
 
     async listOutreach(query) {

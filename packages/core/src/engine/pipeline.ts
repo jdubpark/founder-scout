@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import {
+  booleanParam,
   DIMENSIONS,
   effectiveThresholds,
   effectiveWeights,
@@ -12,6 +13,7 @@ import {
   stableId,
   stringParam,
 } from "@agentswarm/shared";
+import { createRng, hashSeed } from "../sim";
 import type {
   Agent,
   AssessInput,
@@ -23,6 +25,7 @@ import type {
   Feedback,
   Founder,
   FounderBrief,
+  GapQuestion,
   InvestigateInput,
   JobId,
   Lead,
@@ -37,7 +40,10 @@ import type {
   StageId,
   VerifyInput,
 } from "@agentswarm/shared";
-import type { EngineRuntime } from "./runtime";
+import { plantControl } from "../jobs";
+import type { PersonRecord } from "../contracts";
+import { runCompanyAssess, runCompanyResearch, runCompanyResolve } from "./company-stages";
+import { forEachConcurrent, type EngineRuntime } from "./runtime";
 import { normalizeLink, normalizeName } from "../db";
 import { redactSensitive } from "../jobs";
 
@@ -70,7 +76,7 @@ function isInvestigatorJob(jobId: JobId): jobId is InvestigatorJobId {
   return (INVESTIGATOR_JOBS as readonly JobId[]).includes(jobId);
 }
 
-function founderBrief(runtime: EngineRuntime, founder: Founder): FounderBrief {
+export function founderBrief(runtime: EngineRuntime, founder: Founder): FounderBrief {
   const sightings = runtime.deps.store.listLeads({ founderId: founder.id }).map((lead) => ({
     source: lead.source,
     title: lead.sourceTitle,
@@ -91,7 +97,7 @@ function founderBrief(runtime: EngineRuntime, founder: Founder): FounderBrief {
   };
 }
 
-function evidenceBrief(evidence: Evidence): EvidenceBrief {
+export function evidenceBrief(evidence: Evidence): EvidenceBrief {
   return {
     id: evidence.id,
     kind: evidence.kind,
@@ -102,6 +108,8 @@ function evidenceBrief(evidence: Evidence): EvidenceBrief {
     claim: evidence.claim,
     publishedAt: evidence.publishedAt,
     verification: evidence.verification,
+    ...(evidence.facet ? { facet: evidence.facet } : {}),
+    ...(evidence.quote ? { quote: evidence.quote } : {}),
     sim: evidence.sim,
   };
 }
@@ -110,12 +118,12 @@ function allEvidenceBriefs(runtime: EngineRuntime, founderId: string): EvidenceB
   return runtime.deps.store.listEvidence(founderId).map(evidenceBrief);
 }
 
-function canonicalUrl(value: string | null): string {
+export function canonicalUrl(value: string | null): string {
   if (!value?.trim()) return "";
   return normalizeLink(value);
 }
 
-function hashEvidence(source: SourceId, url: string | null, excerpt: string): string {
+export function hashEvidence(source: SourceId, url: string | null, excerpt: string): string {
   const canonicalExcerpt = excerpt.normalize("NFKC").replace(/\s+/g, " ").trim().slice(0, 1200).toLowerCase();
   const content = JSON.stringify([source.trim().toLowerCase(), canonicalUrl(url), canonicalExcerpt]);
   return createHash("sha256").update(content).digest("hex");
@@ -136,8 +144,9 @@ function addEvidence(
     const excerpt = draft.excerpt.trim().slice(0, 1200);
     const claim = draft.claim.trim();
     if (!excerpt || !claim) continue;
-    // Research jobs require a citable URL. Call notes are attached to the call record instead.
-    if (source !== "call" && !draft.url?.trim()) continue;
+    // Research jobs require a citable URL. Call notes are attached to the call record instead,
+    // and a data vendor's record has no page of its own.
+    if (source !== "call" && source !== "people_data" && !draft.url?.trim()) continue;
     const hash = hashEvidence(source, draft.url, excerpt);
     const evidence: Evidence = {
       id: stableId("evd", `${runtime.run.id}:${taskId}:${hash}`),
@@ -162,7 +171,7 @@ function addEvidence(
   return inserted;
 }
 
-function mergeLinks(current: ProfileLinks, incoming: ProfileLinks): ProfileLinks {
+export function mergeLinks(current: ProfileLinks, incoming: ProfileLinks): ProfileLinks {
   return {
     github: current.github ?? incoming.github,
     linkedin: current.linkedin ?? incoming.linkedin,
@@ -411,19 +420,19 @@ async function runScout(runtime: EngineRuntime): Promise<Map<string, string>> {
   runtime.setStage("scout");
   const simIdsByLead = new Map<string, string>();
   const sources = runtime.deps.sources[runtime.run.sources];
-  for (const agent of runtime.agents) {
-    if (runtime.stopped()) return simIdsByLead;
-    if (!isScoutJob(agent.jobId)) continue;
+  const scoutAgents = runtime.agents.filter((agent): agent is Agent & { jobId: ScoutJobId } => isScoutJob(agent.jobId));
+  await forEachConcurrent(scoutAgents, runtime.concurrency, runtime.stopped, async (agent) => {
+    if (runtime.stopped()) return;
     const jobId = agent.jobId;
     const source = getJob(jobId).source;
-    if (!source) continue;
+    if (!source) return;
     const emptyInput: ScoutInput = { items: [], beat: agent.beat, thesis: runtime.swarm.thesis };
 
     // Let the normal job boundary create the expected skipped task without touching a source.
     if (agent.status === "paused" || !getJob(jobId).enabled) {
       const skipped = await runtime.runJob({ agent, stage: "scout", jobId, input: emptyInput });
-      if (!skipped) return simIdsByLead;
-      continue;
+      if (!skipped) return;
+      return;
     }
 
     const adapter = sources.get(source);
@@ -438,7 +447,7 @@ async function runScout(runtime: EngineRuntime): Promise<Map<string, string>> {
         inputSummary: `Fetch ${source} for new founder leads.`,
         skipReason: "No source adapter is available in this mode.",
       });
-      continue;
+      return;
     }
 
     try {
@@ -454,7 +463,7 @@ async function runScout(runtime: EngineRuntime): Promise<Map<string, string>> {
           inputSummary: `Fetch ${source} for new founder leads.`,
           skipReason: status.detail || "Source is not configured.",
         });
-        continue;
+        return;
       }
       const limit = numberParam("scout.max_items", runtime.resolve(agent, "scout.max_items"), runtime.config);
       const fetched = await adapter.fetch({
@@ -465,7 +474,7 @@ async function runScout(runtime: EngineRuntime): Promise<Map<string, string>> {
         thesis: runtime.swarm.thesis,
         simDay: runtime.run.simDay,
       });
-      if (runtime.stopped()) return simIdsByLead;
+      if (runtime.stopped()) return;
       runtime.addStats({ rawItems: fetched.items.length });
       if (fetched.items.length === 0) {
         recordNoModelTask(runtime, {
@@ -478,7 +487,7 @@ async function runScout(runtime: EngineRuntime): Promise<Map<string, string>> {
         });
         saveScoutCursor(runtime, agent, fetched.cursor, runtime.now().toISOString());
         runtime.persist();
-        continue;
+        return;
       }
 
       const result = await runtime.runJob({
@@ -487,8 +496,8 @@ async function runScout(runtime: EngineRuntime): Promise<Map<string, string>> {
         jobId,
         input: { items: fetched.items, beat: agent.beat, thesis: runtime.swarm.thesis },
       });
-      if (!result) return simIdsByLead;
-      if (result.task.status !== "succeeded" || !result.output) continue;
+      if (!result) return;
+      if (result.task.status !== "succeeded" || !result.output) return;
 
       const itemByRef = new Map(fetched.items.map((item) => [item.ref, item]));
       const seen = new Set<string>();
@@ -535,7 +544,7 @@ async function runScout(runtime: EngineRuntime): Promise<Map<string, string>> {
         error,
       });
     }
-  }
+  });
   return simIdsByLead;
 }
 
@@ -558,7 +567,13 @@ async function runResolve(runtime: EngineRuntime, simIdsByLead: ReadonlyMap<stri
     return;
   }
 
-  const unmatched = runtime.deps.store.listLeads({ swarmId: runtime.swarm.id, unmatchedOnly: true });
+  const sourceOrder = (source: SourceId) => SCOUT_JOBS.findIndex((jobId) => getJob(jobId).source === source);
+  const unmatched = runtime.deps.store.listLeads({ swarmId: runtime.swarm.id, unmatchedOnly: true })
+    .sort((a, b) => sourceOrder(a.source) - sourceOrder(b.source)
+      || a.sourceRef.localeCompare(b.sourceRef)
+      || normalizeName(a.personName).localeCompare(normalizeName(b.personName))
+      || normalizeName(a.companyName ?? "").localeCompare(normalizeName(b.companyName ?? ""))
+      || a.id.localeCompare(b.id));
   let created = 0;
   let merged = 0;
   for (const lead of unmatched) {
@@ -606,16 +621,16 @@ async function runScreen(runtime: EngineRuntime): Promise<void> {
   const founders = runtime.deps.store.listFounders({ swarmId: runtime.swarm.id, statuses: ["lead"] })
     .sort((a, b) => a.firstSeenAt.localeCompare(b.firstSeenAt) || a.id.localeCompare(b.id));
 
-  for (const founder of founders) {
+  await forEachConcurrent(founders, runtime.concurrency, runtime.stopped, async (founder) => {
     if (runtime.stopped()) return;
     const input: ScreenInput = { founder: founderBrief(runtime, founder), thesis: runtime.swarm.thesis };
     const result = await runtime.runJob({ agent, stage: "screen", jobId: "screen.fit", input, founderId: founder.id });
     if (!result) return;
-    if (result.task.status !== "succeeded" || !result.output) continue;
+    if (result.task.status !== "succeeded" || !result.output) return;
     const fit = Math.min(1, Math.max(0, Number.isFinite(result.output.fit) ? result.output.fit : 0));
     const nextStatus = fit >= threshold ? "queued" : "screened_out";
     const current = runtime.deps.store.getFounder(founder.id);
-    if (!current) continue;
+    if (!current) return;
     const preserveStatus = current.status !== "lead" || latestFeedback(runtime).get(founder.id)?.verdict === "no";
     runtime.deps.store.updateFounder(founder.id, {
       fit,
@@ -625,7 +640,7 @@ async function runScreen(runtime: EngineRuntime): Promise<void> {
       updatedAt: runtime.now().toISOString(),
     });
     runtime.addStats({ screened: 1, screenedIn: nextStatus === "queued" ? 1 : 0 });
-  }
+  });
 }
 
 /** How many of a founder's repositories are considered before one is chosen for review. */
@@ -695,34 +710,110 @@ function noCall(founderId: string, calls: ReadonlyMap<string, Feedback>): boolea
   return calls.get(founderId)?.verdict === "no";
 }
 
+/** Below this the vendor is not sure enough that its record is the person asked for. */
+const VENDOR_MATCH_FLOOR = 0.6;
+
+function vendorExcerpt(record: PersonRecord): string {
+  const span = (start: string | null, end: string | null) => (start || end ? ` (${start ?? "?"} to ${end ?? "now"})` : "");
+  const lines: string[] = [];
+  if (record.current?.title || record.current?.company) {
+    lines.push(`Current: ${record.current.title ?? "role not given"} at ${record.current.company ?? "company not given"}${record.current.startDate ? ` since ${record.current.startDate}` : ""}.`);
+  }
+  for (const role of record.experience.slice(0, 6)) {
+    if (!role.title && !role.company) continue;
+    lines.push(`${role.title ?? "Role not given"} at ${role.company ?? "company not given"}${span(role.startDate, role.endDate)}.`);
+  }
+  for (const school of record.education.slice(0, 3)) {
+    if (!school.school) continue;
+    lines.push(`Studied at ${school.school}${school.degrees.length ? `, ${school.degrees.join(", ")}` : ""}${span(school.startDate, school.endDate)}.`);
+  }
+  return lines.join(" ");
+}
+
+/**
+ * A data vendor's record of a founder's work history, when a vendor is connected. Asked for once
+ * per founder, because each record costs a vendor credit. The record is filed as unverified
+ * evidence and goes through the fact-check like anything else: a vendor can match the wrong
+ * person, and its record can be out of date.
+ */
+async function enrichFromVendor(runtime: EngineRuntime, founder: Founder): Promise<void> {
+  const people = runtime.deps.people;
+  if (!people || runtime.run.sources !== "live" || founder.simId) return;
+  if (runtime.deps.store.listEvidence(founder.id).some((item) => item.source === "people_data")) return;
+  const agent = runtime.agents.find((candidate) => candidate.jobId === "investigate.background");
+  if (!agent || agent.status === "paused") return;
+  const inputSummary = `Look up ${founder.name}'s work history with ${people.vendor}.`;
+  try {
+    const record = await people.enrich({ name: founder.name, company: founder.company.name });
+    const confident = record !== null && (record.matchConfidence ?? 0) >= VENDOR_MATCH_FLOOR;
+    const excerpt = confident ? redactSensitive(vendorExcerpt(record)) : "";
+    if (!confident || !excerpt) {
+      runtime.recordPlainTask({
+        agent, stage: "investigate", jobId: "investigate.background", status: "skipped",
+        provider: NO_MODEL_PROVIDER, model: NO_MODEL_NAME, founderId: founder.id, inputSummary,
+        skipReason: record ? "The vendor's match was not confident enough to use." : "The vendor has no record for this person.",
+      });
+      return;
+    }
+    const task = runtime.recordPlainTask({
+      agent, stage: "investigate", jobId: "investigate.background", status: "succeeded",
+      provider: NO_MODEL_PROVIDER, model: NO_MODEL_NAME, founderId: founder.id, inputSummary,
+      outputSummary: `Found a record, last verified ${record.lastVerifiedAt ?? "at an unknown date"}.`, itemsOut: 1,
+    });
+    addEvidence(runtime, founder.id, task.id, "people_data", [{
+      kind: "profile",
+      // A pointer a person can open. Nothing here requests it.
+      url: record.profileUrl,
+      title: `Work history from ${record.vendor}`,
+      excerpt,
+      claim: `${record.vendor} records this work history and education for ${founder.name}${record.lastVerifiedAt ? `, last verified ${record.lastVerifiedAt}` : ""}.`,
+      publishedAt: null,
+    }]);
+  } catch (error) {
+    // A vendor being down or out of allowance must not cost the founder their investigation.
+    recordFailedPlainTask(runtime, { agent, stage: "investigate", jobId: "investigate.background", founderId: founder.id, inputSummary, error });
+  }
+}
+
 async function runInvestigate(runtime: EngineRuntime, assessmentCandidates: Set<string>): Promise<void> {
   runtime.setStage("investigate");
   const limit = numberParam("investigate.max_founders", runtime.resolve(null, "investigate.max_founders"), runtime.config);
   const candidates = recheckCandidates(runtime, Math.max(0, limit));
   const agents = runtime.agents.filter((agent) => isInvestigatorJob(agent.jobId));
-  let selectedCount = 0;
+  const selected: Founder[] = [];
   for (const founder of candidates) {
-    if (runtime.stopped()) return;
     if (noCall(founder.id, latestFeedback(runtime))) {
       assessmentCandidates.add(founder.id);
       continue;
     }
-    if (selectedCount >= Math.max(0, limit)) break;
-    selectedCount += 1;
-    let didWork = false;
-    for (const agent of agents) {
-      if (runtime.stopped()) return;
-      if (noCall(founder.id, latestFeedback(runtime))) {
-        assessmentCandidates.add(founder.id);
-        break;
-      }
+    if (selected.length >= Math.max(0, limit)) break;
+    selected.push(founder);
+  }
+
+  await forEachConcurrent(selected, runtime.concurrency, runtime.stopped, async (founder) => {
+    if (runtime.stopped()) return;
+    const current = runtime.deps.store.getFounder(founder.id);
+    if (!current) return;
+    const history = runtime.deps.store.assessmentHistory(current.id);
+    const previousAssessment = runtime.deps.store.latestAssessment(current.id);
+    const previousJudgments = new Map(previousAssessment?.judgments.map((judgment) => [judgment.dimension, judgment]));
+    const gaps: GapQuestion[] = previousAssessment
+      ? DIMENSIONS.flatMap((dimension) => {
+          const judgment = previousJudgments.get(dimension.id);
+          return judgment && (judgment.level === null || judgment.confidence < 0.5)
+            ? [{ dimension: dimension.id, label: dimension.label, question: dimension.question }]
+            : [];
+        })
+      : [];
+    const depthFor = (agent: Agent): InvestigateInput["depth"] => current.status === "needs_evidence" && history.length === 1
+      ? "deep"
+      : stringParam("investigate.depth", runtime.resolve(agent, "investigate.depth"), runtime.config) as InvestigateInput["depth"];
+    await enrichFromVendor(runtime, current);
+    const known = allEvidenceBriefs(runtime, current.id);
+    const work = await Promise.all(agents.map(async (agent) => {
+      if (runtime.stopped() || noCall(founder.id, latestFeedback(runtime))) return null;
       const jobId = agent.jobId as InvestigatorJobId;
-      const current = runtime.deps.store.getFounder(founder.id);
-      if (!current) break;
-      const history = runtime.deps.store.assessmentHistory(current.id);
-      const depth = current.status === "needs_evidence" && history.length === 1
-        ? "deep"
-        : stringParam("investigate.depth", runtime.resolve(agent, "investigate.depth"), runtime.config) as InvestigateInput["depth"];
+      const depth = depthFor(agent);
       if (agent.status === "paused" || !getJob(jobId).enabled) {
         const result = await runtime.runJob({
           agent,
@@ -731,14 +822,14 @@ async function runInvestigate(runtime: EngineRuntime, assessmentCandidates: Set<
           input: {
             founder: founderBrief(runtime, current),
             thesis: runtime.swarm.thesis,
-            known: allEvidenceBriefs(runtime, current.id),
+            known,
             depth,
             repo: null,
+            gaps,
           },
           founderId: current.id,
         });
-        if (!result) return;
-        continue;
+        return result ? { agent, jobId, current, result } : null;
       }
 
       let repo: RepoRef | null = null;
@@ -747,7 +838,7 @@ async function runInvestigate(runtime: EngineRuntime, assessmentCandidates: Set<
       try {
         if (jobId === "investigate.code") {
           const repos = await runtime.deps.repos[runtime.run.sources].topRepos(current.links, current.simId, REPO_CANDIDATES);
-          if (runtime.stopped()) return;
+          if (runtime.stopped()) return null;
           repo = pickRepo(repos, current);
           if (!repo) {
             runtime.recordPlainTask({
@@ -761,7 +852,7 @@ async function runInvestigate(runtime: EngineRuntime, assessmentCandidates: Set<
               inputSummary: `Find a public repository to review for ${current.name}.`,
               skipReason: "No public repository found",
             });
-            continue;
+            return null;
           }
           if (runtime.run.sources === "live") {
             const checkout = await runtime.deps.repos.live.checkout(repo);
@@ -783,22 +874,20 @@ async function runInvestigate(runtime: EngineRuntime, assessmentCandidates: Set<
                 inputSummary: `Prepare ${repo.name} for read-only review by ${current.name}.`,
                 skipReason: "The public repository could not be checked out for review.",
               });
-              continue;
+              return null;
             }
           }
         }
 
-        if (noCall(founder.id, latestFeedback(runtime))) {
-          assessmentCandidates.add(founder.id);
-          continue;
-        }
+        if (runtime.stopped() || noCall(founder.id, latestFeedback(runtime))) return null;
 
         const input: InvestigateInput = {
           founder: founderBrief(runtime, current),
           thesis: runtime.swarm.thesis,
-          known: allEvidenceBriefs(runtime, current.id),
+          known,
           depth,
           repo,
+          gaps,
         };
         const result = await runtime.runJob({
           agent,
@@ -808,13 +897,8 @@ async function runInvestigate(runtime: EngineRuntime, assessmentCandidates: Set<
           founderId: current.id,
           repoDir,
         });
-        if (!result) return;
-        if (result.task.status !== "succeeded" || !result.output) continue;
-        didWork = true;
-        applyProfileUpdate(runtime, current.id, result.output.profile);
-        const source = getJob(jobId).source ?? "web";
-        addEvidence(runtime, current.id, result.task.id, source, result.output.evidence);
-        runtime.persist();
+        if (!result) return null;
+        return { agent, jobId, current, result };
       } catch (error) {
         recordFailedPlainTask(runtime, {
           agent,
@@ -826,6 +910,7 @@ async function runInvestigate(runtime: EngineRuntime, assessmentCandidates: Set<
             : `Investigate ${current.name} with ${jobId}.`,
           error,
         });
+        return null;
       } finally {
         if (cleanup) {
           try {
@@ -839,12 +924,21 @@ async function runInvestigate(runtime: EngineRuntime, assessmentCandidates: Set<
           }
         }
       }
+    }));
+    let didWork = false;
+    for (const entry of work) {
+      if (!entry || entry.result.task.status !== "succeeded" || !entry.result.output) continue;
+      didWork = true;
+      applyProfileUpdate(runtime, current.id, entry.result.output.profile);
+      const source = getJob(entry.jobId).source ?? "web";
+      addEvidence(runtime, current.id, entry.result.task.id, source, entry.result.output.evidence);
+      runtime.persist();
     }
     if (didWork) {
       assessmentCandidates.add(founder.id);
       runtime.addStats({ investigated: 1 });
     }
-  }
+  });
 }
 
 async function runVerify(runtime: EngineRuntime, assessmentCandidates: Set<string>): Promise<void> {
@@ -853,19 +947,85 @@ async function runVerify(runtime: EngineRuntime, assessmentCandidates: Set<strin
   if (!agent) return;
   const founders = runtime.deps.store.listFounders({ swarmId: runtime.swarm.id })
     .sort((a, b) => a.firstSeenAt.localeCompare(b.firstSeenAt) || a.id.localeCompare(b.id));
+  const quoteCheckEnabled = booleanParam("verify.quote_check", runtime.resolve(agent, "verify.quote_check"), runtime.config);
+  const controlEnabled = booleanParam("verify.control", runtime.resolve(agent, "verify.control"), runtime.config);
 
-  for (const founder of founders) {
+  await forEachConcurrent(founders, runtime.concurrency, runtime.stopped, async (founder) => {
     if (runtime.stopped()) return;
-    const evidence = runtime.deps.store.listEvidence(founder.id, { verifications: ["unverified"] })
+    let evidence = runtime.deps.store.listEvidence(founder.id, { verifications: ["unverified"] })
       .filter((item) => item.kind !== "call_transcript");
-    if (evidence.length === 0) continue;
-    const input: VerifyInput = {
-      founder: founderBrief(runtime, founder),
-      evidence: evidence.map(evidenceBrief),
-    };
+    if (evidence.length === 0) return;
+
+    if (runtime.deps.quotes && runtime.run.sources === "live" && quoteCheckEnabled) {
+      const eligible = evidence.filter((item) => {
+        if (item.source !== "web" || item.kind === "code_review" || !item.url) return false;
+        try {
+          const protocol = new URL(item.url).protocol;
+          return protocol === "http:" || protocol === "https:";
+        } catch {
+          return false;
+        }
+      });
+      let rejectedByQuote = 0;
+      await forEachConcurrent(eligible, Math.min(runtime.concurrency, 3), runtime.stopped, async (item) => {
+        if (runtime.stopped()) return;
+        let status: "found" | "not_found" | "unreachable";
+        try {
+          ({ status } = await runtime.deps.quotes!.check(item.url!, item.excerpt, runtime.signal));
+        } catch {
+          status = "unreachable";
+        }
+        runtime.deps.store.setQuote(item.id, status);
+        item.quote = status;
+        if (status === "not_found") {
+          runtime.deps.store.setVerification(item.id, "unsupported", "The quoted words are not on the page it cites.");
+          rejectedByQuote += 1;
+        }
+      });
+      if (rejectedByQuote > 0) {
+        runtime.addStats({ evidenceRejected: rejectedByQuote, quotesRejected: rejectedByQuote });
+        assessmentCandidates.add(founder.id);
+      }
+      evidence = evidence.filter((item) => item.quote !== "not_found");
+    }
+    if (evidence.length === 0 || runtime.stopped()) return;
+
+    const batchBriefs = evidence.map(evidenceBrief);
+    let controlId: string | null = null;
+    if (controlEnabled) {
+      const rng = createRng(hashSeed(runtime.run.id, agent.id, founder.id, 1));
+      const control = plantControl(batchBriefs, rng, `${runtime.run.id}:${founder.id}`);
+      if (control) {
+        const insertAt = Math.floor(rng() * (batchBriefs.length + 1));
+        controlId = control.id;
+        batchBriefs.splice(insertAt, 0, control.brief);
+      }
+    }
+
+    const input: VerifyInput = { founder: founderBrief(runtime, founder), evidence: batchBriefs };
     const result = await runtime.runJob({ agent, stage: "verify", jobId: "verify.claims", input, founderId: founder.id });
-    if (!result) return;
-    if (result.task.status !== "succeeded" || !result.output) continue;
+    if (!result || result.task.status !== "succeeded" || !result.output) return;
+
+    const controlVerdict = controlId
+      ? result.output.verdicts.find((verdict) => verdict.evidenceId === controlId)?.verdict
+      : undefined;
+    const controlFailed = controlId !== null && controlVerdict === "supported";
+    if (controlId !== null) {
+      const safeOutput = {
+        ...result.output,
+        verdicts: result.output.verdicts.filter((verdict) => verdict.evidenceId !== controlId),
+      };
+      runtime.deps.store.updateTask(result.task.id, {
+        control: controlFailed ? "failed" : "passed",
+        output: safeOutput,
+        outputSummary: runtime.deps.jobs.get("verify.claims").summarizeOutput(safeOutput),
+      });
+      if (controlFailed) runtime.addStats({ controlsFailed: 1 });
+    }
+    if (controlFailed) {
+      runtime.persist();
+      return;
+    }
 
     const evidenceIds = new Set(evidence.map((item) => item.id));
     const verdicts = new Map(result.output.verdicts
@@ -873,7 +1033,6 @@ async function runVerify(runtime: EngineRuntime, assessmentCandidates: Set<strin
       .map((verdict) => [verdict.evidenceId, verdict] as const));
     let rejected = 0;
     for (const [evidenceId, verdict] of verdicts) {
-      if (runtime.stopped()) return;
       runtime.deps.store.setVerification(evidenceId, verdict.verdict, verdict.note);
       if (verdict.verdict !== "supported") rejected += 1;
     }
@@ -884,7 +1043,7 @@ async function runVerify(runtime: EngineRuntime, assessmentCandidates: Set<strin
     if (rejected > 0) runtime.addStats({ evidenceRejected: rejected });
     if (verdicts.size > 0) assessmentCandidates.add(founder.id);
     runtime.persist();
-  }
+  });
 }
 
 function partnerNotes(runtime: EngineRuntime, founderId: string): string[] {
@@ -916,15 +1075,19 @@ async function runAssess(runtime: EngineRuntime, candidateIds: Set<string>): Pro
   const recheckDays = numberParam("recheck.days", runtime.resolve(null, "recheck.days"), runtime.config);
   const evidenceIds = new Set(candidateIds);
 
-  for (const founderId of [...evidenceIds].sort()) {
+  const founderIds = [...evidenceIds].sort();
+  await forEachConcurrent(founderIds, runtime.concurrency, runtime.stopped, async (founderId) => {
     if (runtime.stopped()) return;
     const founder = runtime.deps.store.getFounder(founderId);
-    if (!founder || founder.swarmId !== runtime.swarm.id) continue;
+    if (!founder || founder.swarmId !== runtime.swarm.id) return;
     // The analyst sees only what the fact-checker supported. If nothing has been checked yet
     // (the fact-check failed or was paused), the founder waits for a later run instead of being
     // scored on nothing and passed.
-    const evidence = runtime.deps.store.listEvidence(founder.id, { verifications: ["supported"] });
-    if (evidence.length === 0 && runtime.deps.store.listEvidence(founder.id, { verifications: ["unverified"] }).length > 0) continue;
+    const founderEvidence = (verifications: Evidence["verification"][]) => runtime.deps.store
+      .listEvidence(founder.id, { verifications })
+      .filter((item) => !item.facet && !(item.kind === "call_transcript" && item.collectedByTaskId === null));
+    const evidence = founderEvidence(["supported"]);
+    if (evidence.length === 0 && founderEvidence(["unverified"]).length > 0) return;
     const input: AssessInput = {
       founder: founderBrief(runtime, founder),
       thesis: runtime.swarm.thesis,
@@ -933,7 +1096,7 @@ async function runAssess(runtime: EngineRuntime, candidateIds: Set<string>): Pro
     };
     const result = await runtime.runJob({ agent, stage: "assess", jobId: "assess.judgments", input, founderId: founder.id });
     if (!result) return;
-    if (result.task.status !== "succeeded" || !result.output) continue;
+    if (result.task.status !== "succeeded" || !result.output) return;
 
     // An answer counts only if it rests on verified evidence that was actually supplied.
     const judgments = groundJudgments(result.output.judgments, new Set(input.evidence.map((item) => item.id)));
@@ -990,7 +1153,7 @@ async function runAssess(runtime: EngineRuntime, candidateIds: Set<string>): Pro
       watch: score.decision === "watch" ? 1 : 0,
       passed: score.decision === "pass" ? 1 : 0,
     });
-  }
+  });
 }
 
 /** Execute the core lifecycle stages in their contract order. */
@@ -1007,7 +1170,17 @@ export async function runPipelineStages(runtime: EngineRuntime): Promise<void> {
   if (runtime.stopped()) return;
   await runInvestigate(runtime, assessmentCandidates);
   if (runtime.stopped()) return;
+  // Companies: match them to founders, then research the ones worth a look. Their evidence is
+  // filed under a founder, so the fact-check below covers it with everything else.
+  const companyCandidates = new Set<string>();
+  await runCompanyResolve(runtime);
+  if (runtime.stopped()) return;
+  await runCompanyResearch(runtime, companyCandidates);
+  if (runtime.stopped()) return;
   await runVerify(runtime, assessmentCandidates);
   if (runtime.stopped()) return;
   await runAssess(runtime, assessmentCandidates);
+  if (runtime.stopped()) return;
+  // After the founders, because a company's decision uses its lead founder's fresh score.
+  await runCompanyAssess(runtime, companyCandidates);
 }

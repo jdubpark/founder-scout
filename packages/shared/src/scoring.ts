@@ -13,6 +13,7 @@
  * profile cannot rank above a well-evidenced one by being unknown.
  */
 
+import { COMPANY_DIMENSIONS, type CompanyDimensionId } from "./company";
 import { CRACKED_DIMENSIONS, DIMENSIONS, FOUNDER_DIMENSIONS, type DimensionId } from "./rubric";
 import type { Thresholds } from "./steering";
 
@@ -231,4 +232,227 @@ export function scoreFounder(input: ScoreInput): ScoreResult {
 
 function pct(n: number): string {
   return `${Math.round(n * 100)}%`;
+}
+
+/* ------------------------------------------------------------------ */
+/* Companies                                                            */
+/* ------------------------------------------------------------------ */
+
+export interface CompanyJudgmentInput {
+  dimension: CompanyDimensionId;
+  /** null = the evidence does not settle this question. */
+  level: Level | null;
+  /** 0..1 */
+  confidence: number;
+}
+
+export interface CompanyDimensionScore {
+  dimension: CompanyDimensionId;
+  level: Level | null;
+  confidence: number;
+  weight: number;
+  /** 0..1 after shrinkage toward the prior. */
+  value: number;
+  /** This dimension's share of the company score, in score points. */
+  contribution: number;
+}
+
+export interface CompanyScoreInput {
+  judgments: readonly CompanyJudgmentInput[];
+  weights: Record<CompanyDimensionId, number>;
+  /** The value an unanswered question contributes. Same prior as for founders. */
+  unknownPrior: number;
+}
+
+export interface CompanyScoreResult {
+  /** 0..1 across every weighted company dimension. */
+  composite: number;
+  /** 0..1 share of the company rubric backed by confident evidence. */
+  coverage: number;
+  /** 0..1 what the answers so far suggest, ignoring unanswered questions. null when nothing is answered. */
+  potential: number | null;
+  /** true when a significant company claim appears to be contradicted by a reliable source. */
+  claimsCritical: boolean;
+  flags: ScoreFlag[];
+  breakdown: CompanyDimensionScore[];
+}
+
+/**
+ * Score a company from its rubric answers. The arithmetic is the same as for a founder:
+ * each answer counts level/4, shrunk toward the prior by how unsure the model was.
+ */
+export function scoreCompany(input: CompanyScoreInput): CompanyScoreResult {
+  const prior = clamp01(input.unknownPrior);
+  const byDimension = new Map<CompanyDimensionId, CompanyJudgmentInput>();
+  for (const j of input.judgments) byDimension.set(j.dimension, j);
+
+  const totalWeight = COMPANY_DIMENSIONS.reduce((sum, d) => sum + Math.max(0, input.weights[d.id] ?? 0), 0);
+  const breakdown: CompanyDimensionScore[] = COMPANY_DIMENSIONS.map((d) => {
+    const weight = Math.max(0, input.weights[d.id] ?? 0);
+    const j = byDimension.get(d.id);
+    const answered = j !== undefined && j.level !== null;
+    const confidence = answered ? clamp01(j.confidence) : 0;
+    const raw = answered ? (j.level as Level) / 4 : prior;
+    const value = confidence * raw + (1 - confidence) * prior;
+    return {
+      dimension: d.id,
+      level: answered ? (j.level as Level) : null,
+      confidence: round(confidence),
+      weight,
+      value: round(value),
+      contribution: totalWeight > 0 ? round((weight * value) / totalWeight) : 0,
+    };
+  });
+
+  const composite =
+    totalWeight > 0 ? breakdown.reduce((sum, s) => sum + s.weight * s.value, 0) / totalWeight : 0;
+  const evidenceWeight = breakdown.reduce((sum, s) => sum + s.weight * s.confidence, 0);
+  const coverage = totalWeight > 0 ? evidenceWeight / totalWeight : 0;
+  const potential =
+    evidenceWeight > 0
+      ? breakdown.reduce(
+          (sum, s) => sum + s.weight * s.confidence * (s.level === null ? 0 : s.level / 4),
+          0,
+        ) / evidenceWeight
+      : null;
+
+  const claims = breakdown.find((s) => s.dimension === "claims");
+  const settled = claims !== undefined && claims.level !== null && claims.confidence >= 0.6;
+  const claimsCritical = settled && claims.level === 0;
+  const flags: ScoreFlag[] = [];
+  if (claimsCritical) {
+    flags.push({
+      code: "integrity_critical",
+      severity: "critical",
+      message:
+        "A significant company claim appears to be contradicted by a reliable source. A person should review the evidence before any contact.",
+    });
+  } else if (settled && (claims.level as Level) <= 1) {
+    flags.push({
+      code: "integrity_concern",
+      severity: "warning",
+      message: "Several company claims look inflated compared with the record.",
+    });
+  }
+
+  return {
+    composite: round(composite),
+    coverage: round(coverage),
+    potential: potential === null ? null : round(potential),
+    claimsCritical,
+    flags,
+    breakdown,
+  };
+}
+
+/** The lead founder's latest score, as far as a deal needs it. */
+export interface TeamScore {
+  composite: number;
+  coverage: number;
+  potential: number | null;
+  /** true when the founder's own assessment is held for a possible misrepresentation. */
+  integrityCritical: boolean;
+}
+
+export interface DealInput {
+  company: CompanyScoreResult;
+  /** null when no founder of this company has been assessed yet. */
+  team: TeamScore | null;
+  /** Thesis fit 0..1 of the lead founder, or null if not screened. */
+  fit: number | null;
+  thresholds: Thresholds;
+  /** 0..1 share of the deal score that comes from the founders. The rest comes from the company. */
+  teamShare: number;
+}
+
+export interface DealResult {
+  /** 0..1 the founders and the company together. */
+  score: number;
+  coverage: number;
+  potential: number | null;
+  decision: Decision;
+  reasons: string[];
+  flags: ScoreFlag[];
+}
+
+/**
+ * Combine the founders and the company into one decision.
+ *
+ * The same bars apply as for a founder. With no assessed founder the company stands alone,
+ * and that is said in the reasons, because half of the picture is missing.
+ */
+export function decideDeal(input: DealInput): DealResult {
+  const { company, team, thresholds } = input;
+  const share = team === null ? 0 : clamp01(input.teamShare);
+  const score = team === null ? company.composite : share * team.composite + (1 - share) * company.composite;
+  const coverage = team === null ? company.coverage : share * team.coverage + (1 - share) * company.coverage;
+  let potential: number | null;
+  if (team === null || team.potential === null) potential = company.potential;
+  else if (company.potential === null) potential = null;
+  else potential = share * team.potential + (1 - share) * company.potential;
+
+  const flags: ScoreFlag[] = [...company.flags];
+  const reasons: string[] = [];
+  if (team === null) reasons.push("No founder of this company has been assessed yet, so this is the company score alone.");
+
+  const outsideThesis = input.fit !== null && input.fit < thresholds.minFit;
+  const held = company.claimsCritical || team?.integrityCritical === true;
+  let decision: Decision;
+
+  if (held) {
+    // Never surfaced automatically and never silently dropped: a person decides.
+    decision = "watch";
+    reasons.push("Held for human review because of a possible material misrepresentation.");
+    if (team?.integrityCritical && !company.claimsCritical) {
+      flags.push({
+        code: "integrity_critical",
+        severity: "critical",
+        message: "A founder of this company is held for a possible misrepresentation.",
+      });
+    }
+    if (outsideThesis) {
+      flags.push({ code: "outside_thesis", severity: "info", message: "Thesis fit is below the minimum for this swarm." });
+    }
+  } else if (outsideThesis) {
+    decision = "pass";
+    flags.push({ code: "outside_thesis", severity: "info", message: "Thesis fit is below the minimum for this swarm." });
+    reasons.push(`Thesis fit ${pct(input.fit as number)} is below the minimum of ${pct(thresholds.minFit)}.`);
+  } else if (score >= thresholds.surface && coverage >= thresholds.minCoverage) {
+    decision = "surface";
+    reasons.push(
+      `Founders and company together score ${pct(score)}, at or above the bar of ${pct(thresholds.surface)}, with ${pct(coverage)} backed by evidence.`,
+    );
+  } else if (potential !== null && potential >= thresholds.surface) {
+    decision = "needs_evidence";
+    const thin = coverage < thresholds.minCoverage;
+    flags.push({
+      code: "thin_evidence",
+      severity: "info",
+      message: thin
+        ? "What is known looks strong, but too little of it is backed by evidence."
+        : "What is known looks strong, but the evidence is not yet firm enough to be sure.",
+    });
+    reasons.push(
+      thin
+        ? `The evidence so far points to ${pct(potential)}, but only ${pct(coverage)} is covered (minimum ${pct(thresholds.minCoverage)}). More evidence is needed.`
+        : `The evidence so far points to ${pct(potential)}, above the bar of ${pct(thresholds.surface)}, but it is not firm enough yet: the score is ${pct(score)}. More evidence is needed.`,
+    );
+  } else if (score >= thresholds.watch) {
+    decision = "watch";
+    reasons.push(
+      `Founders and company together score ${pct(score)}, between the watch bar of ${pct(thresholds.watch)} and the surface bar of ${pct(thresholds.surface)}.`,
+    );
+  } else {
+    decision = "pass";
+    reasons.push(`Founders and company together score ${pct(score)}, below the watch bar of ${pct(thresholds.watch)}.`);
+  }
+
+  return {
+    score: round(score),
+    coverage: round(coverage),
+    potential: potential === null ? null : round(potential),
+    decision,
+    reasons,
+    flags,
+  };
 }

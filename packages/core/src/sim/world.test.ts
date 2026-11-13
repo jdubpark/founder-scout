@@ -1,7 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
+  COMPANY_DIMENSIONS,
   DIMENSIONS,
+  EVIDENCE_FACETS,
   EMPTY_LINKS,
+  type DimensionId,
   type JobId,
   type SourceId,
   PROHIBITED_ATTRIBUTES,
@@ -28,6 +31,8 @@ const INVESTIGATION_JOBS = [
   "investigate.media",
   "investigate.redflags",
 ] as const satisfies readonly JobId[];
+
+const COMPANY_JOBS = ["company.product", "company.traction", "company.team"] as const satisfies readonly JobId[];
 
 const EXPECTED_DIMENSIONS: Readonly<Record<(typeof INVESTIGATION_JOBS)[number], readonly string[]>> = {
   "investigate.background": ["slope", "grit", "magnetism"],
@@ -193,6 +198,161 @@ describe("simulated source items", () => {
   });
 });
 
+describe("synthetic companies", () => {
+  const founders = WORLD.founders();
+
+  it("creates deterministic fictional companies linked to every founder", () => {
+    const sameSeed = createSimWorld();
+    const otherSeed = createSimWorld({ seed: 8 });
+    for (const founder of founders) {
+      const company = WORLD.company(founder.simId);
+      expect(company).toBeDefined();
+      expect(sameSeed.company(founder.simId)).toEqual(company);
+      expect(otherSeed.company(founder.simId)).not.toEqual(company);
+      expect(company).toMatchObject({
+        simId: founder.simId,
+        name: founder.companyName,
+        oneLiner: founder.companyOneLiner,
+        sector: founder.sector,
+        stage: founder.stage,
+      });
+      expect(new URL(company!.url).hostname.endsWith(".example")).toBe(true);
+      expect(company!.mission.trim()).toMatch(/\.$/);
+      expect(company!.quality).toBeGreaterThanOrEqual(0);
+      expect(company!.quality).toBeLessThanOrEqual(1);
+      expect(Object.keys(company!.latent).sort()).toEqual(COMPANY_DIMENSIONS.map(({ id }) => id).sort());
+      expect(Object.values(company!.latent).every((value) => value >= 0 && value <= 1)).toBe(true);
+      expect(company!.team.length).toBeLessThanOrEqual(4);
+      for (const member of company!.team) {
+        expect(member.name).toMatch(/^[A-Z][a-z]+ [A-Z][a-z]+(?: [0-9]+)?$/);
+        expect(member.role).toBeTruthy();
+        expect(member.isFounder).toBe(/co-founder/i.test(member.role ?? ""));
+        expect(member.background).toMatch(/\.$/);
+        expect(new URL(member.sourceUrl!).hostname.endsWith(".example")).toBe(true);
+        expect(Object.values(member.links)).toEqual([null, null, null, null, null]);
+      }
+    }
+    expect(WORLD.company("missing-founder")).toBeUndefined();
+  });
+
+  it("keeps company generation isolated from all existing founder streams", () => {
+    const exercised = createSimWorld();
+    const fresh = createSimWorld();
+    for (const founder of exercised.founders().slice(0, 180)) {
+      for (let repeat = 0; repeat < 3; repeat += 1) {
+        exercised.company(founder.simId);
+        for (const job of COMPANY_JOBS) {
+          exercised.companyEvidenceFor(founder.simId, job, ["quick", "standard", "deep"][repeat] as "quick" | "standard" | "deep");
+        }
+      }
+    }
+    expect(exercised.founders()).toEqual(fresh.founders());
+    for (const founder of fresh.founders().slice(0, 120)) {
+      expect(exercised.itemsFor("hackernews", founder.appearsOnDay, 1_000)).toEqual(
+        fresh.itemsFor("hackernews", founder.appearsOnDay, 1_000),
+      );
+      expect(exercised.evidenceFor(founder.simId, "investigate.company", "deep")).toEqual(
+        fresh.evidenceFor(founder.simId, "investigate.company", "deep"),
+      );
+    }
+  });
+
+  it("returns correctly faceted evidence that grows with depth", () => {
+    const founder = founders[0]!;
+    const company = WORLD.company(founder.simId)!;
+    const sameSeed = createSimWorld();
+    expect(sameSeed.companyEvidenceFor(founder.simId, "company.product", "deep")).toEqual(
+      WORLD.companyEvidenceFor(founder.simId, "company.product", "deep"),
+    );
+    expect(createSimWorld({ seed: 8 }).companyEvidenceFor(founder.simId, "company.product", "deep"))
+      .not.toEqual(WORLD.companyEvidenceFor(founder.simId, "company.product", "deep"));
+
+    const product = WORLD.companyEvidenceFor(founder.simId, "company.product", "standard");
+    const traction = WORLD.companyEvidenceFor(founder.simId, "company.traction", "standard");
+    const team = WORLD.companyEvidenceFor(founder.simId, "company.team", "standard");
+    const signalDimensions = {
+      mission: ["mission"],
+      product: ["product", "edge"],
+      roadmap: ["plan"],
+      market: ["market", "edge"],
+      risk: ["claims"],
+      traction: ["traction", "momentum"],
+      funding: ["momentum"],
+      team: ["team"],
+    } as const;
+    expect(product.map((item) => item.facet)).toEqual(expect.arrayContaining(["mission", "product", "roadmap", "market"]));
+    expect(traction.map((item) => item.facet)).toContain("traction");
+    expect(team.every((item) => item.facet === "team")).toBe(true);
+    for (const job of COMPANY_JOBS) {
+      const quick = WORLD.companyEvidenceFor(founder.simId, job, "quick");
+      const deep = WORLD.companyEvidenceFor(founder.simId, job, "deep");
+      expect(deep.length).toBeGreaterThan(quick.length);
+      expect(quick.every((item) => EVIDENCE_FACETS.includes(item.facet))).toBe(true);
+      expect(deep.every((item) => item.url && new URL(item.url).hostname.endsWith(".example"))).toBe(true);
+      expect(deep.every((item) => /^\d{4}-\d{2}-\d{2}$/.test(item.publishedAt ?? ""))).toBe(true);
+      expect(new Set(deep.map((item) => item.url)).size).toBe(deep.length);
+      expect(deep.every((item) => item.sim?.signals.length && item.sim.signals.every((signal) =>
+        (signalDimensions[item.facet] as readonly string[]).includes(signal.dimension),
+      ))).toBe(true);
+      expect(deep.every((item) => item.sim?.signals.every((signal) => signal.value >= 0 && signal.value <= 1))).toBe(true);
+      if (job === "company.product") {
+        const riskItems = WORLD.companyEvidenceFor(founder.simId, job, "standard").filter((item) => item.facet === "risk");
+        expect(riskItems).toHaveLength(company.latent.claims < 0.2 ? 1 : 0);
+        expect(riskItems.every((item) => item.sim?.truth === "contradicted" && /second company source/i.test(item.claim))).toBe(true);
+      }
+    }
+    const missionItem = product.find((item) => item.facet === "mission")!;
+    expect(missionItem.excerpt).toBe(company.mission);
+    expect(missionItem.sim?.signals).toEqual([expect.objectContaining({ dimension: "mission" })]);
+    const productItem = product.find((item) => item.facet === "product")!;
+    expect(productItem.sim?.signals.map((signal) => signal.dimension)).toEqual(["product", "edge"]);
+    expect(traction.find((item) => item.facet === "traction")?.sim?.signals.map((signal) => signal.dimension))
+      .toEqual(["traction", "momentum"]);
+    expect(traction.filter((item) => item.facet === "funding").every((item) => item.sim?.signals[0]?.dimension === "momentum")).toBe(true);
+    expect(WORLD.companyEvidenceFor("missing-founder", "company.product", "quick")).toEqual([]);
+    expect(WORLD.companyEvidenceFor(founder.simId, "investigate.company", "quick")).toEqual([]);
+  });
+
+  it("keeps company quality related to founders and company evidence signals tied to latent levels", () => {
+    const companies = founders.map((founder) => WORLD.company(founder.simId)!);
+    const qualityRelation = correlation(founders.map((founder) => founder.quality), companies.map((company) => company.quality));
+    const tractionLatent: number[] = [];
+    const tractionMeans: number[] = [];
+    for (const company of companies) {
+      const signals = ["quick", "standard", "deep"].flatMap((depth) =>
+        WORLD.companyEvidenceFor(company.simId, "company.traction", depth as "quick" | "standard" | "deep")
+          .flatMap((item) => item.sim?.signals.filter((signal) => signal.dimension === "traction").map((signal) => signal.value) ?? []),
+      );
+      tractionLatent.push(company.latent.traction);
+      tractionMeans.push(average(signals));
+    }
+    const tractionRelation = correlation(tractionLatent, tractionMeans);
+    expect(qualityRelation).toBeGreaterThan(0.3);
+    expect(qualityRelation).toBeLessThan(0.9);
+    expect(tractionRelation).toBeGreaterThan(0.6);
+  });
+
+  it("keeps generated company text clear of prohibited attributes and simulator fields", () => {
+    const text: string[] = [];
+    for (const founder of founders) {
+      const company = WORLD.company(founder.simId)!;
+      text.push(company.name, company.url, company.oneLiner, company.mission, company.sector, company.stage);
+      for (const member of company.team) {
+        text.push(member.name, member.role ?? "", member.background ?? "", member.sourceUrl ?? "");
+      }
+      for (const job of COMPANY_JOBS) {
+        for (const item of WORLD.companyEvidenceFor(founder.simId, job, "standard")) {
+          text.push(item.title, item.excerpt, item.claim, item.url ?? "");
+        }
+      }
+    }
+    const content = text.join("\n");
+    expect(content).not.toMatch(/\b(?:age|aged|born|date of birth|year of birth|citizenship|national origin|religion|gender|pregnancy|disability|home address|personal phone|personal email)\b/i);
+    expect(content).not.toMatch(/\b(?:simId|simFounderId|latent|signals|truth)\b/i);
+    expect(PROHIBITED_ATTRIBUTES).toContain("age or date of birth");
+  });
+});
+
 describe("simulated investigations", () => {
   it("returns only the specified dimensions at each requested evidence depth", () => {
     for (const founder of WORLD.founders().slice(0, 80)) {
@@ -244,7 +404,9 @@ describe("simulated investigations", () => {
           if (!sim || sim.signals.length === 0) continue;
           if (sim.truth === "contradicted") throw new Error("The simulator only emits supported, unsupported, or wrong-person evidence.");
           const signal = sim.signals[0]!;
-          const truth = founder.latent[signal.dimension];
+          const dimension = signal.dimension as DimensionId;
+          expect(DIMENSIONS.some((item) => item.id === dimension)).toBe(true);
+          const truth = founder.latent[dimension];
           errors[sim.truth]!.push(Math.abs(signal.value - truth));
           const excerptBand = Math.floor(truth * 5) + 1;
           const claimedLevel = Number(item.claim.match(/level (\d)/)?.[1] ?? 0);

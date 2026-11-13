@@ -75,7 +75,7 @@ export default function OverviewPage() {
 
           <div className="grid grid-cols-1 gap-6 xl:grid-cols-[minmax(0,1fr)_20rem]">
             <Panel title="Surfaced" aside={<span>{count(data.topFounders.length)}</span>}>
-              <SurfacedAnnouncement rows={data.topFounders} />
+              <SurfacedAnnouncement rows={data.topFounders} companies={data.topCompanies ?? []} />
             </Panel>
 
             <Panel title="Needs you">

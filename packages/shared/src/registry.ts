@@ -36,6 +36,13 @@ export const AGENT_CLASSES = [
       "Collect evidence about background, technical work, company, public talks and risks, each with a source link.",
   },
   {
+    id: "company",
+    label: "Company researchers",
+    verb: "Size up",
+    description:
+      "Read what each company says and shows in public: its mission, product, progress, team and plans, each with a source link.",
+  },
+  {
     id: "verifier",
     label: "Fact-checkers",
     verb: "Check",
@@ -78,6 +85,7 @@ export type SourceId =
   | "people_data"
   | "web"
   | "call"
+  | "network"
   | "manual";
 
 export const SOURCES = [
@@ -101,8 +109,8 @@ export const SOURCES = [
   },
   {
     id: "people_data",
-    label: "Professional profiles (licensed)",
-    access: "Licensed data vendor only. The system never logs in to or scrapes LinkedIn.",
+    label: "Professional profiles (data vendor)",
+    access: "A data vendor's API under contract. Nothing here requests LinkedIn.",
     compliance: "licensed",
   },
   {
@@ -115,6 +123,12 @@ export const SOURCES = [
     id: "call",
     label: "Conversations",
     access: "Approved calls and emails only",
+    compliance: "consent",
+  },
+  {
+    id: "network",
+    label: "Your network",
+    access: "A partner's own exported contact list, uploaded by that partner. Name, company and position only.",
     compliance: "consent",
   },
   {
@@ -214,12 +228,12 @@ export const JOBS = [
   {
     id: "investigate.company",
     classId: "investigator",
-    label: "Company investigator",
+    label: "Role investigator",
     kind: "research",
     source: "web",
     enabled: true,
     description:
-      "What the company does, who it is for, early traction, and whether it has already raised money.",
+      "This person's own part in the company: their role, what they built or decided themselves, the insight behind it, and how big they are aiming.",
   },
   {
     id: "investigate.media",
@@ -240,6 +254,36 @@ export const JOBS = [
     enabled: true,
     description:
       "Looks for inconsistencies between public claims and the record. Professional conduct only.",
+  },
+  {
+    id: "company.product",
+    classId: "company",
+    label: "Product researcher",
+    kind: "research",
+    source: "web",
+    enabled: true,
+    description:
+      "The company's mission in its own words, what it has shipped, how it differs from the alternatives, and what it says comes next.",
+  },
+  {
+    id: "company.traction",
+    classId: "company",
+    label: "Traction researcher",
+    kind: "research",
+    source: "web",
+    enabled: true,
+    description:
+      "Dated public milestones: launches, releases, customers, usage, funding and hiring, and how fast they are arriving.",
+  },
+  {
+    id: "company.team",
+    classId: "company",
+    label: "Team researcher",
+    kind: "research",
+    source: "web",
+    enabled: true,
+    description:
+      "Who else is on the team, what each person does, and what relevant work they did before.",
   },
   {
     id: "verify.claims",
@@ -270,6 +314,16 @@ export const JOBS = [
     enabled: true,
     description:
       "Writes a one-page memo for founders above the bar: why now, strengths, risks, open questions, next step.",
+  },
+  {
+    id: "assess.company",
+    classId: "analyst",
+    label: "Company analyst",
+    kind: "structured",
+    source: null,
+    enabled: true,
+    description:
+      "Answers the company rubric from verified evidence only and writes the company brief.",
   },
   {
     id: "outreach.plan",

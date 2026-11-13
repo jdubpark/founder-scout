@@ -18,7 +18,12 @@ export type IdPrefix =
   | "tsk" // task
   | "dir" // directive
   | "cfg" // config
-  | "aud"; // audit entry
+  | "aud" // audit entry
+  | "cmp" // company
+  | "mem" // company team member
+  | "cas" // company assessment
+  | "cfb" // company feedback
+  | "net"; // contact from a partner's uploaded list
 
 export function newId(prefix: IdPrefix): string {
   const bytes = new Uint8Array(12);

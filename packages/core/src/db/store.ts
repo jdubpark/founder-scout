@@ -1,12 +1,18 @@
 import type Database from "better-sqlite3";
 import {
   DEFAULT_SETTINGS,
+  ZERO_STATS,
   type Agent,
   type FounderListDTO,
   type FounderQuery,
   type FounderRow,
   type Assessment,
   type AuditEntry,
+  type Company,
+  type CompanyAssessment,
+  type CompanyFeedback,
+  type CompanyMember,
+  type CompanyStatus,
   type Directive,
   type Evidence,
   type Feedback,
@@ -18,6 +24,7 @@ import {
   type OutreachAction,
   type OutreachStatus,
   type ProfileLinks,
+  type QuoteStatus,
   type Run,
   type Settings,
   type Swarm,
@@ -25,7 +32,9 @@ import {
   type TaskRun,
   type Verification,
   newId,
+  normalizeCompanyName,
 } from "@agentswarm/shared";
+import type { CompanyListDTO, CompanyQuery, CompanyRow } from "@agentswarm/shared";
 import type { NodeStatRow, Store } from "../contracts";
 
 type RecordRow = { record: string };
@@ -50,6 +59,24 @@ function clone<T>(value: T): T {
 
 function missing(kind: string, id: string): Error {
   return new Error(`${kind} ${id} not found`);
+}
+
+const companyStatuses: readonly CompanyStatus[] = ["tracked", "surfaced", "needs_evidence", "watch", "passed", "archived"];
+
+function normalizedRun(run: Run): Run {
+  return { ...run, stats: { ...ZERO_STATS, ...run.stats } };
+}
+
+function compareCompanyName(a: { name: string; id: string }, b: { name: string; id: string }): number {
+  return a.name.localeCompare(b.name) || a.id.localeCompare(b.id);
+}
+
+function normalizedProfileUrl(url: string): string {
+  return url.trim().toLowerCase().replace(/\/+$/, "");
+}
+
+function comparableNetworkValue(value: string | null): string {
+  return (value ?? "").trim().toLowerCase();
 }
 
 function rowRecords<T>(rows: readonly RecordRow[]): T[] {
@@ -239,9 +266,9 @@ export class SqliteStore implements Store {
 
   insertFounder(founder: Founder): void {
     this.transaction(() => {
-      this.db.prepare(`INSERT INTO founders (id, swarm_id, normalized_name, updated_at, next_recheck_at, status, record)
-        VALUES (?, ?, ?, ?, ?, ?, ?)`)
-        .run(founder.id, founder.swarmId, normalizeName(founder.name), founder.updatedAt, founder.nextRecheckAt, founder.status, serialize(founder));
+      this.db.prepare(`INSERT INTO founders (id, swarm_id, normalized_name, updated_at, next_recheck_at, status, company_id, record)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)`)
+        .run(founder.id, founder.swarmId, normalizeName(founder.name), founder.updatedAt, founder.nextRecheckAt, founder.status, founder.companyId ?? null, serialize(founder));
       saveFounderLinks(this.db, founder);
     });
   }
@@ -255,8 +282,8 @@ export class SqliteStore implements Store {
       const current = this.getFounder(id);
       if (current === null) throw missing("Founder", id);
       const updated = { ...current, ...patch };
-      this.db.prepare(`UPDATE founders SET normalized_name = ?, updated_at = ?, next_recheck_at = ?, status = ?, record = ? WHERE id = ?`)
-        .run(normalizeName(updated.name), updated.updatedAt, updated.nextRecheckAt, updated.status, serialize(updated), id);
+      this.db.prepare(`UPDATE founders SET normalized_name = ?, updated_at = ?, next_recheck_at = ?, status = ?, company_id = ?, record = ? WHERE id = ?`)
+        .run(normalizeName(updated.name), updated.updatedAt, updated.nextRecheckAt, updated.status, updated.companyId ?? null, serialize(updated), id);
       saveFounderLinks(this.db, updated);
       return updated;
     });
@@ -375,10 +402,221 @@ export class SqliteStore implements Store {
     return { rows: rows.slice(offset, offset + limit), total, counts };
   }
 
-  insertEvidence(evidence: Evidence): boolean {
-    const result = this.db.prepare(`INSERT OR IGNORE INTO evidence (id, founder_id, hash, captured_at, verification, record)
+  insertCompany(company: Company): void {
+    this.db.prepare(`INSERT INTO companies (id, swarm_id, domain, normalized_name, status, updated_at, next_recheck_at, record)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)`)
+      .run(company.id, company.swarmId, company.domain, normalizeCompanyName(company.name), company.status,
+        company.updatedAt, company.nextRecheckAt, serialize(company));
+  }
+
+  getCompany(id: string): Company | null {
+    return parse(this.db.prepare("SELECT record FROM companies WHERE id = ?").get(id) as RecordRow | undefined);
+  }
+
+  updateCompany(id: string, patch: Partial<Omit<Company, "id" | "swarmId">>): Company {
+    const current = this.getCompany(id);
+    if (current === null) throw missing("Company", id);
+    const updated = { ...current, ...patch };
+    this.db.prepare(`UPDATE companies SET domain = ?, normalized_name = ?, status = ?, updated_at = ?,
+      next_recheck_at = ?, record = ? WHERE id = ?`)
+      .run(updated.domain, normalizeCompanyName(updated.name), updated.status, updated.updatedAt,
+        updated.nextRecheckAt, serialize(updated), id);
+    return updated;
+  }
+
+  findCompanyByDomain(swarmId: string, domain: string): Company | null {
+    if (!domain) return null;
+    return parse(this.db.prepare("SELECT record FROM companies WHERE swarm_id = ? AND domain = ? ORDER BY rowid ASC LIMIT 1")
+      .get(swarmId, domain) as RecordRow | undefined);
+  }
+
+  findCompaniesByName(swarmId: string, normalizedName: string): Company[] {
+    if (!normalizedName) return [];
+    return rowRecords(this.db.prepare("SELECT record FROM companies WHERE swarm_id = ? AND normalized_name = ? ORDER BY rowid ASC")
+      .all(swarmId, normalizedName) as RecordRow[]);
+  }
+
+  listCompanies(filter: { swarmId: string; statuses?: CompanyStatus[] }): Company[] {
+    if (filter.statuses?.length === 0) return [];
+    const where = ["swarm_id = ?"];
+    const params: unknown[] = [filter.swarmId];
+    if (filter.statuses !== undefined) {
+      where.push(`status IN (${filter.statuses.map(() => "?").join(",")})`);
+      params.push(...filter.statuses);
+    }
+    return rowRecords(this.db.prepare(`SELECT record FROM companies WHERE ${where.join(" AND ")} ORDER BY updated_at DESC, id ASC`)
+      .all(...params) as RecordRow[]);
+  }
+
+  foundersOfCompany(companyId: string): Founder[] {
+    const founders = rowRecords<Founder>(this.db.prepare("SELECT record FROM founders WHERE company_id = ?")
+      .all(companyId) as RecordRow[]);
+    return founders.sort((a, b) => a.firstSeenAt.localeCompare(b.firstSeenAt) || a.id.localeCompare(b.id));
+  }
+
+  upsertCompanyMember(member: CompanyMember): CompanyMember {
+    const normalizedName = normalizeName(member.name);
+    const row = this.db.prepare("SELECT record FROM company_members WHERE company_id = ? AND normalized_name = ?")
+      .get(member.companyId, normalizedName) as RecordRow | undefined;
+    if (!row) {
+      this.db.prepare("INSERT INTO company_members (id, company_id, normalized_name, record) VALUES (?, ?, ?, ?)")
+        .run(member.id, member.companyId, normalizedName, serialize(member));
+      return member;
+    }
+    const previous = JSON.parse(row.record) as CompanyMember;
+    const links = { ...member.links };
+    for (const key of Object.keys(links) as Array<keyof CompanyMember["links"]>) {
+      if (links[key] === null) links[key] = previous.links[key];
+    }
+    const stored: CompanyMember = {
+      ...member,
+      id: previous.id,
+      addedAt: previous.addedAt,
+      role: member.role ?? previous.role,
+      background: member.background ?? previous.background,
+      sourceUrl: member.sourceUrl ?? previous.sourceUrl,
+      founderId: member.founderId ?? previous.founderId,
+      isFounder: member.isFounder || previous.isFounder,
+      links,
+    };
+    this.db.prepare("UPDATE company_members SET record = ? WHERE company_id = ? AND normalized_name = ?")
+      .run(serialize(stored), member.companyId, normalizedName);
+    return stored;
+  }
+
+  listCompanyMembers(companyId: string): CompanyMember[] {
+    const members = rowRecords<CompanyMember>(this.db.prepare("SELECT record FROM company_members WHERE company_id = ?")
+      .all(companyId) as RecordRow[]);
+    return members.sort((a, b) => Number(b.isFounder) - Number(a.isFounder)
+      || a.addedAt.localeCompare(b.addedAt) || a.name.localeCompare(b.name) || a.id.localeCompare(b.id));
+  }
+
+  listCompanyEvidence(companyId: string, options: { verifications?: Verification[] } = {}): Evidence[] {
+    let sql = "SELECT record FROM evidence WHERE company_id = ?";
+    const params: unknown[] = [companyId];
+    if (options.verifications !== undefined) {
+      if (options.verifications.length === 0) return [];
+      sql += ` AND verification IN (${options.verifications.map(() => "?").join(",")})`;
+      params.push(...options.verifications);
+    }
+    return rowRecords(this.db.prepare(`${sql} ORDER BY captured_at ASC, rowid ASC`).all(...params) as RecordRow[]);
+  }
+
+  insertCompanyAssessment(assessment: CompanyAssessment): void {
+    this.db.prepare(`INSERT INTO company_assessments (id, company_id, created_at, decision, deal, record)
       VALUES (?, ?, ?, ?, ?, ?)`)
-      .run(evidence.id, evidence.founderId, evidence.hash, evidence.capturedAt, evidence.verification, serialize(evidence));
+      .run(assessment.id, assessment.companyId, assessment.createdAt, assessment.decision, assessment.deal, serialize(assessment));
+  }
+
+  latestCompanyAssessment(companyId: string): CompanyAssessment | null {
+    return parse(this.db.prepare(`SELECT record FROM company_assessments WHERE company_id = ?
+      ORDER BY created_at DESC, rowid DESC LIMIT 1`).get(companyId) as RecordRow | undefined);
+  }
+
+  companyAssessmentHistory(companyId: string): Array<{ at: string; deal: number; decision: CompanyAssessment["decision"] }> {
+    const assessments = rowRecords<CompanyAssessment>(this.db.prepare(`SELECT record FROM company_assessments WHERE company_id = ?
+      ORDER BY created_at ASC, rowid ASC`).all(companyId) as RecordRow[]);
+    return assessments.map((assessment) => ({ at: assessment.createdAt, deal: assessment.deal, decision: assessment.decision }));
+  }
+
+  insertCompanyFeedback(feedback: CompanyFeedback): void {
+    this.db.prepare("INSERT INTO company_feedback (id, company_id, created_at, record) VALUES (?, ?, ?, ?)")
+      .run(feedback.id, feedback.companyId, feedback.createdAt, serialize(feedback));
+  }
+
+  listCompanyFeedback(companyId: string): CompanyFeedback[] {
+    return rowRecords(this.db.prepare(`SELECT record FROM company_feedback WHERE company_id = ?
+      ORDER BY created_at DESC, rowid DESC`).all(companyId) as RecordRow[]);
+  }
+
+  allCompanyFeedback(swarmId: string): CompanyFeedback[] {
+    return rowRecords(this.db.prepare(`SELECT fb.record FROM company_feedback fb JOIN companies c ON c.id = fb.company_id
+      WHERE c.swarm_id = ? ORDER BY fb.created_at ASC, fb.rowid ASC`).all(swarmId) as RecordRow[]);
+  }
+
+  companyRows(query: CompanyQuery): CompanyListDTO {
+    const companies = rowRecords<Company>(this.db.prepare("SELECT record FROM companies WHERE swarm_id = ? ORDER BY rowid ASC")
+      .all(query.swarmId) as RecordRow[]);
+    const counts: Partial<Record<CompanyStatus, number>> = {};
+    for (const status of companyStatuses) counts[status] = 0;
+    for (const company of companies) counts[company.status] = (counts[company.status] ?? 0) + 1;
+
+    const assessments = rowRecords<CompanyAssessment>(this.db.prepare(`SELECT a.record FROM company_assessments a
+      JOIN companies c ON c.id = a.company_id WHERE c.swarm_id = ? ORDER BY a.created_at DESC, a.rowid DESC`)
+      .all(query.swarmId) as RecordRow[]);
+    const latestAssessments = new Map<string, CompanyAssessment>();
+    for (const assessment of assessments) if (!latestAssessments.has(assessment.companyId)) latestAssessments.set(assessment.companyId, assessment);
+    const feedbackRecords = rowRecords<CompanyFeedback>(this.db.prepare(`SELECT fb.record FROM company_feedback fb
+      JOIN companies c ON c.id = fb.company_id WHERE c.swarm_id = ? ORDER BY fb.created_at DESC, fb.rowid DESC`)
+      .all(query.swarmId) as RecordRow[]);
+    const latestFeedback = new Map<string, CompanyFeedback>();
+    for (const feedback of feedbackRecords) if (!latestFeedback.has(feedback.companyId)) latestFeedback.set(feedback.companyId, feedback);
+    const foundersByCompany = new Map<string, Founder[]>();
+    for (const founder of rowRecords<Founder>(this.db.prepare(`SELECT f.record FROM founders f
+      JOIN companies c ON c.id = f.company_id WHERE c.swarm_id = ?`).all(query.swarmId) as RecordRow[])) {
+      const group = foundersByCompany.get(founder.companyId ?? "") ?? [];
+      group.push(founder);
+      foundersByCompany.set(founder.companyId ?? "", group);
+    }
+    const memberCounts = this.db.prepare(`SELECT m.company_id AS id, COUNT(*) AS count FROM company_members m
+      JOIN companies c ON c.id = m.company_id WHERE c.swarm_id = ? GROUP BY m.company_id`).all(query.swarmId) as Array<{ id: string; count: number }>;
+    const evidenceCounts = this.db.prepare(`SELECT e.company_id AS id, COUNT(*) AS count FROM evidence e
+      JOIN companies c ON c.id = e.company_id WHERE c.swarm_id = ? GROUP BY e.company_id`).all(query.swarmId) as Array<{ id: string; count: number }>;
+    const memberCountById = new Map(memberCounts.map(({ id, count }) => [id, count]));
+    const evidenceCountById = new Map(evidenceCounts.map(({ id, count }) => [id, count]));
+    let rows = companies.map((company): CompanyRow => {
+      const assessment = latestAssessments.get(company.id) ?? null;
+      const founders = (foundersByCompany.get(company.id) ?? []).sort((a, b) =>
+        a.firstSeenAt.localeCompare(b.firstSeenAt) || a.id.localeCompare(b.id));
+      if (assessment?.leadFounderId) founders.sort((a, b) => Number(b.id === assessment.leadFounderId) - Number(a.id === assessment.leadFounderId)
+        || a.firstSeenAt.localeCompare(b.firstSeenAt) || a.id.localeCompare(b.id));
+      const feedback = latestFeedback.get(company.id) ?? null;
+      return {
+        id: company.id, name: company.name, oneLiner: company.oneLiner, sector: company.sector, stage: company.stage,
+        status: company.status, decision: assessment?.decision ?? null, deal: assessment?.deal ?? null,
+        company: assessment?.company ?? null, team: assessment?.team ?? null, coverage: assessment?.coverage ?? null,
+        founders: founders.map(({ id, name }) => ({ id, name })), teamSize: memberCountById.get(company.id) ?? 0,
+        evidenceCount: evidenceCountById.get(company.id) ?? 0, flagCount: assessment?.flags.length ?? 0,
+        feedback: feedback?.verdict ?? null, feedbackReasons: feedback?.reasonTags ?? [],
+        knownPeople: this.networkAtCompany(normalizeCompanyName(company.name)).length,
+        firstSeenAt: company.firstSeenAt, updatedAt: company.updatedAt,
+      };
+    });
+    rows = rows.filter((row) => {
+      if (query.status === undefined || query.status === "all") {
+        if (row.status === "archived") return false;
+      } else if (row.status !== query.status) return false;
+      if (query.q) {
+        const term = query.q.toLocaleLowerCase();
+        if (![row.name, row.oneLiner].some((value) => value?.toLocaleLowerCase().includes(term))) return false;
+      }
+      return true;
+    });
+    const compareMetric = (key: "deal" | "company" | "team") => (a: CompanyRow, b: CompanyRow): number => {
+      const left = a[key];
+      const right = b[key];
+      if (left === null && right !== null) return 1;
+      if (left !== null && right === null) return -1;
+      if (left !== null && right !== null && left !== right) return right - left;
+      return compareCompanyName(a, b);
+    };
+    switch (query.sort ?? "deal") {
+      case "company": rows.sort(compareMetric("company")); break;
+      case "team": rows.sort(compareMetric("team")); break;
+      case "recent": rows.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt) || compareCompanyName(a, b)); break;
+      default: rows.sort(compareMetric("deal"));
+    }
+    const total = rows.length;
+    const limit = Math.min(500, Math.max(0, Math.floor(query.limit ?? 50)));
+    const offset = Math.max(0, Math.floor(query.offset ?? 0));
+    return { rows: rows.slice(offset, offset + limit), total, counts };
+  }
+
+  insertEvidence(evidence: Evidence): boolean {
+    const result = this.db.prepare(`INSERT OR IGNORE INTO evidence (id, founder_id, hash, captured_at, verification, company_id, record)
+      VALUES (?, ?, ?, ?, ?, ?, ?)`)
+      .run(evidence.id, evidence.founderId, evidence.hash, evidence.capturedAt, evidence.verification,
+        evidence.companyId ?? null, serialize(evidence));
     return result.changes > 0;
   }
 
@@ -399,6 +637,13 @@ export class SqliteStore implements Store {
     if (!row) throw missing("Evidence", evidenceId);
     const evidence = { ...JSON.parse(row.record) as Evidence, verification, verificationNote: note };
     this.db.prepare("UPDATE evidence SET verification = ?, record = ? WHERE id = ?").run(verification, serialize(evidence), evidenceId);
+  }
+
+  setQuote(evidenceId: string, quote: QuoteStatus): void {
+    const row = this.db.prepare("SELECT record FROM evidence WHERE id = ?").get(evidenceId) as RecordRow | undefined;
+    if (!row) return;
+    const evidence = { ...JSON.parse(row.record) as Evidence, quote };
+    this.db.prepare("UPDATE evidence SET record = ? WHERE id = ?").run(serialize(evidence), evidenceId);
   }
 
   insertAssessment(assessment: Assessment): void {
@@ -429,6 +674,68 @@ export class SqliteStore implements Store {
   insertFeedback(feedback: Feedback): void {
     this.db.prepare("INSERT INTO feedback (id, founder_id, created_at, record) VALUES (?, ?, ?, ?)")
       .run(feedback.id, feedback.founderId, feedback.createdAt, serialize(feedback));
+  }
+
+  replaceNetwork(owner: string, contacts: import("@agentswarm/shared").NetworkContact[]): import("@agentswarm/shared").NetworkContact[] {
+    return this.transaction(() => {
+      const previous = rowRecords<import("@agentswarm/shared").NetworkContact>(this.db.prepare("SELECT record FROM network_contacts WHERE owner = ?")
+        .all(owner) as RecordRow[]);
+      // Indexed once: an exported list can hold tens of thousands of contacts, and comparing each
+      // against every previous one would take minutes.
+      const byUrl = new Map<string, import("@agentswarm/shared").NetworkContact>();
+      const byName = new Map<string, import("@agentswarm/shared").NetworkContact>();
+      const byNameWithoutUrl = new Map<string, import("@agentswarm/shared").NetworkContact>();
+      for (const old of previous) {
+        const name = normalizeName(old.name);
+        if (old.profileUrl) {
+          const url = normalizedProfileUrl(old.profileUrl);
+          if (!byUrl.has(url)) byUrl.set(url, old);
+        } else if (!byNameWithoutUrl.has(name)) {
+          byNameWithoutUrl.set(name, old);
+        }
+        if (!byName.has(name)) byName.set(name, old);
+      }
+      // The same person listed twice in one file is stored once, so one bad row cannot fail the upload.
+      const seen = new Set<string>();
+      const stored: import("@agentswarm/shared").NetworkContact[] = [];
+      for (const contact of contacts) {
+        if (seen.has(contact.id)) continue;
+        seen.add(contact.id);
+        const name = normalizeName(contact.name);
+        // A link identifies a person; a name is the fallback when either side has no link.
+        const match = contact.profileUrl
+          ? byUrl.get(normalizedProfileUrl(contact.profileUrl)) ?? byNameWithoutUrl.get(name)
+          : byName.get(name);
+        const changed = match !== undefined && (
+          comparableNetworkValue(contact.company) !== comparableNetworkValue(match.company)
+          || comparableNetworkValue(contact.position) !== comparableNetworkValue(match.position)
+        );
+        stored.push({ ...contact, owner, previous: changed ? { company: match.company, position: match.position } : null });
+      }
+      this.db.prepare("DELETE FROM network_contacts WHERE owner = ?").run(owner);
+      const insert = this.db.prepare(`INSERT INTO network_contacts (id, owner, normalized_name, normalized_company, record)
+        VALUES (?, ?, ?, ?, ?)`);
+      for (const contact of stored) insert.run(contact.id, contact.owner, normalizeName(contact.name),
+        contact.company === null ? null : normalizeCompanyName(contact.company) || null, serialize(contact));
+      return stored;
+    });
+  }
+
+  listNetwork(owner?: string): import("@agentswarm/shared").NetworkContact[] {
+    const rows = owner === undefined
+      ? this.db.prepare("SELECT record FROM network_contacts ORDER BY owner ASC, normalized_name ASC, id ASC").all()
+      : this.db.prepare("SELECT record FROM network_contacts WHERE owner = ? ORDER BY owner ASC, normalized_name ASC, id ASC").all(owner);
+    return rowRecords(rows as RecordRow[]);
+  }
+
+  removeNetwork(owner: string): number {
+    return this.db.prepare("DELETE FROM network_contacts WHERE owner = ?").run(owner).changes;
+  }
+
+  networkAtCompany(normalizedCompanyName: string): import("@agentswarm/shared").NetworkContact[] {
+    if (!normalizedCompanyName) return [];
+    return rowRecords(this.db.prepare(`SELECT record FROM network_contacts WHERE normalized_company = ?
+      ORDER BY owner ASC, normalized_name ASC, id ASC`).all(normalizedCompanyName) as RecordRow[]);
   }
 
   listFeedback(founderId: string): Feedback[] {
@@ -478,38 +785,40 @@ export class SqliteStore implements Store {
   }
 
   getRun(id: string): Run | null {
-    return parse(this.db.prepare("SELECT record FROM runs WHERE id = ?").get(id) as RecordRow | undefined);
+    const run = parse<Run>(this.db.prepare("SELECT record FROM runs WHERE id = ?").get(id) as RecordRow | undefined);
+    return run === null ? null : normalizedRun(run);
   }
 
   updateRun(id: string, patch: Partial<Omit<Run, "id" | "swarmId">>): Run {
-    const updated = updateRecord<Run>(this.db, "runs", id, patch, "Run");
+    const updated = normalizedRun(updateRecord<Run>(this.db, "runs", id, patch, "Run"));
     this.db.prepare("UPDATE runs SET status = ?, started_at = ?, finished_at = ?, record = ? WHERE id = ?")
       .run(updated.status, updated.startedAt, updated.finishedAt, serialize(updated), id);
     return updated;
   }
 
   listRuns(swarmId: string, limit: number): Run[] {
-    return rowRecords(this.db.prepare("SELECT record FROM runs WHERE swarm_id = ? ORDER BY started_at DESC, rowid DESC LIMIT ?")
-      .all(swarmId, Math.max(0, Math.floor(limit))) as RecordRow[]);
+    return rowRecords<Run>(this.db.prepare("SELECT record FROM runs WHERE swarm_id = ? ORDER BY started_at DESC, rowid DESC LIMIT ?")
+      .all(swarmId, Math.max(0, Math.floor(limit))) as RecordRow[]).map(normalizedRun);
   }
 
   activeRun(swarmId: string): Run | null {
-    return parse(this.db.prepare("SELECT record FROM runs WHERE swarm_id = ? AND status IN ('queued', 'running') ORDER BY started_at DESC, rowid DESC LIMIT 1")
+    const run = parse<Run>(this.db.prepare("SELECT record FROM runs WHERE swarm_id = ? AND status IN ('queued', 'running') ORDER BY started_at DESC, rowid DESC LIMIT 1")
       .get(swarmId) as RecordRow | undefined);
+    return run === null ? null : normalizedRun(run);
   }
 
   interruptedRuns(): Run[] {
-    return rowRecords(this.db.prepare("SELECT record FROM runs WHERE status IN ('queued', 'running') ORDER BY started_at DESC, rowid DESC")
-      .all() as RecordRow[]);
+    return rowRecords<Run>(this.db.prepare("SELECT record FROM runs WHERE status IN ('queued', 'running') ORDER BY started_at DESC, rowid DESC")
+      .all() as RecordRow[]).map(normalizedRun);
   }
 
   insertTask(task: TaskRun): void {
     this.transaction(() => {
       const { trace, ...record } = task;
       this.db.prepare(`INSERT INTO tasks (id, run_id, swarm_id, agent_id, founder_id, status, started_at, finished_at,
-        cost_usd, items_out, output_summary, record) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+        cost_usd, items_out, output_summary, company_id, record) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
         .run(task.id, task.runId, task.swarmId, task.agentId, task.founderId, task.status, task.startedAt, task.finishedAt,
-          task.costUsd, task.itemsOut, task.outputSummary, serialize(record));
+          task.costUsd, task.itemsOut, task.outputSummary, task.companyId ?? null, serialize(record));
       if (trace !== undefined) this.db.prepare("INSERT INTO task_traces (task_id, trace) VALUES (?, ?)").run(task.id, serialize(trace));
       const insertDirective = this.db.prepare("INSERT OR IGNORE INTO task_directives (task_id, directive_id, started_at) VALUES (?, ?, ?)");
       for (const directiveId of new Set(task.steering.directiveIds)) insertDirective.run(task.id, directiveId, task.startedAt);
@@ -523,9 +832,9 @@ export class SqliteStore implements Store {
       const updated = { ...JSON.parse(row.record) as Omit<TaskRun, "trace">, ...patch } as TaskRun;
       const { trace, ...record } = updated;
       this.db.prepare(`UPDATE tasks SET agent_id = ?, founder_id = ?, status = ?, started_at = ?, finished_at = ?,
-        cost_usd = ?, items_out = ?, output_summary = ?, record = ? WHERE id = ?`)
+        cost_usd = ?, items_out = ?, output_summary = ?, company_id = ?, record = ? WHERE id = ?`)
         .run(updated.agentId, updated.founderId, updated.status, updated.startedAt, updated.finishedAt,
-          updated.costUsd, updated.itemsOut, updated.outputSummary, serialize(record), id);
+          updated.costUsd, updated.itemsOut, updated.outputSummary, updated.companyId ?? null, serialize(record), id);
       if (Object.hasOwn(patch, "trace")) {
         if (trace === undefined) this.db.prepare("DELETE FROM task_traces WHERE task_id = ?").run(id);
         else this.db.prepare("INSERT INTO task_traces (task_id, trace) VALUES (?, ?) ON CONFLICT(task_id) DO UPDATE SET trace = excluded.trace")
@@ -542,11 +851,12 @@ export class SqliteStore implements Store {
     return { ...task, trace: traceRow ? JSON.parse(traceRow.trace) as NonNullable<TaskRun["trace"]> : [] };
   }
 
-  listTasks(filter: { runId?: string; founderId?: string; agentId?: string; limit?: number }): TaskRun[] {
+  listTasks(filter: { runId?: string; founderId?: string; companyId?: string; agentId?: string; limit?: number }): TaskRun[] {
     const where: string[] = [];
     const params: unknown[] = [];
     if (filter.runId !== undefined) { where.push("run_id = ?"); params.push(filter.runId); }
     if (filter.founderId !== undefined) { where.push("founder_id = ?"); params.push(filter.founderId); }
+    if (filter.companyId !== undefined) { where.push("company_id = ?"); params.push(filter.companyId); }
     if (filter.agentId !== undefined) { where.push("agent_id = ?"); params.push(filter.agentId); }
     const clause = where.length ? `WHERE ${where.join(" AND ")}` : "";
     const sql = filter.limit === undefined

@@ -96,6 +96,8 @@
     <symbol id="i-bulb" viewBox="0 0 24 24"><path d="M9 18h6M10 21h4M8.5 14.5A6 6 0 1 1 15.5 14.5c-.6.6-1 1.3-1 2.5h-5c0-1.2-.4-1.9-1-2.5z"/></symbol>
     <symbol id="i-chart" viewBox="0 0 24 24"><path d="M4 20V5M4 20h16M8 16v-4M12 16V8M16 16v-6"/></symbol>
     <symbol id="i-link" viewBox="0 0 24 24"><path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1"/></symbol>
+    <symbol id="i-building" viewBox="0 0 24 24"><path d="M5 21V4.5h9V21M14 9h5v12M3 21h18"/><path d="M8.5 8h2M8.5 12h2M8.5 16h2"/></symbol>
+    <symbol id="i-quote" viewBox="0 0 24 24"><path d="M5 17c2-1.2 3-3 3-6V7H4v5h3M14 17c2-1.2 3-3 3-6V7h-4v5h3"/></symbol>
     <symbol id="i-stop" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><rect x="9" y="9" width="6" height="6" rx="0.5"/></symbol>
   </defs>
 </svg>
@@ -106,7 +108,7 @@
   <section>
     <h2>How it works</h2>
     <div class="scroll">
-      <svg viewBox="0 0 1040 286" role="img" aria-label="Sources feed six teams of AI agents in order: Scouts find, Matchers merge, Screeners filter, Investigators research, Fact-checkers verify, Analysts score. The ranked list reaches you. You say yes or no. After you approve, Outreach drafts are sent. You can steer every team, and the swarm learns from your yes and no.">
+      <svg viewBox="0 0 1040 286" role="img" aria-label="Sources feed seven teams of AI agents in order: Scouts find, Matchers merge, Screeners filter, Investigators research the people, Researchers size up their companies, Fact-checkers verify, Analysts score. The ranked founders and companies reach you. You say yes or no. After you approve, Outreach drafts are sent. You can steer every team, and the swarm learns from your yes and no.">
         <defs>
           <marker id="m" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0 10 5 0 10z" fill="#c6c6cb"/></marker>
           <marker id="mp" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0 0 10 5 0 10z" fill="#45164a"/></marker>
@@ -114,48 +116,51 @@
         </defs>
 
         <!-- You steer every team -->
-        <rect x="147" y="20" width="631" height="38" rx="19" fill="#45164a"/>
-        <use href="#i-sliders" x="412" y="28" width="22" height="22" class="ic-white"/>
-        <text x="444" y="44" fill="#fff" font-family="Lato, Helvetica, Arial, sans-serif" font-weight="900" font-size="14.5">You steer</text>
+        <rect x="134" y="20" width="670" height="38" rx="19" fill="#45164a"/>
+        <use href="#i-sliders" x="427" y="28" width="22" height="22" class="ic-white"/>
+        <text x="459" y="44" fill="#fff" font-family="Lato, Helvetica, Arial, sans-serif" font-weight="900" font-size="14.5">You steer</text>
         <g class="steer" marker-end="url(#mp)">
-          <path d="M175 58V112"/><path d="M290 58V112"/><path d="M405 58V112"/><path d="M520 58V112"/><path d="M635 58V112"/><path d="M750 58V112"/>
+          <path d="M162 58V112"/> <path d="M264 58V112"/> <path d="M367 58V112"/> <path d="M469 58V112"/> <path d="M571 58V112"/> <path d="M673 58V112"/> <path d="M776 58V112"/>
         </g>
 
         <!-- The line of teams -->
         <g class="flow" marker-end="url(#m)">
-          <path d="M92 146H140"/><path d="M207 146H255"/><path d="M322 146H370"/><path d="M437 146H485"/><path d="M552 146H600"/><path d="M667 146H715"/><path d="M782 146H830"/><path d="M897 146H945"/>
+          <path d="M92 146H127"/><path d="M194 146H229"/><path d="M296 146H332"/><path d="M399 146H434"/><path d="M501 146H536"/><path d="M603 146H638"/><path d="M705 146H741"/><path d="M808 146H843"/><path d="M910 146H945"/>
         </g>
 
         <rect x="32" y="118" width="56" height="56" rx="14" class="tile-grey"/><use href="#i-db" x="48" y="134" width="24" height="24" class="ic-grey"/>
         <text x="60" y="198" text-anchor="middle" class="name">Sources</text>
 
-        <rect x="147" y="118" width="56" height="56" rx="14" class="tile"/><use href="#i-radar" x="163" y="134" width="24" height="24" class="ic"/>
-        <text x="175" y="198" text-anchor="middle" class="name">Scouts</text><text x="175" y="215" text-anchor="middle" class="verb">find</text>
+        <rect x="134" y="118" width="56" height="56" rx="14" class="tile"/><use href="#i-radar" x="150" y="134" width="24" height="24" class="ic"/>
+        <text x="162" y="198" text-anchor="middle" class="name">Scouts</text><text x="162" y="215" text-anchor="middle" class="verb">find</text>
 
-        <rect x="262" y="118" width="56" height="56" rx="14" class="tile"/><use href="#i-merge" x="278" y="134" width="24" height="24" class="ic"/>
-        <text x="290" y="198" text-anchor="middle" class="name">Matchers</text><text x="290" y="215" text-anchor="middle" class="verb">merge</text>
+        <rect x="236" y="118" width="56" height="56" rx="14" class="tile"/><use href="#i-merge" x="252" y="134" width="24" height="24" class="ic"/>
+        <text x="264" y="198" text-anchor="middle" class="name">Matchers</text><text x="264" y="215" text-anchor="middle" class="verb">merge</text>
 
-        <rect x="377" y="118" width="56" height="56" rx="14" class="tile"/><use href="#i-filter" x="393" y="134" width="24" height="24" class="ic"/>
-        <text x="405" y="198" text-anchor="middle" class="name">Screeners</text><text x="405" y="215" text-anchor="middle" class="verb">filter</text>
+        <rect x="339" y="118" width="56" height="56" rx="14" class="tile"/><use href="#i-filter" x="355" y="134" width="24" height="24" class="ic"/>
+        <text x="367" y="198" text-anchor="middle" class="name">Screeners</text><text x="367" y="215" text-anchor="middle" class="verb">filter</text>
 
-        <rect x="492" y="118" width="56" height="56" rx="14" class="tile"/><use href="#i-search" x="508" y="134" width="24" height="24" class="ic"/>
-        <text x="520" y="198" text-anchor="middle" class="name">Investigators</text><text x="520" y="215" text-anchor="middle" class="verb">research</text>
+        <rect x="441" y="118" width="56" height="56" rx="14" class="tile"/><use href="#i-search" x="457" y="134" width="24" height="24" class="ic"/>
+        <text x="469" y="198" text-anchor="middle" class="name">Investigators</text><text x="469" y="215" text-anchor="middle" class="verb">research people</text>
 
-        <rect x="607" y="118" width="56" height="56" rx="14" class="tile"/><use href="#i-shield" x="623" y="134" width="24" height="24" class="ic"/>
-        <text x="635" y="198" text-anchor="middle" class="name">Fact-checkers</text><text x="635" y="215" text-anchor="middle" class="verb">verify</text>
+        <rect x="543" y="118" width="56" height="56" rx="14" class="tile"/><use href="#i-building" x="559" y="134" width="24" height="24" class="ic"/>
+        <text x="571" y="198" text-anchor="middle" class="name">Researchers</text><text x="571" y="215" text-anchor="middle" class="verb">size up companies</text>
 
-        <rect x="722" y="118" width="56" height="56" rx="14" class="tile"/><use href="#i-scale" x="738" y="134" width="24" height="24" class="ic"/>
-        <text x="750" y="198" text-anchor="middle" class="name">Analysts</text><text x="750" y="215" text-anchor="middle" class="verb">score</text>
+        <rect x="645" y="118" width="56" height="56" rx="14" class="tile"/><use href="#i-shield" x="661" y="134" width="24" height="24" class="ic"/>
+        <text x="673" y="198" text-anchor="middle" class="name">Fact-checkers</text><text x="673" y="215" text-anchor="middle" class="verb">verify</text>
 
-        <rect x="837" y="118" width="56" height="56" rx="14" class="tile-you"/><use href="#i-user" x="853" y="134" width="24" height="24" class="ic-grey"/>
-        <text x="865" y="198" text-anchor="middle" class="name">You</text><text x="865" y="215" text-anchor="middle" class="verb">Yes / No</text>
+        <rect x="748" y="118" width="56" height="56" rx="14" class="tile"/><use href="#i-scale" x="764" y="134" width="24" height="24" class="ic"/>
+        <text x="776" y="198" text-anchor="middle" class="name">Analysts</text><text x="776" y="215" text-anchor="middle" class="verb">score</text>
+
+        <rect x="850" y="118" width="56" height="56" rx="14" class="tile-you"/><use href="#i-user" x="866" y="134" width="24" height="24" class="ic-grey"/>
+        <text x="878" y="198" text-anchor="middle" class="name">You</text><text x="878" y="215" text-anchor="middle" class="verb">Yes / No</text>
 
         <rect x="952" y="118" width="56" height="56" rx="14" class="tile-grey"/><use href="#i-chat" x="968" y="134" width="24" height="24" class="ic-grey"/>
         <circle cx="1004" cy="122" r="11" fill="#c81e4e"/><use href="#i-lock" x="997" y="115" width="14" height="14" class="ic-white"/>
         <text x="980" y="198" text-anchor="middle" class="name">Outreach</text><text x="980" y="215" text-anchor="middle" class="verb">you approve</text>
 
         <!-- The swarm learns from your calls -->
-        <path d="M865 224V258H175V228" class="back" marker-end="url(#my)"/>
+        <path d="M878 224V258H162V228" class="back" marker-end="url(#my)"/>
         <rect x="430" y="246" width="180" height="24" rx="12" fill="#fff5d9"/>
         <text x="520" y="263" text-anchor="middle" fill="#8a5a00" font-family="Lato, Helvetica, Arial, sans-serif" font-weight="900" font-size="13">learns from your Yes / No</text>
       </svg>
@@ -196,7 +201,7 @@
       <h2>Models</h2>
       <table>
         <tr><td>Scouts, Screeners</td><td><span class="chip">Claude Haiku 5.5</span></td></tr>
-        <tr><td>Investigators</td><td><span class="chip">Claude Sonnet 5.5</span></td></tr>
+        <tr><td>Investigators, Researchers</td><td><span class="chip">Claude Sonnet 5.5</span></td></tr>
         <tr><td>Code review</td><td><span class="chip">Codex, GPT-6 Astra</span></td></tr>
         <tr><td>Fact-checkers</td><td><span class="chip">GPT-6.1 Sol</span></td></tr>
         <tr><td>Analysts</td><td><span class="chip">Claude Opus 5.5</span></td></tr>
@@ -211,8 +216,9 @@
     <ul class="cards">
       <li><span class="sq red"><svg width="20" height="20" class="ic"><use href="#i-lock"/></svg></span>You approve every contact</li>
       <li><span class="sq"><svg width="20" height="20" class="ic"><use href="#i-link"/></svg></span>Every claim has a source</li>
-      <li><span class="sq"><svg width="20" height="20" class="ic"><use href="#i-shield"/></svg></span>A second AI checks</li>
-      <li><span class="sq"><svg width="20" height="20" class="ic"><use href="#i-db"/></svg></span>Licensed data only</li>
+      <li><span class="sq"><svg width="20" height="20" class="ic"><use href="#i-quote"/></svg></span>Quotes checked at the source</li>
+      <li><span class="sq"><svg width="20" height="20" class="ic"><use href="#i-shield"/></svg></span>A second AI checks, and is tested</li>
+      <li><span class="sq"><svg width="20" height="20" class="ic"><use href="#i-db"/></svg></span>No scraping. Vendor data only</li>
       <li><span class="sq"><svg width="20" height="20" class="ic"><use href="#i-user"/></svg></span>No personal attributes</li>
       <li><span class="sq"><svg width="20" height="20" class="ic"><use href="#i-stop"/></svg></span>Spend cap and stop switch</li>
     </ul>

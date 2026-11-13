@@ -6,6 +6,10 @@ import Database from "better-sqlite3";
 import {
   DEFAULT_SETTINGS,
   type Assessment,
+  type Company,
+  type CompanyAssessment,
+  type CompanyFeedback,
+  type CompanyMember,
   type Directive,
   type Evidence,
   type Feedback,
@@ -13,6 +17,8 @@ import {
   type Run,
   type SwarmConfig,
   type TaskRun,
+  type NetworkContact,
+  ZERO_STATS,
 } from "@agentswarm/shared";
 import { normalizeLink, normalizeName, openStore } from "./index";
 
@@ -51,6 +57,46 @@ function evidence(id: string, founderId: string, hash: string, verification: Evi
   };
 }
 
+function company(id: string, overrides: Partial<Company> = {}): Company {
+  return {
+    id, swarmId: "swm_1", name: `Company ${id}`, domain: `${id}.test`, url: `https://${id}.test`,
+    oneLiner: "Builds useful tools", mission: null, sector: "software", stage: "seed",
+    links: { github: null, x: null, linkedin: null, docs: null, careers: null }, status: "tracked",
+    firstSeenAt: "2026-01-01T00:00:00.000Z", updatedAt: "2026-01-02T00:00:00.000Z",
+    lastResearchedAt: null, lastAssessedAt: null, nextRecheckAt: null, simId: null,
+    ...overrides,
+  };
+}
+
+function companyAssessment(id: string, companyId: string, overrides: Partial<CompanyAssessment> = {}): CompanyAssessment {
+  return {
+    id, companyId, runId: null, configId: "cfg_base", company: 0.6, companyCoverage: 0.7,
+    companyPotential: 0.8, leadFounderId: null, team: 0.5, deal: 0.55, coverage: 0.7,
+    potential: 0.8, decision: "watch", reasons: [], flags: [], breakdown: [], judgments: [],
+    brief: { summary: "A sourced company summary.", strengths: [], risks: [], openQuestions: [] },
+    createdAt: "2026-01-03T00:00:00.000Z", ...overrides,
+  };
+}
+
+function companyFeedback(id: string, companyId: string, verdict: CompanyFeedback["verdict"], createdAt: string): CompanyFeedback {
+  return { id, companyId, author: "Partner", verdict, reasonTags: ["real_pull"], note: null, createdAt };
+}
+
+function companyMember(id: string, companyId: string, overrides: Partial<CompanyMember> = {}): CompanyMember {
+  return {
+    id, companyId, name: `Person ${id}`, role: null, isFounder: false, founderId: null,
+    links: { github: null, linkedin: null, x: null, site: null, scholar: null },
+    background: null, source: "github", sourceUrl: null, addedAt: "2026-01-03T00:00:00.000Z", ...overrides,
+  };
+}
+
+function networkContact(id: string, name: string, overrides: Partial<NetworkContact> = {}): NetworkContact {
+  return {
+    id, owner: "partner@example.test", name, company: null, position: null, profileUrl: null,
+    connectedOn: null, importedAt: "2026-01-03T00:00:00.000Z", previous: null, ...overrides,
+  };
+}
+
 function feedback(
   id: string,
   founderId: string,
@@ -64,11 +110,7 @@ function feedback(
 function run(id: string, swarmId: string, status: Run["status"], startedAt: string): Run {
   return {
     id, swarmId, trigger: "manual", brain: "sim", sources: "sim", status, stage: "scout", configId: "cfg_base",
-    budgetUsd: 10, costUsd: 0, stats: {
-      rawItems: 0, leads: 0, newFounders: 0, mergedLeads: 0, screened: 0, screenedIn: 0, investigated: 0,
-      evidence: 0, evidenceRejected: 0, assessed: 0, surfaced: 0, needsEvidence: 0, watch: 0, passed: 0,
-      outreachProposed: 0, tasks: 0, failures: 0, skippedBudget: 0,
-    }, error: null, simDay: null, startedAt, finishedAt: null,
+    budgetUsd: 10, costUsd: 0, stats: { ...ZERO_STATS }, error: null, simDay: null, startedAt, finishedAt: null,
   };
 }
 
@@ -121,12 +163,160 @@ describe("SQLite store", () => {
     store.close();
   });
 
+  it("sets an evidence quote without changing verification", () => {
+    const store = openStore(":memory:");
+    const item = evidence("evd_quote", "fnd_1", "quote-hash", "supported");
+    store.insertEvidence(item);
+    store.setQuote(item.id, "found");
+    expect(store.listEvidence(item.founderId)).toEqual([{ ...item, quote: "found" }]);
+    store.close();
+  });
+
   it("deduplicates evidence by founder and hash", () => {
     const store = openStore(":memory:");
     expect(store.insertEvidence(evidence("evd_1", "fnd_1", "same-hash"))).toBe(true);
     expect(store.insertEvidence(evidence("evd_2", "fnd_1", "same-hash", "supported"))).toBe(false);
     expect(store.listEvidence("fnd_1")).toHaveLength(1);
     expect(store.insertEvidence(evidence("evd_3", "fnd_2", "same-hash"))).toBe(true);
+    store.close();
+  });
+
+  it("stores companies and builds filtered rows from assessments, founders, members, evidence, feedback and contacts", () => {
+    const store = openStore(":memory:");
+    const acme = company("co_acme", { name: "Acme Inc", domain: "old.test", status: "tracked" });
+    const north = company("co_north", { name: "Acme North", status: "tracked", updatedAt: "2026-01-08T00:00:00.000Z" });
+    const noScore = company("co_null", { name: "Acme Null", status: "tracked", updatedAt: "2026-01-07T00:00:00.000Z" });
+    const archived = company("co_archived", { name: "Archived Acme", status: "archived" });
+    for (const item of [acme, north, noScore, archived]) store.insertCompany(item);
+    expect(store.getCompany(acme.id)).toEqual(acme);
+    expect(store.findCompanyByDomain("swm_1", "old.test")).toEqual(acme);
+    expect(store.findCompanyByDomain("swm_1", "")).toBeNull();
+    expect(store.findCompaniesByName("swm_1", "acme")).toEqual([acme]);
+    expect(store.findCompaniesByName("swm_1", "")).toEqual([]);
+    const renamed = store.updateCompany(acme.id, { name: "Acme Labs", domain: "acme-labs.test", status: "surfaced", updatedAt: "2026-01-09T00:00:00.000Z" });
+    expect(store.findCompanyByDomain("swm_1", "old.test")).toBeNull();
+    expect(store.findCompanyByDomain("swm_1", "acme-labs.test")).toEqual(renamed);
+    expect(store.findCompaniesByName("swm_1", "acme labs")).toEqual([renamed]);
+    expect(store.listCompanies({ swarmId: "swm_1", statuses: ["tracked"] }).map((item) => item.id)).toEqual([north.id, noScore.id]);
+
+    const earlier = founder("fnd_earlier", { companyId: acme.id, firstSeenAt: "2026-01-01T00:00:00.000Z" });
+    const lead = founder("fnd_lead", { name: "Lead Founder", companyId: acme.id, firstSeenAt: "2026-01-02T00:00:00.000Z" });
+    store.insertFounder(lead);
+    store.insertFounder(earlier);
+    expect(store.foundersOfCompany(acme.id).map((person) => person.id)).toEqual([earlier.id, lead.id]);
+
+    const originalMember = companyMember("mem_alice", acme.id, {
+      name: "Alice Example", role: "CEO", isFounder: true, founderId: lead.id, background: "Built systems",
+      sourceUrl: "https://example.test/team", addedAt: "2026-01-02T00:00:00.000Z",
+      links: { github: "https://github.com/alice", linkedin: null, x: null, site: null, scholar: null },
+    });
+    store.upsertCompanyMember(originalMember);
+    store.upsertCompanyMember(companyMember("mem_alice_new", acme.id, {
+      name: "ALICE EXAMPLE", role: null, isFounder: false, founderId: null, background: null, sourceUrl: null,
+      addedAt: "2026-01-09T00:00:00.000Z",
+    }));
+    store.upsertCompanyMember(companyMember("mem_bob", acme.id, { name: "Bob Example", addedAt: "2026-01-01T00:00:00.000Z" }));
+    expect(store.listCompanyMembers(acme.id)).toEqual([
+      { ...originalMember, name: "ALICE EXAMPLE" },
+      companyMember("mem_bob", acme.id, { name: "Bob Example", addedAt: "2026-01-01T00:00:00.000Z" }),
+    ]);
+
+    store.insertEvidence({ ...evidence("evd_company_1", lead.id, "company-one"), companyId: acme.id, capturedAt: "2026-01-02T00:00:00.000Z" });
+    store.insertEvidence({ ...evidence("evd_company_2", earlier.id, "company-two", "supported"), companyId: acme.id, capturedAt: "2026-01-03T00:00:00.000Z" });
+    store.insertEvidence({ ...evidence("evd_company_other", lead.id, "company-other"), companyId: north.id });
+    expect(store.listCompanyEvidence(acme.id).map((item) => item.id)).toEqual(["evd_company_1", "evd_company_2"]);
+    expect(store.listCompanyEvidence(acme.id, { verifications: ["supported"] }).map((item) => item.id)).toEqual(["evd_company_2"]);
+    expect(store.listCompanyEvidence(acme.id, { verifications: [] })).toEqual([]);
+
+    store.insertTask(task("tsk_company", { companyId: acme.id }));
+    store.insertTask(task("tsk_company_other", { companyId: north.id }));
+    expect(store.listTasks({ companyId: acme.id }).map((item) => item.id)).toEqual(["tsk_company"]);
+
+    store.insertCompanyAssessment(companyAssessment("casm_acme", acme.id, {
+      company: 0.8, team: 0.7, deal: 0.9, decision: "surface", leadFounderId: lead.id,
+      flags: [
+        { code: "outside_thesis", severity: "info", message: "First" },
+        { code: "integrity_concern", severity: "warning", message: "Second" },
+      ],
+    }));
+    store.insertCompanyAssessment(companyAssessment("casm_north", north.id, { company: 0.5, team: 0.4, deal: 0.4 }));
+    store.insertCompanyFeedback(companyFeedback("cfb_old", acme.id, "no", "2026-01-04T00:00:00.000Z"));
+    store.insertCompanyFeedback(companyFeedback("cfb_new", acme.id, "yes", "2026-01-05T00:00:00.000Z"));
+    expect(store.listCompanyFeedback(acme.id).map((item) => item.id)).toEqual(["cfb_new", "cfb_old"]);
+    expect(store.latestCompanyAssessment(acme.id)?.id).toBe("casm_acme");
+    expect(store.companyAssessmentHistory(acme.id)).toEqual([{ at: "2026-01-03T00:00:00.000Z", deal: 0.9, decision: "surface" }]);
+    expect(store.allCompanyFeedback("swm_1").map((item) => item.id)).toEqual(["cfb_old", "cfb_new"]);
+
+    const contact = networkContact("net_acme", "Known Person", { company: "Acme Labs", position: "Engineer" });
+    store.replaceNetwork(contact.owner, [contact]);
+    const rows = store.companyRows({ swarmId: "swm_1" });
+    expect(rows.rows.map((row) => row.id)).toEqual([acme.id, north.id, noScore.id]);
+    expect(rows.rows[0]).toMatchObject({
+      id: acme.id, decision: "surface", deal: 0.9, company: 0.8, team: 0.7, coverage: 0.7,
+      founders: [{ id: lead.id, name: "Lead Founder" }, { id: earlier.id, name: earlier.name }],
+      teamSize: 2, evidenceCount: 2, flagCount: 2, feedback: "yes", feedbackReasons: ["real_pull"], knownPeople: 1,
+    });
+    expect(rows.rows[2]?.deal).toBeNull();
+    expect(rows.counts).toEqual({ tracked: 2, surfaced: 1, needs_evidence: 0, watch: 0, passed: 0, archived: 1 });
+    const filtered = store.companyRows({ swarmId: "swm_1", status: "surfaced", q: "ACME" });
+    expect(filtered.rows.map((row) => row.id)).toEqual([acme.id]);
+    expect(filtered.total).toBe(1);
+    expect(filtered.counts).toEqual(rows.counts);
+    expect(store.companyRows({ swarmId: "swm_1", status: "all", q: "builds", sort: "recent" }).rows.map((row) => row.id))
+      .toEqual([acme.id, north.id, noScore.id]);
+    store.close();
+  });
+
+  it("reconciles network changes by profile link or normalized name", () => {
+    const store = openStore(":memory:");
+    const owner = "partner@example.test";
+    store.replaceNetwork(owner, [
+      networkContact("old_link", "Taylor Old", {
+        company: "Acme", position: "CEO", profileUrl: "HTTPS://Example.test/taylor///",
+      }),
+      networkContact("old_name", "Alex One", { company: "Old Co", position: "Engineer" }),
+      networkContact("old_steady", "Steady Person", { company: " Same ", position: "Analyst" }),
+      networkContact("old_renamed", "Old Contact Name", {
+        company: "OldCo", position: "Builder", profileUrl: "https://example.test/profile/",
+      }),
+    ]);
+    const refreshed = store.replaceNetwork(owner, [
+      networkContact("new_link", "Taylor Current", {
+        company: "Nova Inc", position: "CEO", profileUrl: "https://example.test/taylor",
+      }),
+      networkContact("new_name", "Alex One", { company: "New Co", position: "Engineer" }),
+      networkContact("new_steady", "Steady Person", { company: "same", position: "ANALYST" }),
+      networkContact("new_renamed", "Different Name", {
+        company: "NewCo", position: "Builder", profileUrl: "HTTPS://EXAMPLE.TEST/profile///",
+      }),
+      networkContact("new_person", "Brand New", { company: "Nova", position: "Designer" }),
+    ]);
+    expect(refreshed.map(({ id, previous }) => ({ id, previous }))).toEqual([
+      { id: "new_link", previous: { company: "Acme", position: "CEO" } },
+      { id: "new_name", previous: { company: "Old Co", position: "Engineer" } },
+      { id: "new_steady", previous: null },
+      { id: "new_renamed", previous: { company: "OldCo", position: "Builder" } },
+      { id: "new_person", previous: null },
+    ]);
+    expect(store.networkAtCompany("nova").map((item) => item.id).sort()).toEqual(["new_link", "new_person"]);
+    expect(store.networkAtCompany("")).toEqual([]);
+    expect(store.listNetwork(owner).map((item) => item.name)).toEqual([
+      "Alex One", "Brand New", "Different Name", "Steady Person", "Taylor Current",
+    ]);
+    expect(store.removeNetwork(owner)).toBe(5);
+    expect(store.listNetwork(owner)).toEqual([]);
+    store.close();
+  });
+
+  it("stores a person listed twice in one upload once, instead of failing the upload", () => {
+    const store = openStore(":memory:");
+    const stored = store.replaceNetwork("partner@example.test", [
+      networkContact("same", "Jordan Twice", { company: "Acme", position: "Engineer" }),
+      networkContact("same", "Jordan Twice", { company: "Acme", position: "Engineer" }),
+      networkContact("other", "Someone Else", { company: "Acme", position: "Designer" }),
+    ]);
+    expect(stored.map((item) => item.id)).toEqual(["same", "other"]);
+    expect(store.listNetwork("partner@example.test")).toHaveLength(2);
     store.close();
   });
 
@@ -231,6 +421,67 @@ describe("SQLite store", () => {
     store.close();
   });
 
+  it("migrates a populated version-1 database without changing its records and fills old run counters", () => {
+    const dir = mkdtempSync(join(tmpdir(), "agentswarm-v1-db-"));
+    scratchDirs.push(dir);
+    const path = join(dir, "legacy.sqlite");
+    const legacy = new Database(path);
+    legacy.exec(`
+      CREATE TABLE configs (id TEXT PRIMARY KEY, record TEXT NOT NULL);
+      CREATE TABLE founders (
+        id TEXT PRIMARY KEY, swarm_id TEXT NOT NULL, normalized_name TEXT NOT NULL,
+        updated_at TEXT NOT NULL, next_recheck_at TEXT, status TEXT NOT NULL, record TEXT NOT NULL
+      );
+      CREATE TABLE evidence (
+        id TEXT PRIMARY KEY, founder_id TEXT NOT NULL, hash TEXT NOT NULL,
+        captured_at TEXT NOT NULL, verification TEXT NOT NULL, record TEXT NOT NULL,
+        UNIQUE (founder_id, hash)
+      );
+      CREATE TABLE tasks (
+        insertion_order INTEGER PRIMARY KEY AUTOINCREMENT, id TEXT NOT NULL UNIQUE,
+        run_id TEXT NOT NULL, swarm_id TEXT NOT NULL, agent_id TEXT NOT NULL,
+        founder_id TEXT, status TEXT NOT NULL, started_at TEXT, finished_at TEXT,
+        cost_usd REAL, items_out INTEGER NOT NULL, output_summary TEXT, record TEXT NOT NULL
+      );
+      CREATE TABLE runs (
+        id TEXT PRIMARY KEY, swarm_id TEXT NOT NULL, status TEXT NOT NULL,
+        started_at TEXT NOT NULL, finished_at TEXT, record TEXT NOT NULL
+      );
+    `);
+    const oldFounder = founder("fnd_legacy");
+    const oldEvidence = evidence("evd_legacy", oldFounder.id, "legacy-hash");
+    const oldTask = task("tsk_legacy");
+    const oldRun = run("run_legacy", "swm_1", "succeeded", "2026-01-01T00:00:00.000Z");
+    const omittedCounters = new Set(["companiesResearched", "companiesAssessed", "companiesSurfaced", "quotesRejected", "controlsFailed"]);
+    const legacyStats = Object.fromEntries(Object.entries(oldRun.stats).filter(([key]) => !omittedCounters.has(key)));
+    const oldRunRecord = { ...oldRun, stats: legacyStats };
+    legacy.prepare(`INSERT INTO founders (id, swarm_id, normalized_name, updated_at, next_recheck_at, status, record)
+      VALUES (?, ?, ?, ?, ?, ?, ?)`).run(oldFounder.id, oldFounder.swarmId, normalizeName(oldFounder.name), oldFounder.updatedAt,
+      oldFounder.nextRecheckAt, oldFounder.status, JSON.stringify(oldFounder));
+    legacy.prepare(`INSERT INTO evidence (id, founder_id, hash, captured_at, verification, record) VALUES (?, ?, ?, ?, ?, ?)`)
+      .run(oldEvidence.id, oldEvidence.founderId, oldEvidence.hash, oldEvidence.capturedAt, oldEvidence.verification, JSON.stringify(oldEvidence));
+    const oldTaskRecord = { ...oldTask };
+    delete oldTaskRecord.trace;
+    legacy.prepare(`INSERT INTO tasks (id, run_id, swarm_id, agent_id, founder_id, status, started_at, finished_at,
+      cost_usd, items_out, output_summary, record) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+      .run(oldTask.id, oldTask.runId, oldTask.swarmId, oldTask.agentId, oldTask.founderId, oldTask.status, oldTask.startedAt,
+        oldTask.finishedAt, oldTask.costUsd, oldTask.itemsOut, oldTask.outputSummary, JSON.stringify(oldTaskRecord));
+    legacy.prepare("INSERT INTO runs (id, swarm_id, status, started_at, finished_at, record) VALUES (?, ?, ?, ?, ?, ?)")
+      .run(oldRun.id, oldRun.swarmId, oldRun.status, oldRun.startedAt, oldRun.finishedAt, JSON.stringify(oldRunRecord));
+    legacy.pragma("user_version = 1");
+    legacy.close();
+
+    const store = openStore(path);
+    expect(store.getFounder(oldFounder.id)).toEqual(oldFounder);
+    expect(store.listEvidence(oldFounder.id)).toEqual([oldEvidence]);
+    expect(store.getTask(oldTask.id, { withTrace: false })).toEqual(oldTaskRecord);
+    expect(store.getRun(oldRun.id)).toEqual(oldRun);
+    store.close();
+    const migrated = new Database(path, { readonly: true });
+    expect(migrated.pragma("user_version", { simple: true })).toBe(2);
+    migrated.close();
+  });
+
   it("keeps file-backed data and saved configs across reopen without destructive migration reruns", () => {
     const dir = mkdtempSync(join(tmpdir(), "agentswarm-db-"));
     scratchDirs.push(dir);
@@ -247,7 +498,7 @@ describe("SQLite store", () => {
     expect(reopened.getConfig("cfg_base")).toEqual(config);
     reopened.close();
     const db = new Database(path, { readonly: true });
-    expect(db.pragma("user_version", { simple: true })).toBe(1);
+    expect(db.pragma("user_version", { simple: true })).toBe(2);
     db.close();
   });
 });

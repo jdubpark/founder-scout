@@ -60,12 +60,16 @@ const JOB_SHORT: Record<JobId, string> = {
   "screen.fit": "Thesis fit",
   "investigate.background": "Background",
   "investigate.code": "Code",
-  "investigate.company": "Company",
+  "investigate.company": "Role",
   "investigate.media": "Talks",
   "investigate.redflags": "Risks",
+  "company.product": "Product",
+  "company.traction": "Traction",
+  "company.team": "Team",
   "verify.claims": "Claims",
   "assess.judgments": "Rubric",
   "assess.memo": "Memo",
+  "assess.company": "Company",
   "outreach.plan": "Drafts",
   "call.founder": "Founder call",
   "call.reference": "Reference call",
@@ -97,6 +101,8 @@ function classFigure(classId: ClassId, stats: RunStats | null): { value: number;
       return { value: stats.screenedIn, unit: "in thesis" };
     case "investigator":
       return { value: stats.evidence, unit: "facts" };
+    case "company":
+      return { value: stats.companiesResearched, unit: "companies" };
     case "verifier":
       return { value: stats.evidenceRejected, unit: "rejected" };
     case "analyst":
@@ -165,11 +171,11 @@ export function SwarmMap({
   return (
     <div className={cn("min-w-0", className)}>
       <div className="min-w-0 overflow-x-auto">
-        <div className="flex min-w-[52rem] items-center gap-1">
+        <div className="flex min-w-[48rem] items-stretch gap-0.5">
           <EndCap icon={<Database className="size-4" aria-hidden />} label="Sources" />
           {tree.classes.map((c) => (
             <Fragment key={c.cls.id}>
-              <ChevronRight className="size-4 shrink-0 text-rule-strong" aria-hidden />
+              <ChevronRight className="size-3.5 shrink-0 self-center text-rule-strong" aria-hidden />
               <ClassCard
                 node={c}
                 figure={classFigure(c.cls.id, stats)}
@@ -182,7 +188,7 @@ export function SwarmMap({
               />
             </Fragment>
           ))}
-          <ChevronRight className="size-4 shrink-0 text-rule-strong" aria-hidden />
+          <ChevronRight className="size-3.5 shrink-0 self-center text-rule-strong" aria-hidden />
           <EndCap icon={<UserRound className="size-4" aria-hidden />} label="You" count={waiting} />
         </div>
       </div>
@@ -204,7 +210,7 @@ export function SwarmMap({
 
 function EndCap({ icon, label, count }: { icon: ReactNode; label: string; count?: number }) {
   return (
-    <div className="flex w-16 shrink-0 flex-col items-center gap-1 text-center">
+    <div className="flex w-12 shrink-0 flex-col items-center gap-1 self-center text-center">
       <span className="relative inline-flex size-9 items-center justify-center rounded-full bg-sunk text-ink-2">
         {icon}
         {count ? (

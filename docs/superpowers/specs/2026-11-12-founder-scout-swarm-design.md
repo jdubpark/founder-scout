@@ -81,9 +81,10 @@ budget and steering; a fund can run several.
 | Scout | Scouts | `scout.hackernews`, `scout.github`, `scout.research`, `scout.talent` | Read new items from each source and extract people who are founding something, or who show unusually strong original work with no company yet |
 | Match | Matchers | `resolve.identity` (code) | Merge sightings that share a profile link, or a name and company, into one founder. Never on a name alone |
 | Screen | Screeners | `screen.fit` | Thesis fit, 0 to 1, with reasons. Fit is not quality |
-| Investigate | Investigators | `investigate.background`, `.code`, `.company`, `.media`, `.redflags` | Collect evidence: each item is a source link, an excerpt and the one-sentence claim it supports |
-| Fact-check | Fact-checkers | `verify.claims` | A different model family re-reads each item: supported, unsupported, contradicted, or about the wrong person |
-| Assess | Analysts | `assess.judgments` | Ten rubric answers, each with a level 0 to 4 or "not settled", a confidence, and the evidence relied on. Code scores |
+| Investigate | Investigators | `investigate.background`, `.code`, `.company`, `.media`, `.redflags` | Collect evidence about the person: each item is a source link, the source's exact words, and the one-sentence claim they support |
+| Company research | Company researchers | `company.product`, `.traction`, `.team` | For companies whose founder passed the screen: the mission in the company's own words, what has shipped, dated milestones, the rest of the team, and what it says comes next. Same evidence shape, plus a facet |
+| Fact-check | Fact-checkers | code, then `verify.claims` | Code opens each cited page and rejects an item whose quoted words are not there. Then a different model family re-reads each remaining item: supported, unsupported, contradicted, or about the wrong person or company |
+| Assess | Analysts | `assess.judgments`, `assess.company` | Ten rubric answers about the founder and nine about the company, each with a level 0 to 4 or "not settled", a confidence, and the evidence relied on. Code scores both and combines them |
 | Memo | Analysts | `assess.memo` | One page for founders above the bar |
 | Outreach plan | Outreach | `outreach.plan` | For founders a partner said yes to: an intro email, a call plan, reference suggestions. All wait for approval |
 
@@ -107,6 +108,29 @@ deepest setting, once; after that the normal re-check interval applies.
 **The rubric** (`packages/shared/src/rubric.ts`): built hard things, technical depth, shipping speed,
 trajectory (against years of experience, never age), earned insight, ambition, clarity, talent
 magnet, persistence, and whether claims match the record. There is deliberately no pedigree question.
+
+**Companies.** A founder is judged as a person; a company is judged as a business, and the two are
+kept apart so a partner can see a strong person at a weak company or the reverse. Founders who name
+the same company site (or, with no site, exactly the same name) share one company record.
+
+The company rubric (`packages/shared/src/company.ts`) has nine questions: is the stated mission a
+problem worth solving, how large is the market, what has shipped, what edge does it have, do people
+want it, how fast is it moving, does the team beyond the lead founder cover what is needed, is the
+plan specific, and do the company's claims match the record. Every company fact is an evidence item
+with a facet (mission, product, traction, funding, team, roadmap, market, risk), so each line on the
+company page has a source behind it. The company analyst also writes a brief; a point in it that
+cites no verified evidence is dropped by code.
+
+Code combines the two scores: `deal = share × lead founder's score + (1 − share) × company score`,
+with the share at 0.6 by default because an early company is mostly its people. The lead founder is
+the company's highest-scoring assessed founder. The same bars then decide: surface, needs evidence,
+watch or pass. A possible misrepresentation by the company or by a founder holds the company for a
+person. When a founder is re-assessed and the company evidence has not changed, code recomputes the
+decision without a model call.
+
+A partner says Yes or No on a company as well as on a founder, with their own reasons, because "back
+this person" and "fund this company now" are different calls. The founder analyst is not shown
+company facts and the company analyst is not shown founder evidence.
 
 ## 6. Steering
 
@@ -176,12 +200,14 @@ service**, because no keys were available.
 | GitHub | Official REST API, optional token | Live, verified |
 | arXiv | Official API, one request per three seconds | Live, verified |
 | Open web | The model provider's search and fetch tools | Through research jobs |
-| Professional profiles | A licensed vendor only | Not connected |
+| Professional profiles | A data vendor's API under contract. An adapter for People Data Labs is built | Built, unverified against the live service (no key on this machine) |
+| Your network | A partner's own exported contact list, uploaded by that partner | Built |
+| Added by a person | A name and a link typed into the dashboard | Built |
 | Conversations | Approved outreach, pasted notes | Intake built; no dialler |
 
 Rules the system enforces in code, not in prose:
 
-1. No LinkedIn scraping or login. Research prompts forbid fetching it; there is no adapter for it.
+1. Nothing requests the professional network's own site (linkedin.com and its related hosts, listed in `packages/shared/src/policy.ts`). The shared fetch helper and the quote check refuse those hosts, and research agents run with a deny rule for them that was checked by running it: a rule for the bare host does not cover `www.`, so each host gets a bare rule and a wildcard rule. A link to a profile is kept as a pointer a person can open.
 2. Every evidence item has a source; unsupported, wrong-person and not-yet-checked items are excluded from scoring. A rubric answer that cites no verified evidence is treated as unsettled, and a founder whose evidence has not been fact-checked waits instead of being scored.
 3. Prohibited attributes are named in every people-reading prompt and have no field anywhere. One phrase-based check runs on every text before it is stored: model output, transcripts of model calls, and notes a person pastes in. Evidence and leads that state one are dropped; in other text the sentence is removed. Steering that states one is refused.
 4. Repository checkouts are shallow, size-capped, stripped of agent-instruction files and `.git`, and reviewed with read-only tools. A test plants a hostile hook and proves it does not run.
@@ -195,6 +221,48 @@ Before any AI call is placed, counsel should confirm consent for AI-voiced calls
 duties (EU AI Act Article 50 applies from August 2026), and notice duties to EU and UK data subjects.
 The research file lists what was and was not verified; much of the compliance material rests on
 secondary sources and is flagged as such.
+
+### Professional profiles without reading LinkedIn
+
+LinkedIn is where most professional history is written down, and the swarm still never requests
+it. The reasons, from `docs/research/linkedin-rules-and-official-access.md` and
+`docs/research/people-data-vendors.md` (researched 2026-11-13; not legal advice):
+
+- Its User Agreement bars scraping and automated access by any means, browser extensions included.
+  Logged-in automation and made-up accounts are the facts behind every case it has won: hiQ (2022,
+  permanent injunction and $500,000), Proxycurl (shut down in July 2025 and made to delete its data),
+  ProAPIs (consent judgment in 2026). A partner's own account can be restricted for the same conduct.
+- No official programme gives a bulk, storable feed of other people's work history. The official
+  routes are consent-based and one member at a time, and the Sales Navigator API is closed to new
+  partners.
+- No data vendor states that it holds a licence from LinkedIn. Buying from a vendor is a contract
+  with the vendor, and where its data came from is the buyer's risk to check.
+- France's regulator fined the vendor of a LinkedIn contact-details extension EUR 240,000 in
+  December 2024 for collecting restricted details, keeping them too long and telling people late.
+
+So the same information arrives four ways, none of which touches the site:
+
+| Route | What it gives | Scale | Status |
+|---|---|---|---|
+| A data vendor's API (People Data Labs first) | Search for people who recently became founders; a known founder's work history; a company's team | Hundreds of millions of records, paid per record returned | Adapter built; needs `PDL_API_KEY`; unverified against the live service |
+| A partner's own exported contact list | Who the partners know at a company. A contact whose title changes to a founder's between two uploads becomes a lead | Each partner's own connections | Built |
+| Search results | Names, links and snippets a search engine shows | Per query | Research agents may search; the deny rule stops them opening the pages |
+| A person, by hand | A partner sees someone on LinkedIn or Sales Navigator and types the name and link in | Human pace | Built |
+
+What the agents add is the work between the records: code turns the thesis into the vendor query,
+the matcher recognises a vendor record as the person already seen on GitHub or Hacker News, and a
+vendor record is a claim like any other, fact-checked before it counts.
+
+People Data Labs is first because its documentation is public, it has a free tier, it can look a
+person up by name and company without a profile link, and it describes its sources as data partners
+and public records. Specter and Harmonic sell the exact "just left to start something" signal, by
+sales contract. The adapter asks the vendor only for professional fields; birth dates, phone numbers
+and personal email addresses are never requested, and the email column of a contact list is never
+read.
+
+Not built, and needed before this holds data on people in the EU or UK: a recorded legitimate-interest
+test, a notice to each person within a month of first holding their data, and a retention limit
+that does not restart every time a record is refreshed.
 
 ## 10. Autonomy
 
@@ -279,11 +347,57 @@ evals/flows       eval state, one directory per flow
 docs              this design, research notes, the architecture page
 ```
 
-## 14. Decisions that are yours
+## 14. The harness: what steers the agents and what checks them
+
+The model is one part of an agent; the harness is everything else. This system's harness has
+guides, which act before a model answers, and checks, which act after. Where code can do a check
+it does, because code is exact, free and the same every time; a model checks only what code cannot
+(`docs/research/harness-engineering.md` has the sources and the strength of evidence for each idea).
+
+| Part | Kind | What it does | What it assumes the model gets wrong |
+|---|---|---|---|
+| Narrow jobs with a typed answer | Guide | One question per call, answered in a fixed shape | Doing several things well in one answer |
+| One repair after a rejected answer | Check, code | An answer that fails validation is sent back once with the validator's message | Getting the shape right every time |
+| Grounding rule | Check, code | A rubric answer or a brief point that cites no verified evidence does not count | Citing a source for every statement |
+| Quote check | Check, code | Opens the cited page and looks for the quoted words; an item whose words are not there is rejected before any model sees it | Copying a quote exactly |
+| Fact-checker on another model family | Check, model | Judges whether the quoted words support the claim and are about the right person or company | Noticing its own unsupported claims |
+| Planted false claim | Check, code and model | Every fact-check call carries one made-up claim. A checker that accepts it has that call's verdicts thrown away, and the dashboard says so | That the checker itself is reliable today |
+| Open questions on a second look | Guide, from code | The scorer lists the rubric questions still unsettled and hands them to the researchers | Knowing what is missing |
+| Fences, read-only tools, a deny list, a scrubbed environment | Guide and check, code | Untrusted text is fenced; research agents can search and read but not act; repository reviewers cannot write; sub-processes do not inherit unrelated keys | Ignoring instructions in what it reads |
+| Redaction boundary | Check, code | Personal attributes are removed from everything stored, and steering that states one is refused | Never repeating a personal detail |
+| Spend caps and the stop switch | Check, code | Ceilings per task and per run, across retries | Stopping by itself |
+| Prompt hash on every task | Check, code | Each task records which wording it was given, so a silent change of wording is visible | Nothing: this watches the harness, not the model |
+| Keep rule with a noise floor | Check, code | A change to the configuration is kept only if the held-out score moves beyond rerun noise | That a change which looks better is better |
+
+Three rules keep the harness itself honest. Every check has a test that plants the fault it exists
+to catch. Every rule in `CLAUDE.md` names the test that enforces it, and a test fails when one does
+not (`packages/core/src/rules.test.ts`). And the two checks that cost time on a live run, the quote
+check and the planted claim, are settings: turning one off and comparing is how to find out whether
+a stronger model has made it unnecessary. A harness part that outlives the weakness it was built
+for is dead weight.
+
+What was measured here. The nine evidence items from the first live run (2026-11-13) were collected
+under a prompt that allowed "a quote or close paraphrase". The quote check found none of them word
+for word: seven were not on the page as quoted and two pages could not be read. The model
+fact-checker had marked four of those seven as supported, because it was shown the paraphrase and
+not the page. The prompt now requires the source's exact words. Four live investigator calls with
+the new prompt, on the same founder the same day, returned eight items: seven were found word for
+word, one was too short to check, and none was missing. That is one founder and eight items, enough
+to show the direction and not enough to quote a rate.
+
+What was deliberately not built. A second analyst voting on borderline founders: the research found
+agreement between models a weak sign of being right. A proposer that rewrites prompts from raw
+traces: it cannot be evaluated in simulation, where the simulated agents do not read prompts. The
+planted claim has no published evidence behind it; it is this project's own idea and should be
+judged by the failures it catches.
+
+## 15. Decisions that are yours
 
 1. The fund's name and first thesis.
-2. Which licensed profile-data vendor, if any.
-3. Whether AI voice calls are wanted at all, and with which vendor, after legal review.
-4. API keys for unattended daily runs. The command-line logins are fine for a prototype; a scheduled production run should bill an API account.
-5. Where real labelled founders for the eval come from.
-6. Hosting and login, before anyone but you opens the dashboard.
+2. Which profile-data vendor to sign with, after reading its terms and asking where its data comes from. The People Data Labs adapter works with a free key (100 records a month) for a first look.
+3. Whether the fund will hold data on people in the EU or UK. If so, a notice and a retention limit must be built first.
+4. How much the founders should count against the company (the share is 0.6 today), once there are real calls to tune it on.
+5. Whether AI voice calls are wanted at all, and with which vendor, after legal review.
+6. API keys for unattended daily runs. The command-line logins are fine for a prototype; a scheduled production run should bill an API account.
+7. Where real labelled founders for the eval come from.
+8. Hosting and login, before anyone but you opens the dashboard.

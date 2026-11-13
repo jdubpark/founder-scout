@@ -16,7 +16,7 @@ import type {
   OutreachPlanInput,
   OutreachProposal,
 } from "@agentswarm/shared";
-import type { EngineRuntime } from "./runtime";
+import { forEachConcurrent, type EngineRuntime } from "./runtime";
 
 const OPEN_OUTREACH_STATUSES = ["proposed", "approved", "dispatched"] as const;
 
@@ -95,16 +95,32 @@ function hasLatestYesCall(runtime: EngineRuntime, founderId: string): boolean {
   return latestCalls(runtime.deps.store.allFeedback(runtime.swarm.id)).get(founderId)?.verdict === "yes";
 }
 
+function companyYesLeadIds(runtime: EngineRuntime): Set<string> {
+  const founderIds = new Set<string>();
+  for (const company of runtime.deps.store.listCompanies({ swarmId: runtime.swarm.id })) {
+    if (runtime.deps.store.listCompanyFeedback(company.id)[0]?.verdict !== "yes") continue;
+    const leadFounderId = runtime.deps.store.latestCompanyAssessment(company.id)?.leadFounderId
+      ?? runtime.deps.store.foundersOfCompany(company.id)[0]?.id;
+    if (leadFounderId) founderIds.add(leadFounderId);
+  }
+  return founderIds;
+}
+
+function isOutreachEligible(runtime: EngineRuntime, founderId: string): boolean {
+  if (latestCalls(runtime.deps.store.allFeedback(runtime.swarm.id)).get(founderId)?.verdict === "no") return false;
+  return hasLatestYesCall(runtime, founderId) || companyYesLeadIds(runtime).has(founderId);
+}
+
 function latestYesCandidates(runtime: EngineRuntime): AssessedCandidate[] {
   const latestByFounder = latestCalls(runtime.deps.store.allFeedback(runtime.swarm.id));
-  const approvedFounderIds = new Set(
-    [...latestByFounder.values()]
-      .filter((feedback) => feedback.verdict === "yes")
-      .map((feedback) => feedback.founderId),
-  );
+  const approvedFounderIds = new Set(companyYesLeadIds(runtime));
+  for (const feedback of latestByFounder.values()) {
+    if (feedback.verdict === "yes") approvedFounderIds.add(feedback.founderId);
+  }
 
   return runtime.deps.store.listFounders({ swarmId: runtime.swarm.id })
     .flatMap((founder) => {
+      if (latestByFounder.get(founder.id)?.verdict === "no") return [];
       if (!approvedFounderIds.has(founder.id) || hasOpenOutreach(runtime, founder.id)) return [];
       const assessment = runtime.deps.store.latestAssessment(founder.id);
       return assessment ? [{ founder, assessment }] : [];
@@ -193,9 +209,8 @@ export async function runFinalStages(runtime: EngineRuntime): Promise<void> {
   const memoAgent = runtime.agents.find((agent) => agent.jobId === "assess.memo");
 
   if (memoAgent) {
-    for (const candidate of candidates) {
-      if (runtime.stopped()) return;
-      if (candidate.assessment.memo) continue;
+    await forEachConcurrent(candidates, runtime.concurrency, runtime.stopped, async (candidate) => {
+      if (runtime.stopped() || candidate.assessment.memo) return;
 
       const input: MemoInput = {
         founder: founderBrief(runtime, candidate.founder),
@@ -224,7 +239,7 @@ export async function runFinalStages(runtime: EngineRuntime): Promise<void> {
         runtime.deps.store.setMemo(candidate.assessment.id, result.output);
         runtime.persist();
       }
-    }
+    });
   }
 
   if (runtime.stopped()) return;
@@ -234,14 +249,11 @@ export async function runFinalStages(runtime: EngineRuntime): Promise<void> {
   const maxFounders = numberParam("outreach.max_proposals", runtime.resolve(null, "outreach.max_proposals"), runtime.config);
 
   if (enabled && outreachAgent && maxFounders > 0) {
-    let foundersPlanned = 0;
-
-    for (const candidate of latestYesCandidates(runtime)) {
-      if (runtime.stopped()) return;
-      if (foundersPlanned >= maxFounders) break;
-      if (!hasLatestYesCall(runtime, candidate.founder.id) || hasOpenOutreach(runtime, candidate.founder.id)) continue;
+    const candidates = latestYesCandidates(runtime).slice(0, maxFounders);
+    await forEachConcurrent(candidates, runtime.concurrency, runtime.stopped, async (candidate) => {
+      if (runtime.stopped() || !isOutreachEligible(runtime, candidate.founder.id) || hasOpenOutreach(runtime, candidate.founder.id)) return;
       const assessment = runtime.deps.store.latestAssessment(candidate.founder.id);
-      if (!assessment) continue;
+      if (!assessment) return;
       // Partner approval can precede a model memo; keep the plan useful without
       // inventing assessment facts by deriving this fallback only from the record.
       const memo = assessment.memo ?? fallbackMemo(assessment, candidate.founder.name);
@@ -260,9 +272,8 @@ export async function runFinalStages(runtime: EngineRuntime): Promise<void> {
         input,
         founderId: candidate.founder.id,
       });
-      if (!result) return;
-      if (!result.output) continue;
-      if (!hasLatestYesCall(runtime, candidate.founder.id) || hasOpenOutreach(runtime, candidate.founder.id)) continue;
+      if (!result || !result.output) return;
+      if (!isOutreachEligible(runtime, candidate.founder.id) || hasOpenOutreach(runtime, candidate.founder.id)) return;
 
       const counts: Record<OutreachKind, number> = { email_founder: 0, call_founder: 0, call_reference: 0 };
       for (const action of runtime.deps.store.listOutreach({ swarmId: runtime.swarm.id, founderId: candidate.founder.id })) {
@@ -277,11 +288,10 @@ export async function runFinalStages(runtime: EngineRuntime): Promise<void> {
         candidateProposals += 1;
       }
       if (candidateProposals > 0) {
-        foundersPlanned += 1;
         runtime.addStats({ outreachProposed: candidateProposals });
         runtime.persist();
       }
-    }
+    });
   }
 
   if (runtime.stopped()) return;

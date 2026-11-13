@@ -1,8 +1,7 @@
 /**
- * Professional-profile data. There is deliberately no LinkedIn adapter: this
- * system never logs in to or scrapes LinkedIn. Profile data may only come from
- * a licensed vendor. Until one is connected, this adapter reports itself as
- * not configured and fetches nothing.
+ * Professional-profile data comes from a data vendor under contract or not at
+ * all. This system never requests the professional network's own hosts. A
+ * profile link may be retained as a lookup key, but is never fetched.
  *
  * To add a vendor, implement ProfileDataVendor in one file and pass it to
  * createPeopleDataAdapter in index.ts.
@@ -11,10 +10,10 @@
 import type { SourceAdapter, SourceFetchRequest, SourceFetchResult } from "../contracts";
 
 export const NOT_CONFIGURED_DETAIL =
-  "Not configured. A licensed professional-profile data vendor must be connected. The system never logs in to or scrapes LinkedIn.";
+  "Not configured. Professional-profile data comes from a data vendor under contract or not at all. The system never requests the professional network's own site.";
 
 export const NOT_CONFIGURED_ERROR =
-  "Professional-profile data is not configured. A licensed professional-profile data vendor must be connected. The system never logs in to or scrapes LinkedIn.";
+  "Professional-profile data is not configured. It must come from a data vendor under contract or not at all. The system never requests the professional network's own site.";
 
 /** What a licensed vendor adapter implements. Same contract as a SourceAdapter, without the id. */
 export interface ProfileDataVendor {

@@ -1,10 +1,13 @@
 import {
   ACTOR_HEADER,
+  type AddFounderInput,
   type ApiClient,
   type ApiErrorBody,
+  type CompanyQuery,
   type DirectiveFilter,
   type EffectiveSteeringQuery,
   type FounderQuery,
+  type NetworkImportInput,
   type OutreachQuery,
 } from "@agentswarm/shared";
 
@@ -105,6 +108,16 @@ export function createHttpClient(options: { baseUrl?: string; getActor: () => st
     getFounder: (id) => get(`/api/founders/${encodeURIComponent(id)}`),
     addFeedback: (founderId, input) =>
       call("POST", `/api/founders/${encodeURIComponent(founderId)}/feedback`, input),
+    addFounder: (input: AddFounderInput) => call("POST", "/api/founders", input),
+
+    listCompanies: (query: CompanyQuery) => get("/api/companies", { ...query }),
+    getCompany: (id) => get(`/api/companies/${encodeURIComponent(id)}`),
+    addCompanyFeedback: (companyId, input) =>
+      call("POST", `/api/companies/${encodeURIComponent(companyId)}/feedback`, input),
+
+    getNetwork: () => get("/api/network"),
+    importNetwork: (input: NetworkImportInput) => call("POST", "/api/network/import", input),
+    removeNetwork: (owner) => call("DELETE", `/api/network/${encodeURIComponent(owner)}`),
 
     listOutreach: (query: OutreachQuery) => get("/api/outreach", { ...query }),
     decideOutreach: (id, input) => call("POST", `/api/outreach/${encodeURIComponent(id)}/decision`, input),

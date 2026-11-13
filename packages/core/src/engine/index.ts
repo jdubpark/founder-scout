@@ -218,6 +218,9 @@ export function createRunController(deps: EngineDeps): RunController {
         outputSummary: input.outputSummary ?? null,
         output: input.output ?? null,
         steering: snapshot,
+        promptVariant: config.promptVariants[input.jobId] ?? "base",
+        promptHash: null,
+        control: null,
         usage: null,
         costUsd: null,
         latencyMs: null,
@@ -235,6 +238,8 @@ export function createRunController(deps: EngineDeps): RunController {
       config,
       agents,
       brain: run.brain,
+      concurrency: 1,
+      signal: activeRun.abort.signal,
       now,
       stopped,
       persist,
@@ -248,9 +253,10 @@ export function createRunController(deps: EngineDeps): RunController {
         jobId: J;
         input: JobInput<J>;
         founderId?: string | null;
+        companyId?: string | null;
         repoDir?: string | null;
       }): Promise<TaskResult<J> | null> => {
-        const { agent, stage, jobId, input, founderId = null, repoDir = null } = args;
+        const { agent, stage, jobId, input, founderId = null, companyId = null, repoDir = null } = args;
         if (stopped()) return null;
         const job = deps.jobs.get(jobId);
         const steering = steeringForTask(agent);
@@ -269,6 +275,7 @@ export function createRunController(deps: EngineDeps): RunController {
           classId: agent.classId,
           stage,
           founderId,
+          companyId,
           attempt: 1,
           provider: route.provider,
           model: route.model,
@@ -277,6 +284,9 @@ export function createRunController(deps: EngineDeps): RunController {
           outputSummary: null,
           output: null,
           steering: snapshot,
+          promptVariant: config.promptVariants[jobId] ?? "base",
+          promptHash: null,
+          control: null,
           usage: null,
           costUsd: null,
           latencyMs: null,
@@ -315,8 +325,11 @@ export function createRunController(deps: EngineDeps): RunController {
           let totalLatency = 0;
           const traces: NonNullable<TaskRun["trace"]> = [];
           let finalOutput: JobOutput<J> | null = null;
+          let finalPromptHash: string | null = null;
           let finalError: unknown = null;
           let attempts = 0;
+          let repairAttempted = false;
+          let repairMessage: string | null = null;
           for (let attempt = 1; attempt <= 3; attempt += 1) {
             if (stopped()) {
               finalError = new ProviderError("cancelled", "Run cancelled.");
@@ -352,8 +365,10 @@ export function createRunController(deps: EngineDeps): RunController {
                 repoDir,
                 maxBudgetUsd: allowance,
                 signal: activeRun.abort.signal,
+                repair: repairMessage,
               });
               finalOutput = execution.output;
+              finalPromptHash = execution.promptHash ?? null;
               totalUsage = addUsage(totalUsage, execution.usage);
               hasReportedUsage = true;
               if (execution.costUsd !== null) {
@@ -379,8 +394,17 @@ export function createRunController(deps: EngineDeps): RunController {
                   costUsd: hasKnownCost ? knownCost : null,
                 });
                 persist();
-                if (!error.retryable || attempt === 3 || stopped()) break;
-                if (run.brain !== "sim") {
+                let retry = false;
+                if (error.kind === "invalid_output") {
+                  if (repairAttempted || attempt === 3) break;
+                  repairAttempted = true;
+                  repairMessage = error.message;
+                  retry = true;
+                } else if (error.retryable && attempt < 3) {
+                  retry = true;
+                }
+                if (!retry) break;
+                if (error.retryable && run.brain !== "sim") {
                   const jitter = taskSeed(agent, founderId, attempt)();
                   const delay = Math.round(250 * (2 ** (attempt - 1)) * (0.5 + jitter));
                   await Promise.race([
@@ -388,6 +412,7 @@ export function createRunController(deps: EngineDeps): RunController {
                     new Promise<void>((resolve) => activeRun.abort.signal.addEventListener("abort", () => resolve(), { once: true })),
                   ]);
                 }
+                if (stopped()) break;
                 continue;
               }
               break;
@@ -409,6 +434,7 @@ export function createRunController(deps: EngineDeps): RunController {
             itemsOut: outputItems,
             // A provider's refusal or parse error can quote what it was reading.
             error: succeeded ? null : redactSensitive(errorMessage(finalError ?? "Job failed.")),
+            promptHash: finalPromptHash,
             finishedAt,
             trace: traces,
           };
@@ -458,6 +484,7 @@ export function createRunController(deps: EngineDeps): RunController {
         const planSteering = resolveSteering(deps.store.listDirectives(), planIdentity, now());
         const concurrency = numberParam("run.concurrency", planSteering, config);
         semaphore = new Semaphore(concurrency);
+        context!.concurrency = concurrency;
         context!.swarm = currentSwarm;
         context!.config = config;
         context!.agents = agents;

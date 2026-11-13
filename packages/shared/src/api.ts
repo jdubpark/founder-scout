@@ -12,12 +12,18 @@ import type {
   Assessment,
   AuditEntry,
   Brain,
+  Company,
+  CompanyAssessment,
+  CompanyFeedback,
+  CompanyMember,
+  CompanyStatus,
   Evidence,
   Feedback,
   FeedbackVerdict,
   Founder,
   FounderStatus,
   Lead,
+  NetworkContact,
   OutreachAction,
   OutreachDraft,
   OutreachStatus,
@@ -246,6 +252,8 @@ export interface FounderRow {
   feedback: FeedbackVerdict | null;
   /** The reasons given with that call. */
   feedbackReasons: string[];
+  /** The company record this founder belongs to, if one is matched. */
+  companyId?: string | null;
   firstSeenAt: string;
   updatedAt: string;
 }
@@ -280,6 +288,20 @@ export interface FounderDetailDTO {
   feedback: Feedback[];
   /** The tasks that worked on this founder, newest first, without traces. */
   tasks: TaskRun[];
+  /** People in the partners' uploaded contact lists who work at this founder's company. */
+  knownPeople?: NetworkContact[];
+}
+
+/** A person a partner types in by hand, for example after seeing them on a professional network. */
+export interface AddFounderInput {
+  swarmId: string;
+  name: string;
+  companyName?: string | null;
+  companyUrl?: string | null;
+  /** Any public link for the person: a site, a code host profile, a professional profile. */
+  link?: string | null;
+  /** Why this person is worth a look, in the partner's words. */
+  why?: string | null;
 }
 
 export interface FeedbackInput {
@@ -287,6 +309,102 @@ export interface FeedbackInput {
   /** Ids from FEEDBACK_REASONS for this verdict. */
   reasonTags?: string[];
   note?: string | null;
+}
+
+/* ------------------------------ Companies -------------------------- */
+
+export interface CompanyRow {
+  id: string;
+  name: string;
+  oneLiner: string | null;
+  sector: string | null;
+  stage: string | null;
+  status: CompanyStatus;
+  decision: Decision | null;
+  /** 0..1 founders and company together. */
+  deal: number | null;
+  /** 0..1 the company on its own rubric. */
+  company: number | null;
+  /** 0..1 the lead founder's score. */
+  team: number | null;
+  coverage: number | null;
+  /** Founders of this company the swarm follows, lead first. */
+  founders: Array<{ id: string; name: string }>;
+  teamSize: number;
+  evidenceCount: number;
+  flagCount: number;
+  /** The partner's most recent call on this company, if any. */
+  feedback: FeedbackVerdict | null;
+  feedbackReasons: string[];
+  /** How many people in the partners' uploaded contact lists work here. */
+  knownPeople: number;
+  firstSeenAt: string;
+  updatedAt: string;
+}
+
+export type CompanySort = "deal" | "company" | "team" | "recent";
+
+export interface CompanyQuery {
+  swarmId: string;
+  status?: CompanyStatus | "all";
+  q?: string;
+  sort?: CompanySort;
+  limit?: number;
+  offset?: number;
+}
+
+export interface CompanyListDTO {
+  rows: CompanyRow[];
+  total: number;
+  /** Count per status, ignoring the status filter, for filter tabs. */
+  counts: Partial<Record<CompanyStatus, number>>;
+}
+
+export interface CompanyDetailDTO {
+  company: Company;
+  members: CompanyMember[];
+  /** Founders of this company the swarm follows, lead first. */
+  founders: FounderRow[];
+  assessment: CompanyAssessment | null;
+  /** Deal score at each past assessment, oldest first. */
+  history: Array<{ at: string; deal: number; decision: Decision }>;
+  /** Company evidence, newest first. */
+  evidence: Evidence[];
+  feedback: CompanyFeedback[];
+  /** The tasks that worked on this company, newest first, without traces. */
+  tasks: TaskRun[];
+  /** People in the partners' uploaded contact lists who work here. */
+  knownPeople: NetworkContact[];
+}
+
+export interface CompanyFeedbackInput {
+  verdict: FeedbackVerdict;
+  /** Ids from COMPANY_REASONS for this verdict. */
+  reasonTags?: string[];
+  note?: string | null;
+}
+
+/* ------------------------------- Network --------------------------- */
+
+export interface NetworkDTO {
+  /** One row per person who has uploaded a list. */
+  owners: Array<{ owner: string; contacts: number; importedAt: string }>;
+  total: number;
+}
+
+export interface NetworkImportInput {
+  /** The text of the exported connections file, as downloaded. */
+  csv: string;
+}
+
+export interface NetworkImportResult {
+  owner: string;
+  imported: number;
+  /** Contacts whose company or position differs from the previous upload. */
+  changed: number;
+  /** Changed contacts that now look like founders and were added as leads. */
+  leads: number;
+  network: NetworkDTO;
 }
 
 /* ------------------------------ Outreach --------------------------- */
@@ -380,6 +498,10 @@ export interface OverviewDTO {
   /** Cumulative totals across the swarm's life, widest stage first. */
   totals: { leads: number; founders: number; screenedIn: number; investigated: number; surfaced: number };
   topFounders: FounderRow[];
+  /** The best companies still waiting for a partner's call. */
+  topCompanies?: CompanyRow[];
+  /** Surfaced companies with no call yet. */
+  companiesWaiting?: number;
   alerts: Alert[];
   lastRun: Run | null;
   activeRun: Run | null;
@@ -505,6 +627,22 @@ export interface ApiClient {
   getFounder(id: string): Promise<FounderDetailDTO>;
   /** POST /api/founders/:id/feedback */
   addFeedback(founderId: string, input: FeedbackInput): Promise<Feedback>;
+  /** POST /api/founders */
+  addFounder(input: AddFounderInput): Promise<Lead>;
+
+  /** GET /api/companies?swarmId=&status=&q=&sort=&limit=&offset= */
+  listCompanies(query: CompanyQuery): Promise<CompanyListDTO>;
+  /** GET /api/companies/:id */
+  getCompany(id: string): Promise<CompanyDetailDTO>;
+  /** POST /api/companies/:id/feedback */
+  addCompanyFeedback(companyId: string, input: CompanyFeedbackInput): Promise<CompanyFeedback>;
+
+  /** GET /api/network */
+  getNetwork(): Promise<NetworkDTO>;
+  /** POST /api/network/import */
+  importNetwork(input: NetworkImportInput): Promise<NetworkImportResult>;
+  /** DELETE /api/network/:owner */
+  removeNetwork(owner: string): Promise<NetworkDTO>;
 
   /** GET /api/outreach */
   listOutreach(query: OutreachQuery): Promise<OutreachRow[]>;
@@ -556,6 +694,10 @@ export interface DemoSnapshot {
   founders: Record<string, FounderRow[]>;
   /** Keyed by founder id. May cover only the most interesting founders. */
   founderDetails: Record<string, FounderDetailDTO>;
+  /** Every non-archived company row per swarm id, unfiltered. */
+  companies?: Record<string, CompanyRow[]>;
+  /** Keyed by company id. May cover only the most interesting companies. */
+  companyDetails?: Record<string, CompanyDetailDTO>;
   /** Keyed by swarm id. */
   outreach: Record<string, OutreachRow[]>;
   /** Keyed by swarm id, newest first. */

@@ -2,6 +2,7 @@ import { existsSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { ScreenOutputSchema, type ScreenOutput } from "@agentswarm/shared";
 import { ProviderError, type ProviderRequest } from "../contracts";
+import { claudeFetchDenyRules, NEVER_FETCH_HOSTS } from "@agentswarm/shared";
 import {
   ClaudeCliProvider,
   REVIEW_DENIED_TOOLS,
@@ -84,6 +85,18 @@ function argValue(args: readonly string[], flag: string): string | undefined {
   return i >= 0 ? args[i + 1] : undefined;
 }
 
+/** Every value after --disallowedTools, up to the next flag. */
+function denyListOf(args: readonly string[]): string[] {
+  const i = args.indexOf("--disallowedTools");
+  if (i < 0) return [];
+  const rules: string[] = [];
+  for (const arg of args.slice(i + 1)) {
+    if (arg.startsWith("--")) break;
+    rules.push(arg);
+  }
+  return rules;
+}
+
 describe("buildClaudeArgs", () => {
   const base = {
     model: "claude-haiku-5-5",
@@ -107,6 +120,47 @@ describe("buildClaudeArgs", () => {
     expect(argValue(args, "--allowedTools")).toBe("WebSearch,WebFetch");
     expect(args).toContain("stream-json");
     expect(args).not.toContain("--add-dir");
+  });
+
+  it("denies page fetches to every never-fetch host and their subdomains on research calls", () => {
+    const args = buildClaudeArgs({ ...base, kind: "research", streaming: true });
+    const denied = denyListOf(args);
+    expect(denied).toEqual(claudeFetchDenyRules());
+    for (const host of NEVER_FETCH_HOSTS) {
+      expect(denied).toContain(`WebFetch(domain:${host})`);
+      expect(denied).toContain(`WebFetch(domain:*.${host})`);
+    }
+    // Web search is not a request to those hosts, so it is not denied.
+    expect(denied.some((rule) => rule.startsWith("WebSearch"))).toBe(false);
+  });
+
+  it("puts the research deny list last, because --disallowedTools is variadic", () => {
+    const args = buildClaudeArgs({ ...base, kind: "research", streaming: true });
+    const at = args.indexOf("--disallowedTools");
+    expect(at).toBeGreaterThan(args.indexOf("--allowedTools"));
+    expect(args.slice(at + 1)).toEqual(claudeFetchDenyRules());
+  });
+
+  it("adds no deny rules for structured calls, which have no tools", () => {
+    const args = buildClaudeArgs({ ...base, kind: "structured", streaming: false });
+    expect(args).not.toContain("--disallowedTools");
+    expect(args.some((arg) => arg.includes("WebFetch(domain:"))).toBe(false);
+  });
+
+  it("leaves the repository-review argument list exactly as it was", () => {
+    const args = buildClaudeArgs({ ...base, kind: "repo_review", streaming: true, repoDir: "/checkout" });
+    expect(args.slice(args.indexOf("--tools"))).toEqual([
+      "--tools",
+      "Read,Grep,Glob",
+      "--allowedTools",
+      "Read,Grep,Glob",
+      "--disallowedTools",
+      REVIEW_DENIED_TOOLS.join(","),
+      "--restricted",
+      "--add-dir",
+      "/checkout",
+    ]);
+    expect(args.some((arg) => arg.includes("WebFetch(domain:"))).toBe(false);
   });
 
   it("gives repo reviews read and search tools only, with shell, write and network denied", () => {
@@ -265,6 +319,18 @@ describe("ClaudeCliProvider.run", () => {
     expect(calls).toHaveLength(0);
   });
 
+  it("passes a cloud provider's credentials to the process only when that sign-in route is in use", async () => {
+    const calls: ProcessRequest[] = [];
+    const secrets = { AWS_SECRET_ACCESS_KEY: "aws", GITHUB_TOKEN: "gh", PATH: "/usr/bin" };
+    await new ClaudeCliProvider({ env: secrets, runner: fakeRunner({ stdout: successJson(FIT) }, calls) }).run(request());
+    expect(calls[0]?.env).toEqual({ PATH: "/usr/bin" });
+    await new ClaudeCliProvider({
+      env: { ...secrets, CLAUDE_CODE_USE_BEDROCK: "1" },
+      runner: fakeRunner({ stdout: successJson(FIT) }, calls),
+    }).run(request());
+    expect(calls[1]?.env).toEqual({ AWS_SECRET_ACCESS_KEY: "aws", CLAUDE_CODE_USE_BEDROCK: "1", PATH: "/usr/bin" });
+  });
+
   it("maps a missing binary to not_configured", async () => {
     const provider = new ClaudeCliProvider({
       env: {},
@@ -355,3 +421,33 @@ describe("claude result helpers", () => {
     expect(parsed.tools).toEqual([]);
   });
 });
+
+describe("ClaudeCliProvider environment", () => {
+  it("passes the headless process only the environment it needs", async () => {
+    const calls: ProcessRequest[] = [];
+    const provider = new ClaudeCliProvider({
+      env: {
+        PATH: "/usr/bin",
+        HOME: "/Users/test",
+        ANTHROPIC_API_KEY: "sk-ant-own",
+        ANTHROPIC_AUTH_TOKEN: "own-auth-token",
+        OPENAI_API_KEY: "sk-other-vendor",
+        GITHUB_TOKEN: "ghp_secret",
+        SOME_DATA_VENDOR_SECRET: "vendor-secret",
+      },
+      runner: fakeRunner({ stdout: successJson(FIT) }, calls),
+    });
+    await provider.run(request());
+
+    const env = calls[0]?.env ?? {};
+    expect(env.OPENAI_API_KEY).toBeUndefined();
+    expect(env.GITHUB_TOKEN).toBeUndefined();
+    expect(env.SOME_DATA_VENDOR_SECRET).toBeUndefined();
+    expect(env.ANTHROPIC_API_KEY).toBe("sk-ant-own");
+    // The keep prefix wins over the secret-looking suffix.
+    expect(env.ANTHROPIC_AUTH_TOKEN).toBe("own-auth-token");
+    expect(env.PATH).toBe("/usr/bin");
+    expect(env.HOME).toBe("/Users/test");
+  });
+});
+

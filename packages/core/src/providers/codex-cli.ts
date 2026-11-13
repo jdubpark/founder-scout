@@ -15,6 +15,7 @@ import {
   zeroUsage,
   type JobKindName,
 } from "./common";
+import { scrubEnv } from "./env";
 import { toProviderJsonSchema } from "./schema";
 import { findOnPath, runProcess, type ProcessOutcome, type ProcessRunner } from "./subprocess";
 
@@ -173,6 +174,9 @@ export interface CodexCliOptions {
 
 const SUPPORTED: readonly JobKindName[] = ["structured", "repo_review"];
 
+/** Environment variables the headless Codex process keeps. Everything else that looks like a secret is dropped. */
+export const CODEX_ENV_PREFIXES = ["OPENAI_", "CODEX_"] as const;
+
 export class CodexCliProvider implements ModelProvider {
   readonly id = "codex-cli" as const;
   private readonly env: NodeJS.ProcessEnv;
@@ -234,7 +238,7 @@ export class CodexCliProvider implements ModelProvider {
         command: "codex",
         args,
         cwd: workdir,
-        env: this.env,
+        env: scrubEnv(this.env, CODEX_ENV_PREFIXES),
         stdin: codexPrompt(req.system, req.prompt),
         timeoutMs: req.timeoutMs ?? DEFAULT_TIMEOUT_MS[req.kind],
         signal: req.signal,

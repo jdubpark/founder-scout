@@ -2,15 +2,20 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   BASE_CONFIG,
   DEFAULT_SETTINGS,
+  DIMENSIONS,
   JOBS,
   ZERO_STATS,
   getJob,
   renderCallsBlock,
   type Agent,
   type Assessment,
+  type Company,
+  type CompanyAssessment,
+  type CompanyFeedback,
   type Directive,
   type Evidence,
   type JobInput,
+  type InvestigateInput,
   type Feedback,
   type Founder,
   type Memo,
@@ -28,7 +33,7 @@ import { createExecuteJob, createJobRegistry } from "../jobs";
 import { openStore } from "../db";
 import { createSimRepoFinder, createSimSources, createSimWorld } from "../sim";
 import { ProviderError } from "../contracts";
-import type { ExecuteJob, JobContext, ProviderRegistry, SimFounder, SimWorld, SourceRegistry } from "../contracts";
+import type { ExecuteJob, JobContext, PeopleLookup, PersonKey, PersonRecord, ProviderRegistry, QuoteChecker, RepoFinder, SimFounder, SimWorld, SourceRegistry } from "../contracts";
 import { createRunController } from "./index";
 
 const NOW = new Date("2026-11-12T18:00:00.000Z");
@@ -230,6 +235,10 @@ interface HarnessOptions {
   config?: Partial<SwarmConfig>;
   simWorld?: SimWorld;
   simSources?: SourceRegistry;
+  liveSources?: SourceRegistry;
+  liveRepos?: RepoFinder;
+  quotes?: QuoteChecker;
+  people?: PeopleLookup;
   providerError?: () => never;
   wrapExecuteJob?: (delegate: ExecuteJob) => ExecuteJob;
 }
@@ -268,9 +277,11 @@ function makeHarness(options: HarnessOptions = {}) {
     store,
     jobs,
     executeJob,
-    sources: { sim: simSources, live: noLiveSources },
-    repos: { sim: createSimRepoFinder(world), live: createSimRepoFinder(world) },
+    sources: { sim: simSources, live: options.liveSources ?? noLiveSources },
+    repos: { sim: createSimRepoFinder(world), live: options.liveRepos ?? createSimRepoFinder(world) },
     simWorld: world,
+    quotes: options.quotes,
+    people: options.people,
     fundName: "Northstar Ventures",
     now: () => new Date(NOW),
     sleep: async () => undefined,
@@ -325,7 +336,7 @@ function makeTranscriptEvidence(id: string, founderId: string, excerpt: string):
   };
 }
 
-function makeSupportedEvidence(id: string, founderId: string): Evidence {
+function makeSupportedEvidence(id: string, founderId: string, overrides: Partial<Evidence> = {}): Evidence {
   return {
     id,
     founderId,
@@ -342,6 +353,19 @@ function makeSupportedEvidence(id: string, founderId: string): Evidence {
     verification: "supported",
     verificationNote: null,
     sim: null,
+    ...overrides,
+  };
+}
+
+function makeUnverifiedEvidence(id: string, founderId: string, overrides: Partial<Evidence> = {}): Evidence {
+  return {
+    ...makeSupportedEvidence(id, founderId),
+    kind: "article",
+    source: "web",
+    url: `https://example.com/${id}`,
+    verification: "unverified",
+    verificationNote: null,
+    ...overrides,
   };
 }
 
@@ -404,6 +428,8 @@ function timelineWorld(): SimWorld {
     },
     repos: (simId) => base.repos(simId),
     transcript: (simId, kind, targetName) => base.transcript(simId, kind, targetName),
+    company: (simId) => base.company(simId),
+    companyEvidenceFor: (simId, jobId, depth) => base.companyEvidenceFor(simId, jobId, depth),
   };
 }
 
@@ -450,7 +476,7 @@ describe("run engine", () => {
 
     expect(first.runs[0]!.simDay).not.toBeNull();
     expect(first.runs.map((run) => run.simDay)).toEqual([first.runs[0]!.simDay, first.runs[0]!.simDay! + 1, first.runs[0]!.simDay! + 2]);
-    expect(first.runs.map((run) => run.status)).toEqual(["succeeded", "succeeded", "succeeded"]);
+    expect(first.runs.map((run) => run.status), first.runs.map((run) => run.error).join(" | ")).toEqual(["succeeded", "succeeded", "succeeded"]);
     expect(first.runs.map((run) => run.stats.tasks)).toEqual(second.runs.map((run) => run.stats.tasks));
     expect(first.runs.map((run) => run.stats)).toEqual(second.runs.map((run) => run.stats));
 
@@ -500,7 +526,7 @@ describe("run engine", () => {
       output: task.output,
       itemsOut: task.itemsOut,
       steering: task.steering,
-    }));
+    })).sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b)));
     expect(stableTasks(first.tasks)).toEqual(stableTasks(second.tasks));
     expect(first.runs.map((run) => run.simDay)).toEqual(second.runs.map((run) => run.simDay));
     expect(first.evidence).toEqual(second.evidence);
@@ -675,6 +701,7 @@ describe("run engine", () => {
     const startedHarness = makeHarness({
       simWorld: world,
       simSources,
+      config: { params: { "run.concurrency": 1 } },
       agentJobs: [
         makeAgent("scout.github", { id: "agt_scout_one" }),
         makeAgent("scout.github", { id: "agt_scout_two" }),
@@ -1088,7 +1115,9 @@ describe("run engine", () => {
     expect(harness.store.latestAssessment(firstFounder.id)?.decision).toBe("needs_evidence");
     expect(harness.store.assessmentHistory(firstFounder.id)).toHaveLength(1);
     expect(harness.store.getFounder(firstFounder.id)?.nextRecheckAt).toBe(NOW.toISOString());
-    expect(investigatorDepths.filter((item) => item.founderId === firstFounder.id).map((item) => item.depth)).toEqual(["quick", "quick"]);
+    const firstRunDepths = investigatorDepths.filter((item) => item.founderId === firstFounder.id).map((item) => item.depth);
+    expect(firstRunDepths).toHaveLength(2);
+    expect(new Set(firstRunDepths)).toEqual(new Set(["quick"]));
 
     const limitedFounder = makeFounder(world.founders()[1]!, "fnd_02_followup_b", {
       status: "needs_evidence",
@@ -1112,7 +1141,10 @@ describe("run engine", () => {
     const threeDaysLater = new Date(NOW.getTime() + 3 * 24 * 60 * 60 * 1000).toISOString();
 
     expect(secondRun.status).toBe("succeeded");
-    expect(investigatorDepths.filter((item) => item.founderId === firstFounder.id).map((item) => item.depth)).toEqual(["quick", "quick", "deep", "deep"]);
+    const followUpDepths = investigatorDepths.filter((item) => item.founderId === firstFounder.id).map((item) => item.depth);
+    expect(followUpDepths).toHaveLength(4);
+    expect(followUpDepths.filter((depth) => depth === "quick")).toHaveLength(2);
+    expect(followUpDepths.filter((depth) => depth === "deep")).toHaveLength(2);
     expect(secondInvestigations.filter((task) => task.founderId === firstFounder.id)).toHaveLength(2);
     expect(secondInvestigations.some((task) => task.founderId === limitedFounder.id)).toBe(false);
     expect(secondInvestigations.some((task) => task.founderId === noFounder.id)).toBe(false);
@@ -1338,5 +1370,461 @@ describe("run engine", () => {
     expect(await investigatedIn("2026-11-10T18:00:00.000Z", NOW.toISOString())).toEqual(["fnd_watch_due"]);
     // The new founder has been waiting for a week; the re-check only came due now.
     expect(await investigatedIn(NOW.toISOString(), "2026-11-05T18:00:00.000Z")).toEqual(["fnd_queued_new"]);
+  });
+
+  it("runs independent model calls concurrently within the configured limit and stays deterministic", async () => {
+    const runAt = async (concurrency: number) => {
+      let inFlight = 0;
+      let maxInFlight = 0;
+      const world = createSimWorld({ seed: 9901, founders: 6, days: 4 });
+      const harness = makeHarness({
+        simWorld: world,
+        agentJobs: [
+          "scout.github", "scout.hackernews", "screen.fit", "investigate.background", "investigate.code",
+          "investigate.company", "investigate.media", "investigate.redflags", "verify.claims", "assess.judgments",
+        ],
+        config: { params: { "run.concurrency": concurrency, "investigate.max_founders": 10 } },
+        wrapExecuteJob: (delegate) => async <J extends ModelJobId>(
+          jobId: J,
+          input: JobInput<J>,
+          context: JobContext,
+          options: Parameters<ExecuteJob>[3],
+        ) => {
+          inFlight += 1;
+          maxInFlight = Math.max(maxInFlight, inFlight);
+          try {
+            await new Promise<void>((resolve) => setTimeout(resolve, 2));
+            return await delegate(jobId, input, context, options);
+          } finally {
+            inFlight -= 1;
+          }
+        },
+      });
+      for (const [index, sim] of world.founders().slice(0, 4).entries()) {
+        harness.store.insertFounder(makeFounder(sim, `fnd_parallel_${index}`, { status: "lead" }));
+      }
+      const started = await harness.controller.start({ swarmId: SWARM_ID, trigger: "manual", brain: "sim", sources: "sim" });
+      const run = await harness.controller.wait(started.id);
+      const founders = harness.store.listFounders({ swarmId: SWARM_ID });
+      return {
+        maxInFlight,
+        run,
+        founders: founders.map((founder) => ({
+          simId: founder.simId,
+          name: founder.name,
+          status: founder.status,
+          fit: founder.fit,
+          identityConfidence: founder.identityConfidence,
+        })).sort((a, b) => String(a.simId).localeCompare(String(b.simId))),
+        evidence: founders.flatMap((founder) => harness.store.listEvidence(founder.id).map((evidence) => ({
+          simId: founder.simId,
+          hash: evidence.hash,
+          verification: evidence.verification,
+          facet: evidence.facet ?? null,
+        }))).sort((a, b) => `${a.simId}:${a.hash}`.localeCompare(`${b.simId}:${b.hash}`)),
+        assessments: founders.map((founder) => {
+          const assessment = harness.store.latestAssessment(founder.id);
+          return assessment ? {
+            simId: founder.simId,
+            composite: assessment.composite,
+            founderScore: assessment.founderScore,
+            coverage: assessment.coverage,
+            decision: assessment.decision,
+            judgments: assessment.judgments.map(({ dimension, level, confidence }) => ({ dimension, level, confidence })),
+          } : null;
+        }).filter((assessment) => assessment !== null).sort((a, b) => String(a.simId).localeCompare(String(b.simId))),
+        companyDecisions: harness.store.listCompanies({ swarmId: SWARM_ID }).map((company) => ({
+          name: company.name,
+          decision: harness.store.latestCompanyAssessment(company.id)?.decision ?? null,
+        })).sort((a, b) => a.name.localeCompare(b.name)),
+      };
+    };
+
+    const serial = await runAt(1);
+    const parallel = await runAt(4);
+    expect(serial.run.status, serial.run.error ?? "").toBe("succeeded");
+    expect(parallel.run.status, parallel.run.error ?? "").toBe("succeeded");
+    expect(serial.maxInFlight).toBe(1);
+    expect(parallel.maxInFlight).toBeGreaterThan(1);
+    expect(parallel.maxInFlight).toBeLessThanOrEqual(4);
+    expect({
+      stats: serial.run.stats,
+      founders: serial.founders,
+      evidence: serial.evidence,
+      assessments: serial.assessments,
+      companyDecisions: serial.companyDecisions,
+    }).toEqual({
+      stats: parallel.run.stats,
+      founders: parallel.founders,
+      evidence: parallel.evidence,
+      assessments: parallel.assessments,
+      companyDecisions: parallel.companyDecisions,
+    });
+  });
+
+  it("repairs invalid output once, counts the retry, and records task fingerprints", async () => {
+    const world = createSimWorld({ seed: 991, founders: 2, days: 2 });
+    const repairMessages: Array<string | null | undefined> = [];
+    const harness = makeHarness({
+      simWorld: world,
+      agentJobs: ["verify.claims", "assess.judgments"],
+      config: { promptVariants: { "assess.judgments": "variant-test" }, params: { "verify.control": false } },
+      wrapExecuteJob: (delegate) => async <J extends ModelJobId>(jobId: J, input: JobInput<J>, context: JobContext, options: Parameters<ExecuteJob>[3]) => {
+        if (jobId === "verify.claims") {
+          const verification = await delegate(jobId, input, context, { ...options, brain: "sim" });
+          return {
+            ...verification,
+            output: { identityConfidence: 0.9, verdicts: [{ evidenceId: "evd_repair_once", verdict: "supported", note: null }] } as unknown as JobOutput<J>,
+          };
+        }
+        if (jobId === "assess.judgments") {
+          repairMessages.push(options.repair);
+          if (repairMessages.length === 1) throw new ProviderError("invalid_output", "The answer did not match the required schema.");
+        }
+        return delegate(jobId, input, context, { ...options, brain: "sim" });
+      },
+    });
+    const founder = makeFounder(world.founders()[0]!, "fnd_repair_once", { status: "queued" });
+    harness.store.insertFounder(founder);
+    harness.store.insertEvidence(makeUnverifiedEvidence("evd_repair_once", founder.id));
+    const started = await harness.controller.start({ swarmId: SWARM_ID, trigger: "manual", brain: "live", sources: "live" });
+    const run = await harness.controller.wait(started.id);
+    const task = harness.store.listTasks({ runId: run.id }).find((candidate) => candidate.jobId === "assess.judgments");
+
+    expect(run.status, run.error ?? "").toBe("succeeded");
+    expect(repairMessages).toEqual([null, "The answer did not match the required schema."]);
+    expect(task).toMatchObject({ status: "succeeded", attempt: 2, promptVariant: "variant-test" });
+    expect(task?.promptHash).toMatch(/^[a-f0-9]{12}$/);
+
+    let secondAssessCalls = 0;
+    const twice = makeHarness({
+      simWorld: world,
+      agentJobs: ["verify.claims", "assess.judgments"],
+      config: { params: { "verify.control": false } },
+      wrapExecuteJob: (delegate) => async <J extends ModelJobId>(jobId: J, input: JobInput<J>, context: JobContext, options: Parameters<ExecuteJob>[3]) => {
+        if (jobId === "assess.judgments") {
+          secondAssessCalls += 1;
+          throw new ProviderError("invalid_output", "Rejected twice.");
+        }
+        const verification = await delegate(jobId, input, context, { ...options, brain: "sim" });
+        return {
+          ...verification,
+          output: { identityConfidence: 0.9, verdicts: [{ evidenceId: "evd_repair_twice", verdict: "supported", note: null }] } as unknown as JobOutput<J>,
+        };
+      },
+    });
+    const secondFounder = makeFounder(world.founders()[1]!, "fnd_repair_twice", { status: "queued" });
+    twice.store.insertFounder(secondFounder);
+    twice.store.insertEvidence(makeUnverifiedEvidence("evd_repair_twice", secondFounder.id));
+    const secondStart = await twice.controller.start({ swarmId: SWARM_ID, trigger: "manual", brain: "live", sources: "live" });
+    const secondRun = await twice.controller.wait(secondStart.id);
+    const failedTask = twice.store.listTasks({ runId: secondRun.id }).find((candidate) => candidate.jobId === "assess.judgments");
+    expect(secondAssessCalls).toBe(2);
+    expect(failedTask).toMatchObject({ status: "failed", attempt: 2 });
+  });
+
+  it("passes only open rubric questions to investigators on a second look", async () => {
+    const world = createSimWorld({ seed: 992, founders: 3, days: 2 });
+    const inputs = new Map<string, InvestigateInput>();
+    const harness = makeHarness({
+      simWorld: world,
+      agentJobs: ["investigate.background"],
+      wrapExecuteJob: (delegate) => async <J extends ModelJobId>(jobId: J, input: JobInput<J>, context: JobContext, options: Parameters<ExecuteJob>[3]) => {
+        if (jobId === "investigate.background") {
+          const investInput = input as JobInput<"investigate.background">;
+          inputs.set(investInput.founder.id, investInput);
+        }
+        return delegate(jobId, input, context, options);
+      },
+    });
+    const firstLook = makeFounder(world.founders()[0]!, "fnd_first_look", { status: "queued" });
+    const secondLook = makeFounder(world.founders()[1]!, "fnd_second_look", { status: "watch", nextRecheckAt: NOW.toISOString() });
+    harness.store.insertFounder(firstLook);
+    harness.store.insertFounder(secondLook);
+    const unsettledDimensions = new Set(DIMENSIONS.slice(0, 3).map((dimension) => dimension.id));
+    harness.store.insertAssessment(makeAssessment(secondLook.id, {
+      id: "asm_second_look",
+      judgments: DIMENSIONS.map((dimension, index) => ({
+        dimension: dimension.id,
+        level: index === 0 ? null : 2,
+        confidence: index === 1 || index === 2 ? 0.49 : 0.9,
+        rationale: "Prior evidence did not settle this question.",
+        evidenceIds: [],
+        counterEvidenceIds: [],
+      })),
+    }));
+
+    const started = await harness.controller.start({ swarmId: SWARM_ID, trigger: "manual", brain: "sim", sources: "sim" });
+    await harness.controller.wait(started.id);
+    expect(inputs.get(firstLook.id)?.gaps).toEqual([]);
+    expect(inputs.get(secondLook.id)?.gaps).toEqual(DIMENSIONS.filter((dimension) => unsettledDimensions.has(dimension.id)).map((dimension) => ({
+      dimension: dimension.id,
+      label: dimension.label,
+      question: dimension.question,
+    })));
+  });
+
+  it("checks live web quotes before fact-checking and respects both quote-check switches", async () => {
+    const world = createSimWorld({ seed: 993, founders: 2, days: 2 });
+    const fakeAdapter = {
+      id: "web" as const,
+      status: async () => ({ configured: true, detail: "test source" }),
+      fetch: async () => ({ items: [], cursor: null }),
+    };
+    const liveSources: SourceRegistry = { get: () => fakeAdapter, statuses: async () => [] };
+    const liveRepos = createSimRepoFinder(world);
+    const runQuoteCase = async (options: {
+      sources: "sim" | "live";
+      enabled: boolean;
+      status: "found" | "not_found" | "unreachable";
+    }) => {
+      let quoteCalls = 0;
+      const seen: Array<JobInput<"verify.claims">> = [];
+      const harness = makeHarness({
+        simWorld: world,
+        agentJobs: ["verify.claims"],
+        liveSources,
+        liveRepos,
+        quotes: { check: async () => { quoteCalls += 1; return { status: options.status, detail: "fixture" }; } },
+        config: { params: { "verify.quote_check": options.enabled, "verify.control": false } },
+        wrapExecuteJob: (delegate) => async <J extends ModelJobId>(jobId: J, input: JobInput<J>, context: JobContext, runOptions: Parameters<ExecuteJob>[3]) => {
+          if (jobId === "verify.claims") seen.push(input as JobInput<"verify.claims">);
+          return delegate(jobId, input, context, { ...runOptions, brain: "sim" });
+        },
+      });
+      const founder = makeFounder(world.founders()[0]!, `fnd_quote_${options.sources}_${options.enabled}_${options.status}`, { status: "queued" });
+      harness.store.insertFounder(founder);
+      const evidence = makeUnverifiedEvidence(`evd_quote_${options.sources}_${options.enabled}_${options.status}`, founder.id);
+      harness.store.insertEvidence(evidence);
+      const started = await harness.controller.start({ swarmId: SWARM_ID, trigger: "manual", brain: "sim", sources: options.sources });
+      const run = await harness.controller.wait(started.id);
+      return { quoteCalls, seen, evidence: harness.store.listEvidence(founder.id)[0]!, run };
+    };
+
+    const rejected = await runQuoteCase({ sources: "live", enabled: true, status: "not_found" });
+    expect(rejected.quoteCalls).toBe(1);
+    expect(rejected.seen).toHaveLength(0);
+    expect(rejected.evidence).toMatchObject({
+      verification: "unsupported",
+      quote: "not_found",
+      verificationNote: "The quoted words are not on the page it cites.",
+    });
+    expect(rejected.run.stats).toMatchObject({ evidenceRejected: 1, quotesRejected: 1 });
+
+    const found = await runQuoteCase({ sources: "live", enabled: true, status: "found" });
+    expect(found.quoteCalls).toBe(1);
+    expect(found.seen[0]?.evidence[0]?.quote).toBe("found");
+    const off = await runQuoteCase({ sources: "live", enabled: false, status: "found" });
+    expect(off.quoteCalls).toBe(0);
+    const simulated = await runQuoteCase({ sources: "sim", enabled: true, status: "found" });
+    expect(simulated.quoteCalls).toBe(0);
+  });
+
+  it("files a data vendor's work history as unverified evidence, once, and only on live sources for a real founder", async () => {
+    const world = createSimWorld({ seed: 995, founders: 2, days: 2 });
+    const fakeAdapter = {
+      id: "web" as const,
+      status: async () => ({ configured: true, detail: "test source" }),
+      fetch: async () => ({ items: [], cursor: null }),
+    };
+    const liveSources: SourceRegistry = { get: () => fakeAdapter, statuses: async () => [] };
+    const record = (matchConfidence: number): PersonRecord => ({
+      vendorId: "v1", vendor: "Test Vendor", name: "Real Person", headline: null, location: null,
+      profileUrl: "https://www.linkedin.com/in/real-person-example",
+      current: { title: "Founder", company: "Realco", companyUrl: null, startDate: "2026-08" },
+      experience: [{ title: "Staff Engineer", company: "Earlier Co", startDate: "2021-03", endDate: "2026-07" }],
+      education: [{ school: "State University", degrees: ["B.S."], startDate: "2013", endDate: "2017" }],
+      lastVerifiedAt: "2026-10-30", matchConfidence,
+    });
+    const runCase = async (options: { sources: "sim" | "live"; simulatedFounder: boolean; confidence: number; throws?: boolean }) => {
+      const keys: PersonKey[] = [];
+      const people: PeopleLookup = {
+        vendor: "Test Vendor",
+        status: async () => ({ configured: true, detail: "test" }),
+        enrich: async (key) => {
+          keys.push(key);
+          if (options.throws) throw new Error("Test Vendor: today's allowance is used up.");
+          return record(options.confidence);
+        },
+        team: async () => [],
+      };
+      const harness = makeHarness({ simWorld: world, agentJobs: ["investigate.background"], liveSources, liveRepos: createSimRepoFinder(world), people });
+      const founder = makeFounder(world.founders()[0]!, `fnd_vendor_${keys.length}_${Math.round(options.confidence * 10)}`, {
+        status: "queued", name: "Real Person", simId: options.simulatedFounder ? world.founders()[0]!.simId : null,
+        company: { name: "Realco", url: null, oneLiner: null, stage: null },
+      });
+      harness.store.insertFounder(founder);
+      const start = () => harness.controller.start({ swarmId: SWARM_ID, trigger: "manual", brain: "sim", sources: options.sources });
+      const first = await harness.controller.wait((await start()).id);
+      const vendorEvidence = () => harness.store.listEvidence(founder.id).filter((item) => item.source === "people_data");
+      return { keys, first, vendorEvidence, harness, founder, start };
+    };
+
+    const used = await runCase({ sources: "live", simulatedFounder: false, confidence: 0.8 });
+    expect(used.keys).toEqual([{ name: "Real Person", company: "Realco" }]);
+    expect(used.vendorEvidence()).toHaveLength(1);
+    expect(used.vendorEvidence()[0]).toMatchObject({
+      kind: "profile", verification: "unverified", title: "Work history from Test Vendor",
+      url: "https://www.linkedin.com/in/real-person-example",
+    });
+    expect(used.vendorEvidence()[0]?.excerpt).toContain("Staff Engineer at Earlier Co (2021-03 to 2026-07).");
+    // The founder stays queued for another look, and the vendor is not charged a second time.
+    used.harness.store.updateFounder(used.founder.id, { status: "queued" });
+    await used.harness.controller.wait((await used.start()).id);
+    expect(used.keys).toHaveLength(1);
+    expect(used.vendorEvidence()).toHaveLength(1);
+
+    const unsure = await runCase({ sources: "live", simulatedFounder: false, confidence: 0.4 });
+    expect(unsure.vendorEvidence()).toHaveLength(0);
+    const simulatedSources = await runCase({ sources: "sim", simulatedFounder: false, confidence: 0.9 });
+    expect(simulatedSources.keys).toHaveLength(0);
+    const simulatedFounder = await runCase({ sources: "live", simulatedFounder: true, confidence: 0.9 });
+    expect(simulatedFounder.keys).toHaveLength(0);
+    const down = await runCase({ sources: "live", simulatedFounder: false, confidence: 0.9, throws: true });
+    expect(down.first.status).toBe("succeeded");
+    expect(down.vendorEvidence()).toHaveLength(0);
+  });
+
+  it("plants one disposable control and discards the call if the checker supports it", async () => {
+    const world = createSimWorld({ seed: 994, founders: 2, days: 2 });
+    const runControlCase = async (enabled: boolean, controlVerdict: "supported" | "unsupported") => {
+      const seenLengths: number[] = [];
+      const seenFacets: Array<string | null | undefined> = [];
+      const harness = makeHarness({
+        simWorld: world,
+        agentJobs: ["verify.claims"],
+        config: { params: { "verify.control": enabled } },
+        wrapExecuteJob: (delegate) => async <J extends ModelJobId>(jobId: J, input: JobInput<J>, context: JobContext, options: Parameters<ExecuteJob>[3]) => {
+          const execution = await delegate(jobId, input, context, { ...options, brain: "sim" });
+          if (jobId !== "verify.claims") return execution;
+          const verifyInput = input as JobInput<"verify.claims">;
+          seenLengths.push(verifyInput.evidence.length);
+          seenFacets.push(verifyInput.evidence.find((item) => item.id === "evd_control_seed")?.facet);
+          const control = verifyInput.evidence.find((item) => item.id !== "evd_control_seed");
+          const verdicts: Array<{ evidenceId: string; verdict: "supported" | "unsupported"; note: string | null }> = [
+            { evidenceId: "evd_control_seed", verdict: "supported", note: null },
+          ];
+          if (control) verdicts.push({ evidenceId: control.id, verdict: controlVerdict, note: null });
+          return { ...execution, output: { ...execution.output, verdicts } as JobOutput<J> };
+        },
+      });
+      const founder = makeFounder(world.founders()[0]!, `fnd_control_${enabled}_${controlVerdict}`, { status: "queued", identityConfidence: 0.71 });
+      harness.store.insertFounder(founder);
+      harness.store.insertEvidence(makeUnverifiedEvidence("evd_control_seed", founder.id, { facet: "product" }));
+      const started = await harness.controller.start({ swarmId: SWARM_ID, trigger: "manual", brain: "sim", sources: "sim" });
+      const run = await harness.controller.wait(started.id);
+      const task = harness.store.listTasks({ runId: run.id }).find((candidate) => candidate.jobId === "verify.claims");
+      return { seenLengths, seenFacets, run, task, evidence: harness.store.listEvidence(founder.id), founder: harness.store.getFounder(founder.id)! };
+    };
+
+    const accepted = await runControlCase(true, "supported");
+    expect(accepted.seenLengths).toEqual([2]);
+    expect(accepted.seenFacets).toEqual(["product"]);
+    expect(accepted.task?.control).toBe("failed");
+    expect(accepted.run.stats.controlsFailed).toBe(1);
+    expect(accepted.evidence[0]?.verification).toBe("unverified");
+    expect(accepted.founder.identityConfidence).toBe(0.71);
+    expect(accepted.evidence).toHaveLength(1);
+    expect((accepted.task?.output as { verdicts: Array<{ evidenceId: string }> }).verdicts.map((verdict) => verdict.evidenceId)).toEqual(["evd_control_seed"]);
+
+    const rejected = await runControlCase(true, "unsupported");
+    expect(rejected.seenLengths).toEqual([2]);
+    expect(rejected.task?.control).toBe("passed");
+    expect(rejected.evidence[0]?.verification).toBe("supported");
+
+    const off = await runControlCase(false, "supported");
+    expect(off.seenLengths).toEqual([1]);
+    expect(off.task?.control).toBeNull();
+    expect(off.evidence[0]?.verification).toBe("supported");
+  });
+
+  it("keeps company facts and raw call transcripts out of the founder analyst input", async () => {
+    const world = createSimWorld({ seed: 995, founders: 2, days: 2 });
+    let assessedEvidence: Array<{ id: string }> = [];
+    const harness = makeHarness({
+      simWorld: world,
+      agentJobs: ["verify.claims", "assess.judgments"],
+      config: { params: { "verify.control": false } },
+      wrapExecuteJob: (delegate) => async <J extends ModelJobId>(jobId: J, input: JobInput<J>, context: JobContext, options: Parameters<ExecuteJob>[3]) => {
+        if (jobId === "assess.judgments") assessedEvidence = (input as JobInput<"assess.judgments">).evidence;
+        return delegate(jobId, input, context, { ...options, brain: "sim" });
+      },
+    });
+    const founder = makeFounder(world.founders()[0]!, "fnd_assess_filter", { status: "queued" });
+    harness.store.insertFounder(founder);
+    harness.store.insertEvidence(makeSupportedEvidence("evd_person_supported", founder.id));
+    harness.store.insertEvidence(makeSupportedEvidence("evd_company_fact", founder.id, { facet: "product" }));
+    harness.store.insertEvidence(makeTranscriptEvidence("evd_raw_transcript", founder.id, "A raw conversation record."));
+    harness.store.insertEvidence(makeUnverifiedEvidence("evd_verify_trigger", founder.id));
+    const started = await harness.controller.start({ swarmId: SWARM_ID, trigger: "manual", brain: "sim", sources: "sim" });
+    await harness.controller.wait(started.id);
+
+    const ids = new Set(assessedEvidence.map((item) => item.id));
+    expect(ids.has("evd_person_supported")).toBe(true);
+    expect(ids.has("evd_company_fact")).toBe(false);
+    expect(ids.has("evd_raw_transcript")).toBe(false);
+  });
+
+  it("plans outreach for the lead founder on a company Yes, unless that founder's latest call is No", async () => {
+    const world = createSimWorld({ seed: 996, founders: 4, days: 2 });
+    const harness = makeHarness({ simWorld: world, agentJobs: ["outreach.plan"] });
+    const company = (id: string, name: string): Company => ({
+      id,
+      swarmId: SWARM_ID,
+      name,
+      domain: `${id}.example`,
+      url: `https://${id}.example`,
+      oneLiner: `${name} builds software.`,
+      mission: null,
+      sector: "Developer tools",
+      stage: "pre-seed",
+      links: { github: null, x: null, linkedin: null, docs: null, careers: null },
+      status: "surfaced",
+      firstSeenAt: NOW.toISOString(),
+      updatedAt: NOW.toISOString(),
+      lastResearchedAt: NOW.toISOString(),
+      lastAssessedAt: NOW.toISOString(),
+      nextRecheckAt: null,
+      simId: null,
+    });
+    const addCompany = (value: Company, members: Founder[], leadFounderId: string, withNo = false) => {
+      harness.store.insertCompany(value);
+      for (const founder of members) {
+        harness.store.insertFounder({ ...founder, companyId: value.id });
+        harness.store.insertAssessment(makeAssessment(founder.id, { id: `asm_${founder.id}`, decision: "surface" }));
+      }
+      harness.store.insertCompanyAssessment({
+        id: `cas_${value.id}`,
+        companyId: value.id,
+        leadFounderId,
+        decision: "surface",
+        deal: 0.8,
+        createdAt: NOW.toISOString(),
+      } as CompanyAssessment);
+      harness.store.insertCompanyFeedback({
+        id: `cfb_${value.id}`,
+        companyId: value.id,
+        author: "Partner",
+        verdict: "yes",
+        reasonTags: [],
+        note: null,
+        createdAt: NOW.toISOString(),
+      } satisfies CompanyFeedback);
+      if (withNo) harness.store.insertFeedback(makeFeedback(`fbk_no_${leadFounderId}`, leadFounderId, "no", "2026-11-12T18:00:01.000Z"));
+    };
+    const first = makeFounder(world.founders()[0]!, "fnd_company_member_first");
+    const lead = makeFounder(world.founders()[1]!, "fnd_company_member_lead");
+    const blocked = makeFounder(world.founders()[2]!, "fnd_company_member_no");
+    addCompany(company("co_lead", "LeadCo"), [first, lead], lead.id);
+    addCompany(company("co_no", "NoCo"), [blocked], blocked.id, true);
+
+    const started = await harness.controller.start({ swarmId: SWARM_ID, trigger: "manual", brain: "sim", sources: "sim" });
+    const run = await harness.controller.wait(started.id);
+    const outreach = harness.store.listOutreach({ swarmId: SWARM_ID });
+
+    expect(run.status).toBe("succeeded");
+    expect(outreach.length).toBeGreaterThan(0);
+    expect(new Set(outreach.map((action) => action.founderId))).toEqual(new Set([lead.id]));
+    expect(harness.store.listTasks({ runId: run.id }).some((task) => task.jobId === "outreach.plan" && task.founderId === blocked.id)).toBe(false);
   });
 });

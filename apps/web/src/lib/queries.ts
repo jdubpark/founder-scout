@@ -6,12 +6,16 @@
 import { useMutation, useQuery, useQueryClient, type QueryClient } from "@tanstack/react-query";
 import type {
   AddAgentInput,
+  AddFounderInput,
+  CompanyFeedbackInput,
+  CompanyQuery,
   CreateDirectiveInput,
   CreateSwarmInput,
   DirectiveFilter,
   EffectiveSteeringQuery,
   FeedbackInput,
   FounderQuery,
+  NetworkImportInput,
   OutreachCompleteInput,
   OutreachDecisionInput,
   OutreachQuery,
@@ -38,6 +42,9 @@ export const keys = {
   suggestions: (swarmId: string) => ["suggestions", swarmId] as const,
   founders: (query: FounderQuery) => ["founders", query] as const,
   founder: (id: string) => ["founder", id] as const,
+  companies: (query: CompanyQuery) => ["companies", query] as const,
+  company: (id: string) => ["company", id] as const,
+  network: ["network"] as const,
   outreach: (query: OutreachQuery) => ["outreach", query] as const,
   runs: (swarmId: string) => ["runs", swarmId] as const,
   run: (id: string) => ["run", id] as const,
@@ -133,6 +140,31 @@ export function useFounder(id: string | null) {
     queryFn: () => client.getFounder(id as string),
     enabled: Boolean(id),
   });
+}
+
+export function useCompanies(query: CompanyQuery | null) {
+  const { client } = useApi();
+  return useQuery({
+    queryKey: keys.companies(query ?? { swarmId: "" }),
+    queryFn: () => client.listCompanies(query as CompanyQuery),
+    enabled: Boolean(query?.swarmId),
+    placeholderData: (previous) => previous,
+    refetchInterval: IDLE_REFRESH,
+  });
+}
+
+export function useCompany(id: string | null) {
+  const { client } = useApi();
+  return useQuery({
+    queryKey: keys.company(id ?? ""),
+    queryFn: () => client.getCompany(id as string),
+    enabled: Boolean(id),
+  });
+}
+
+export function useNetwork() {
+  const { client } = useApi();
+  return useQuery({ queryKey: keys.network, queryFn: () => client.getNetwork() });
 }
 
 export function useOutreach(query: OutreachQuery | null) {
@@ -282,6 +314,59 @@ export function useAddFeedback() {
       void qc.invalidateQueries({ queryKey: ["suggestions"] });
       void qc.invalidateQueries({ queryKey: ["effective"] });
     },
+  });
+}
+
+/** Records a partner's yes or no on a company, with reasons. */
+export function useAddCompanyFeedback() {
+  const { client } = useApi();
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (args: { companyId: string; input: CompanyFeedbackInput }) =>
+      client.addCompanyFeedback(args.companyId, args.input),
+    onSuccess: (_data, args) => {
+      void qc.invalidateQueries({ queryKey: ["companies"] });
+      void qc.invalidateQueries({ queryKey: keys.company(args.companyId) });
+      void qc.invalidateQueries({ queryKey: ["overview"] });
+    },
+  });
+}
+
+/** A person adds a founder by hand. */
+export function useAddFounder() {
+  const { client } = useApi();
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (input: AddFounderInput) => client.addFounder(input),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ["founders"] });
+      void qc.invalidateQueries({ queryKey: ["overview"] });
+    },
+  });
+}
+
+/** Uploading a contact list changes who is known, so companies and founders are stale. */
+function networkChanged(qc: QueryClient) {
+  for (const root of ["network", "companies", "company", "founders", "founder"]) {
+    void qc.invalidateQueries({ queryKey: [root] });
+  }
+}
+
+export function useImportNetwork() {
+  const { client } = useApi();
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (input: NetworkImportInput) => client.importNetwork(input),
+    onSuccess: () => networkChanged(qc),
+  });
+}
+
+export function useRemoveNetwork() {
+  const { client } = useApi();
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (owner: string) => client.removeNetwork(owner),
+    onSuccess: () => networkChanged(qc),
   });
 }
 

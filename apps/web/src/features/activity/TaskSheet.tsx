@@ -41,6 +41,18 @@ export function TaskSheet({
           <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-sm text-ink-2">
             <Status state={TASK_STATUS[task.status].mark}>{TASK_STATUS[task.status].label}</Status>
             <span className="figure">{task.model}</span>
+            {task.control === "passed" ? <Status state="ok">Planted check passed</Status> : null}
+            {task.control === "failed" ? <Status state="error">Planted check failed</Status> : null}
+            {task.promptHash ? (
+              <span className="inline-flex items-center gap-2">
+                <span className="text-ink-3">Prompt</span>
+                <span className="figure font-mono text-ink">
+                  {task.promptVariant && task.promptVariant !== "base"
+                    ? `${task.promptVariant} · ${task.promptHash}`
+                    : task.promptHash}
+                </span>
+              </span>
+            ) : null}
           </div>
 
           {task.error ? <Caution>{task.error}</Caution> : null}

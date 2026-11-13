@@ -16,6 +16,7 @@
  * all compute exactly the same answer.
  */
 
+import { COMPANY_DIMENSIONS, type CompanyDimensionId } from "./company";
 import { coerceParam, getParamDef, type ParamValue } from "./params";
 import { DIMENSIONS, type DimensionId } from "./rubric";
 import {
@@ -363,6 +364,16 @@ export function effectiveWeights(
 ): Record<DimensionId, number> {
   const out = {} as Record<DimensionId, number>;
   for (const d of DIMENSIONS) out[d.id] = numberParam(`weights.${d.id}`, resolved, config);
+  return out;
+}
+
+/** Company rubric weights. Read for the company analyst, the job they are attached to. */
+export function effectiveCompanyWeights(
+  resolved: ResolvedSteering,
+  config: SwarmConfig,
+): Record<CompanyDimensionId, number> {
+  const out = {} as Record<CompanyDimensionId, number>;
+  for (const d of COMPANY_DIMENSIONS) out[d.id] = numberParam(`cweights.${d.id}`, resolved, config);
   return out;
 }
 

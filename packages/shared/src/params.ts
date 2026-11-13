@@ -9,6 +9,7 @@
  * broader one. See steering.ts for the resolution rules.
  */
 
+import { COMPANY_DIMENSIONS, type CompanyDimensionId } from "./company";
 import { DIMENSIONS, type DimensionId } from "./rubric";
 import { EFFORTS, PROVIDER_IDS, type ClassId, type JobId } from "./registry";
 
@@ -21,7 +22,8 @@ export type ParamGroup =
   | "weights"
   | "routing"
   | "budget"
-  | "outreach";
+  | "outreach"
+  | "checks";
 
 /** Where a parameter is meaningful. "swarm" means it is read once per run. */
 export type ParamTarget = "swarm" | ClassId | JobId;
@@ -54,6 +56,21 @@ const weightParams: ParamDef[] = DIMENSIONS.map((d) => ({
   group: "weights",
   appliesTo: ["swarm"],
   tunable: true,
+}));
+
+const companyWeightParams: ParamDef[] = COMPANY_DIMENSIONS.map((d) => ({
+  key: `cweights.${d.id}`,
+  label: `Company weight: ${d.label}`,
+  help: `How much "${d.label}" counts toward a company's score. 0 ignores it.`,
+  type: "number",
+  default: d.defaultWeight,
+  min: 0,
+  max: 5,
+  step: 0.25,
+  group: "weights",
+  appliesTo: ["assess.company"],
+  // The ranking eval measures founders only, so it must not spend rounds on these.
+  tunable: false,
 }));
 
 export const PARAM_DEFS: readonly ParamDef[] = [
@@ -175,6 +192,53 @@ export const PARAM_DEFS: readonly ParamDef[] = [
     tunable: true,
   },
   ...weightParams,
+  ...companyWeightParams,
+  {
+    key: "deal.team_share",
+    label: "Share of a company's score that comes from its founders",
+    help: "0.6 means the founders count for 60% and the company for 40%. Early companies are mostly their people.",
+    type: "number",
+    default: 0.6,
+    min: 0,
+    max: 1,
+    step: 0.05,
+    group: "weights",
+    appliesTo: ["assess.company"],
+    tunable: false,
+  },
+  {
+    key: "company.max_companies",
+    label: "Companies researched per run",
+    help: "The most companies that get a full look in one run. 0 turns company research off.",
+    type: "int",
+    default: 8,
+    min: 0,
+    max: 100,
+    step: 1,
+    group: "volume",
+    appliesTo: ["company"],
+    tunable: false,
+  },
+  {
+    key: "verify.quote_check",
+    label: "Check quotes against their sources",
+    help: "Before the fact-checker runs, code opens each cited page and rejects an item whose quoted words are not there.",
+    type: "boolean",
+    default: true,
+    group: "checks",
+    appliesTo: ["verifier"],
+    tunable: false,
+  },
+  {
+    key: "verify.control",
+    label: "Plant a known false claim in each fact-check",
+    help: "One made-up claim is added to every fact-check. If the checker accepts it, that call's verdicts are thrown away.",
+    type: "boolean",
+    default: true,
+    group: "checks",
+    appliesTo: ["verifier"],
+    tunable: false,
+  },
   {
     key: "route.provider",
     label: "Model provider",
@@ -296,6 +360,10 @@ export function isParamKey(key: string): boolean {
 
 export function weightKey(dimension: DimensionId): string {
   return `weights.${dimension}`;
+}
+
+export function companyWeightKey(dimension: CompanyDimensionId): string {
+  return `cweights.${dimension}`;
 }
 
 export type ParamCheck =

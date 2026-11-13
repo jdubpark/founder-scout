@@ -4,6 +4,7 @@
  */
 import {
   Banknote,
+  Building2,
   BookOpen,
   BookOpenText,
   Eye,
@@ -18,24 +19,30 @@ import {
   Landmark,
   Lightbulb,
   ListFilter,
+  Map as MapIcon,
   MessageSquare,
   MessagesSquare,
   Mic,
   Minus,
   Newspaper,
+  Package,
   PenLine,
   Phone,
   Radar,
   Rocket,
   Scale,
   SearchCheck,
+  ShieldAlert,
   ShieldCheck,
   SlidersHorizontal,
+  Target,
+  TrendingUp,
   User,
   UserCheck,
+  Users,
   type LucideIcon,
 } from "lucide-react";
-import type { ClassId, Decision, DirectiveKind, EvidenceKind, SourceId } from "@agentswarm/shared";
+import type { ClassId, Decision, DirectiveKind, EvidenceFacet, EvidenceKind, SourceId } from "@agentswarm/shared";
 import { cn } from "../lib/cn";
 import { StateMark } from "./ui/marks";
 
@@ -44,6 +51,7 @@ const CLASS_ICON: Record<ClassId, LucideIcon> = {
   resolver: GitMerge,
   screener: ListFilter,
   investigator: FileSearch,
+  company: Building2,
   verifier: ShieldCheck,
   analyst: Scale,
   outreach: MessagesSquare,
@@ -56,7 +64,19 @@ const SOURCE_ICON: Record<SourceId, LucideIcon> = {
   people_data: IdCard,
   web: Globe,
   call: Phone,
+  network: Users,
   manual: PenLine,
+};
+
+const FACET_ICON: Record<EvidenceFacet, LucideIcon> = {
+  mission: Target,
+  product: Package,
+  traction: TrendingUp,
+  funding: Banknote,
+  team: Users,
+  roadmap: MapIcon,
+  market: Globe,
+  risk: ShieldAlert,
 };
 
 const EVIDENCE_ICON: Record<EvidenceKind, LucideIcon> = {
@@ -97,6 +117,11 @@ export function SourceIcon({ source, className }: { source: SourceId; className?
 
 export function EvidenceIcon({ kind, className }: { kind: EvidenceKind; className?: string }) {
   const Icon = EVIDENCE_ICON[kind];
+  return <Icon aria-hidden className={cn(SIZE, className)} />;
+}
+
+export function FacetIcon({ facet, className }: { facet: EvidenceFacet; className?: string }) {
+  const Icon = FACET_ICON[facet];
   return <Icon aria-hidden className={cn(SIZE, className)} />;
 }
 

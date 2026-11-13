@@ -1,8 +1,9 @@
 import { afterEach, describe, expect, it } from "vitest";
 import {
-  BASE_CONFIG, DEFAULT_SETTINGS, JOBS, PROVIDERS, ZERO_STATS, newId,
-  type Agent, type Assessment, type EvalFlowDTO, type Evidence, type Feedback, type Founder,
-  type OutreachAction, type Run, type SwarmConfig, type TaskRun,
+  BASE_CONFIG, DEFAULT_SETTINGS, JOBS, PROVIDERS, ZERO_STATS, newId, stableId,
+  type Agent, type Assessment, type Company, type CompanyAssessment, type CompanyMember, type EvalFlowDTO,
+  type Evidence, type Feedback, type Founder, type NetworkContact, type OutreachAction, type Run,
+  type Swarm, type SwarmConfig, type TaskRun,
 } from "@agentswarm/shared";
 import type { EvalService, ProviderRegistry, RunController, SourceRegistry, Store } from "../contracts";
 import { openStore } from "../db";
@@ -61,6 +62,21 @@ function runRecord(swarmId: string, overrides: Partial<Run> = {}): Run {
 }
 function taskRecord(run: Run, agent: Agent, status: TaskRun["status"], stage: TaskRun["stage"] = "scout"): TaskRun {
   return { id: newId("tsk"), runId: run.id, swarmId: run.swarmId, agentId: agent.id, jobId: agent.jobId, classId: agent.classId, stage, founderId: null, status, skipReason: null, attempt: 1, provider: "sim", model: "sim", effort: null, inputSummary: "input", outputSummary: status === "succeeded" ? "found a lead" : null, output: null, steering: { directiveIds: [], params: {}, block: "" }, usage: null, costUsd: status === "failed" ? 0.1 : 0.05, latencyMs: 1, itemsOut: status === "succeeded" ? 1 : 0, error: status === "failed" ? "provider error" : null, startedAt: stamp, finishedAt: stamp };
+}
+function companyRecord(swarmId: string, id = newId("cmp"), status: Company["status"] = "tracked", name = "Vector Works"): Company {
+  return { id, swarmId, name, domain: "vector.example", url: "https://vector.example", oneLiner: "A vector index", mission: null, sector: "AI infrastructure", stage: "Pre-seed", links: { github: null, x: null, linkedin: null, docs: null, careers: null }, status, firstSeenAt: stamp, updatedAt: stamp, lastResearchedAt: null, lastAssessedAt: null, nextRecheckAt: null, simId: null };
+}
+function companyAssessment(companyId: string, leadFounderId: string | null, deal: number, decision: CompanyAssessment["decision"] = "surface"): CompanyAssessment {
+  return { id: newId("cas"), companyId, runId: null, configId: BASE_CONFIG.id, company: deal, companyCoverage: 0.8, companyPotential: deal, leadFounderId, team: 0.7, deal, coverage: 0.8, potential: deal, decision, reasons: [], flags: [], breakdown: [], judgments: [], brief: { summary: "A promising company", strengths: [], risks: [], openQuestions: [] }, createdAt: stamp };
+}
+function companyMember(companyId: string, name: string): CompanyMember {
+  return { id: newId("mem"), companyId, name, role: "Founder", isFounder: true, founderId: null, links: { github: null, linkedin: null, x: null, site: null, scholar: null }, background: null, source: "web", sourceUrl: "https://vector.example/team", addedAt: stamp };
+}
+function companyEvidence(founderId: string, companyId: string, id: string, capturedAt: string): Evidence {
+  return { id, founderId, companyId, facet: "product", kind: "launch", source: "web", url: "https://vector.example", title: id, excerpt: "A product launch", claim: "The company launched a product.", publishedAt: null, capturedAt, collectedByTaskId: null, hash: id, verification: "supported", verificationNote: null, sim: null };
+}
+function contactCsv(rows: string[][]): string {
+  return ["First Name,Last Name,URL,Company,Position,Connected On", ...rows.map((row) => row.map((value) => `"${value.replaceAll('"', '""')}"`).join(","))].join("\n");
 }
 function expectServiceError(promise: Promise<unknown>, status: number, field?: string) {
   return promise.then(() => { throw new Error("Expected ServiceError"); }, (error: unknown) => {
@@ -439,5 +455,170 @@ describe("createSwarmService", () => {
     expect(ids.has(`outreach-${oldAction.id}`)).toBe(true);
     expect((await api.getOverview(swarm.id)).alerts.find((alert) => alert.id === "kill-switch")).toBeUndefined();
     expect(store.recentAudit(1)[0]).toMatchObject({ actor: "Casey", action: "settings.update" });
+  });
+
+  it("lists companies and assembles a detail with the assessed lead founder first", async () => {
+    const { service, store } = createHarness(); const api = service.as("Partner");
+    const swarm = await api.createSwarm({ name: "Companies", thesis });
+    const company = companyRecord(swarm.id); store.insertCompany(company);
+    const early = { ...founderRecord(swarm.id), id: newId("fnd"), companyId: company.id, firstSeenAt: "2026-01-01T00:00:00.000Z" };
+    const lead = { ...founderRecord(swarm.id), id: newId("fnd"), companyId: company.id, firstSeenAt: "2026-02-01T00:00:00.000Z" };
+    store.insertFounder(early); store.insertFounder(lead);
+    store.insertAssessment(assessment(early.id)); store.insertAssessment(assessment(lead.id));
+    const companyScore = companyAssessment(company.id, lead.id, 0.91);
+    store.insertCompanyAssessment(companyScore);
+    store.upsertCompanyMember(companyMember(company.id, "Lead Founder"));
+    store.insertEvidence(companyEvidence(lead.id, company.id, "company-older", "2026-11-10T00:00:00.000Z"));
+    store.insertEvidence(companyEvidence(lead.id, company.id, "company-newer", "2026-11-11T00:00:00.000Z"));
+    const contact: NetworkContact = { id: stableId("net", "Partner:person"), owner: "Partner", name: "Known Operator", company: "Vector Works, Inc.", position: "Founder", profileUrl: "https://www.linkedin.com/in/known", connectedOn: null, importedAt: stamp, previous: null };
+    store.replaceNetwork("Partner", [contact]);
+    const run = runRecord(swarm.id, { status: "succeeded", stage: null }); store.insertRun(run);
+    const companyAgent = store.listAgents(swarm.id).find((agent) => agent.jobId === "company.product")!;
+    store.insertTask({ ...taskRecord(run, companyAgent, "succeeded"), id: "company-task-older", companyId: company.id, startedAt: "2026-11-10T00:00:00.000Z", trace: [{ role: "assistant", content: "private trace" }] });
+    store.insertTask({ ...taskRecord(run, companyAgent, "succeeded"), id: "company-task-newer", companyId: company.id, startedAt: "2026-11-11T00:00:00.000Z", trace: [{ role: "assistant", content: "private trace" }] });
+    const listed = await api.listCompanies({ swarmId: swarm.id, sort: "deal" });
+    expect(listed.rows.map((row) => row.id)).toEqual([company.id]);
+    expect(listed.rows[0]).toMatchObject({ deal: 0.91, knownPeople: 1, founders: [{ id: lead.id }, { id: early.id }] });
+    const detail = await api.getCompany(company.id);
+    expect(detail.founders.map((row) => row.id)).toEqual([lead.id, early.id]);
+    expect(detail.founders[0]).toMatchObject({ companyId: company.id, decision: "surface", composite: 0.8 });
+    expect(detail.members).toHaveLength(1);
+    expect(detail.assessment).toEqual(companyScore);
+    expect(detail.history).toEqual([{ at: stamp, deal: 0.91, decision: "surface" }]);
+    expect(detail.evidence.map((item) => item.id)).toEqual(["company-newer", "company-older"]);
+    expect(detail.knownPeople).toEqual([contact]);
+    expect(detail.tasks.map((task) => task.id)).toEqual(["company-task-newer", "company-task-older"]);
+    expect(detail.tasks[0]).not.toHaveProperty("trace");
+    expect((await api.getFounder(lead.id)).knownPeople).toEqual([contact]);
+    await expectServiceError(api.listCompanies({ swarmId: "missing" }), 404);
+    await expectServiceError(api.getCompany("missing"), 404);
+  });
+
+  it("validates company reason tags, redacts notes, and applies company call status", async () => {
+    const { service, store } = createHarness(); const api = service.as("Taylor");
+    const swarm = await api.createSwarm({ name: "Company calls", thesis });
+    const company = companyRecord(swarm.id); store.insertCompany(company);
+    await expectServiceError(api.addCompanyFeedback(company.id, { verdict: "yes", reasonTags: ["small_market"] }), 400, "reasonTags");
+    const no = await api.addCompanyFeedback(company.id, { verdict: "no", reasonTags: ["wrong_stage"], note: "The market is early. The CEO is 42 years old." });
+    expect(no).toMatchObject({ author: "Taylor", verdict: "no", note: "The market is early. [removed: personal detail]" });
+    expect(store.getCompany(company.id)?.status).toBe("passed");
+    const yes = await api.addCompanyFeedback(company.id, { verdict: "yes", reasonTags: ["strong_product"] });
+    expect(yes.author).toBe("Taylor");
+    expect(store.getCompany(company.id)?.status).toBe("surfaced");
+    expect(store.recentAudit(1)[0]).toMatchObject({ action: "company_feedback.create", target: company.id });
+  });
+
+  it("adds manual founder leads with link classification and refuses invalid or personal details", async () => {
+    const { service, store } = createHarness(); const api = service.as("Alex");
+    const swarm = await api.createSwarm({ name: "Manual leads", thesis });
+    const cases = [
+      ["https://github.com/example", "github"],
+      ["https://twitter.com/example", "x"],
+      ["https://scholar.google.com/citations?user=example", "scholar"],
+      ["https://www.linkedin.com/in/example", "linkedin"],
+      ["https://example.com/profile", "site"],
+    ] as const;
+    for (const [link, field] of cases) {
+      const lead = await api.addFounder({ swarmId: swarm.id, name: "Manual Founder", companyName: "Vector Works", companyUrl: "https://vector.example", link });
+      expect(lead.source).toBe("manual");
+      expect(lead.sourceTitle).toBe("Added by Alex");
+      expect(lead.sourceRef).toBe(link);
+      expect(lead.links[field]).toBe(link);
+      expect(lead.founderId).toBeNull();
+    }
+    const fallback = await api.addFounder({ swarmId: swarm.id, name: "No Link" });
+    expect(fallback.sourceRef).toBe(`manual:${fallback.id}`);
+    expect(fallback.why).toBe("Added by Alex.");
+    await expectServiceError(api.addFounder({ swarmId: swarm.id, name: "  " }), 400, "name");
+    await expectServiceError(api.addFounder({ swarmId: swarm.id, name: "x".repeat(201) }), 400, "name");
+    await expectServiceError(api.addFounder({ swarmId: swarm.id, name: "Bad company URL", companyUrl: "ftp://vector.example" }), 400, "companyUrl");
+    await expectServiceError(api.addFounder({ swarmId: swarm.id, name: "Bad profile link", link: "/relative" }), 400, "link");
+    await expectServiceError(api.addFounder({ swarmId: swarm.id, name: "Sensitive", why: "She is 42 years old." }), 400, "why");
+    expect(store.listLeads({ swarmId: swarm.id, unmatchedOnly: true })).toHaveLength(6);
+    expect(store.recentAudit(1)[0]).toMatchObject({ actor: "Alex", action: "founder.add" });
+  });
+
+  it("imports contact lists, creates only new founder leads in every active swarm, and removes an owner", async () => {
+    const { service, store } = createHarness(); const api = service.as("Morgan");
+    const firstSwarm = await api.createSwarm({ name: "First network swarm", thesis });
+    const secondSwarm = await api.createSwarm({ name: "Second network swarm", thesis });
+    const paused = await api.createSwarm({ name: "Paused network swarm", thesis }); await api.updateSwarm(paused.id, { status: "paused" });
+    const contacts = [
+      ["Alice", "New", "https://www.linkedin.com/in/alice", "Acme", "Staff Engineer", "2024-01-01"],
+      ["Bob", "Same", "https://www.linkedin.com/in/bob", "Startup", "Founder", "2024-01-02"],
+      ["Carol", "Staff", "https://www.linkedin.com/in/carol", "Factory", "Staff Engineer", "2024-01-03"],
+      ["Dana", "Still", "https://www.linkedin.com/in/dana", "Studio", "Founder", "2024-01-04"],
+    ];
+    const first = await api.importNetwork({ csv: contactCsv(contacts) });
+    expect(first).toMatchObject({ owner: "Morgan", imported: 4, changed: 0, leads: 0, network: { total: 4, owners: [{ owner: "Morgan", contacts: 4 }] } });
+    const second = await api.importNetwork({ csv: contactCsv([
+      ["Alice", "New", "https://www.linkedin.com/in/alice", "Stealth", "Founder", "2024-01-01"],
+      contacts[1]!,
+      ["Carol", "Staff", "https://www.linkedin.com/in/carol", "Factory", "Engineering Manager", "2024-01-03"],
+      ["Dana", "Still", "https://www.linkedin.com/in/dana", "Studio", "Co-Founder", "2024-01-04"],
+    ]) });
+    expect(second).toMatchObject({ imported: 4, changed: 3, leads: 1, network: { total: 4 } });
+    for (const swarm of [firstSwarm, secondSwarm]) {
+      const leads = store.listLeads({ swarmId: swarm.id, unmatchedOnly: true });
+      expect(leads).toHaveLength(1);
+      expect(leads[0]).toMatchObject({ source: "network", sourceRef: "https://www.linkedin.com/in/alice", sourceTitle: "Contact list of Morgan", personName: "Alice New", role: "Founder", companyName: "Stealth", links: { linkedin: "https://www.linkedin.com/in/alice" }, why: "Changed from Staff Engineer at Acme to Founder at Stealth." });
+    }
+    expect(store.listLeads({ swarmId: paused.id })).toHaveLength(0);
+    expect(store.recentAudit(1)[0]?.detail).toEqual({ imported: 4, changed: 3, leads: 1 });
+    await expectServiceError(api.importNetwork({ csv: "bad csv" }), 400, "csv");
+    await expectServiceError(api.importNetwork({ csv: "x".repeat(8_000_001) }), 400, "csv");
+    const network = await api.removeNetwork("Morgan");
+    expect(network).toEqual({ owners: [], total: 0 });
+    expect(store.listNetwork()).toHaveLength(0);
+    expect(store.recentAudit(1)[0]).toMatchObject({ action: "network.remove", target: "Morgan" });
+  });
+
+  it("counts surfaced companies waiting for calls and alerts only for the last finished planted-check failure", async () => {
+    const { service, store } = createHarness(); const api = service.as("Partner");
+    const swarm = await api.createSwarm({ name: "Company overview", thesis });
+    const waiting: Company[] = [];
+    for (let index = 0; index < 6; index++) {
+      const company = companyRecord(swarm.id, newId("cmp"), "surfaced", `Company ${index}`);
+      waiting.push(company); store.insertCompany(company);
+      store.insertCompanyAssessment(companyAssessment(company.id, null, 0.3 + index / 10));
+    }
+    const called = companyRecord(swarm.id, newId("cmp"), "surfaced", "Already called"); store.insertCompany(called);
+    store.insertCompanyAssessment(companyAssessment(called.id, null, 1));
+    store.insertCompanyFeedback({ id: newId("cfb"), companyId: called.id, author: "Partner", verdict: "yes", reasonTags: ["right_time"], note: null, createdAt: stamp });
+    for (let index = 0; index < 499; index++) {
+      const alreadyCalled = companyRecord(swarm.id, newId("cmp"), "surfaced", `Called ${index}`);
+      store.insertCompany(alreadyCalled);
+      store.insertCompanyAssessment(companyAssessment(alreadyCalled.id, null, 0.99));
+      store.insertCompanyFeedback({ id: newId("cfb"), companyId: alreadyCalled.id, author: "Partner", verdict: "yes", reasonTags: ["right_time"], note: null, createdAt: stamp });
+    }
+    let overview = await api.getOverview(swarm.id);
+    expect(overview.companiesWaiting).toBe(6);
+    expect(overview.topCompanies?.map((row) => row.id)).toEqual(waiting.slice().reverse().slice(0, 5).map((company) => company.id));
+    const failed = runRecord(swarm.id, { status: "succeeded", stage: null, finishedAt: stamp, stats: { ...ZERO_STATS, controlsFailed: 2 } }); store.insertRun(failed);
+    overview = await api.getOverview(swarm.id);
+    const controlAlert = overview.alerts.find((alert) => alert.id === "control-failed");
+    expect(controlAlert).toMatchObject({ level: "warning", title: "The fact-checker failed a planted check", link: "/swarm?node=job:verify.claims" });
+    expect(controlAlert?.detail).toContain("2 fact-check calls in the last run accepted a made-up claim");
+    expect(controlAlert?.detail).toContain("verdicts were thrown away");
+    expect(controlAlert?.detail).toContain("another model for the fact-checker");
+    store.insertRun(runRecord(swarm.id, { startedAt: "2026-11-13T00:00:00.000Z", status: "running", finishedAt: null }));
+    expect((await api.getOverview(swarm.id)).alerts.some((alert) => alert.id === "control-failed")).toBe(true);
+    store.insertRun(runRecord(swarm.id, { startedAt: "2026-11-14T00:00:00.000Z", status: "succeeded", finishedAt: "2026-11-14T00:01:00.000Z", stats: { ...ZERO_STATS } }));
+    expect((await api.getOverview(swarm.id)).alerts.some((alert) => alert.id === "control-failed")).toBe(false);
+  });
+
+  it("backfills the four enabled company and analyst agents once for an older swarm", async () => {
+    const { service, store } = createHarness(); const api = service.as("Partner");
+    const swarm: Swarm = { id: newId("swm"), name: "Older swarm", status: "active", thesis, configId: BASE_CONFIG.id, createdAt: stamp, updatedAt: stamp };
+    store.insertSwarm(swarm);
+    const newJobs = new Set(["company.product", "company.traction", "company.team", "assess.company"]);
+    for (const job of JOBS.filter((item) => !newJobs.has(item.id))) {
+      store.insertAgent({ id: newId("agt"), swarmId: swarm.id, jobId: job.id, classId: job.classId, name: job.label, status: "active", beat: null, state: {}, createdAt: stamp });
+    }
+    await api.getTree(swarm.id);
+    const ids = store.listAgents(swarm.id).map((agent) => agent.jobId);
+    expect([...ids].filter((id) => newJobs.has(id))).toEqual(["company.product", "company.traction", "company.team", "assess.company"]);
+    await api.getOverview(swarm.id);
+    expect(store.listAgents(swarm.id).filter((agent) => newJobs.has(agent.jobId))).toHaveLength(4);
   });
 });

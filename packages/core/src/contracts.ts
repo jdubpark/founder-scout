@@ -19,6 +19,15 @@ import type {
   Assessment,
   AuditEntry,
   Brain,
+  Company,
+  CompanyAssessment,
+  CompanyDimensionId,
+  CompanyEvidenceDraft,
+  CompanyFeedback,
+  CompanyListDTO,
+  CompanyMember,
+  CompanyQuery,
+  CompanyStatus,
   Directive,
   EvalFlowDTO,
   EvalFlowSummary,
@@ -38,11 +47,14 @@ import type {
   Memo,
   ModelJobId,
   ModelRoute,
+  NetworkContact,
   OutreachAction,
   OutreachKind,
   OutreachStatus,
   ProfileLinks,
   PromoteVariantInput,
+  QuoteStatus,
+  TeamMemberDraft,
   ProviderId,
   ProviderStatus,
   RawItem,
@@ -229,6 +241,27 @@ export interface SimFounder {
   visibleIn: SourceId[];
 }
 
+/**
+ * A synthetic company with hidden ground truth. Entirely fictional. Its id is its
+ * founder's simId: in the simulated world every founder has one company.
+ */
+export interface SimCompany {
+  simId: string;
+  name: string;
+  url: string;
+  oneLiner: string;
+  /** The mission as the company would state it. */
+  mission: string;
+  sector: string;
+  stage: string;
+  /** True level 0..1 per company rubric dimension. */
+  latent: Record<CompanyDimensionId, number>;
+  /** 0..1 overall company quality, related to but not the same as the founder's. */
+  quality: number;
+  /** Other people on the team, besides the founder. */
+  team: TeamMemberDraft[];
+}
+
 export interface SimWorld {
   readonly seed: number;
   founders(): SimFounder[];
@@ -244,6 +277,13 @@ export interface SimWorld {
   repos(simId: string): RepoRef[];
   /** A synthetic call transcript consistent with the founder's hidden truth. */
   transcript(simId: string, kind: OutreachKind, targetName: string): string;
+  /** The company of a simulated founder. Derived from its own random stream, so founders are unchanged. */
+  company(simId: string): SimCompany | undefined;
+  /**
+   * Evidence a company research job would find. Deterministic for the inputs. Includes some
+   * items whose hidden truth is not "supported", for the fact-checker to catch.
+   */
+  companyEvidenceFor(simId: string, jobId: JobId, depth: InvestigationDepth): CompanyEvidenceDraft[];
 }
 
 /* ================================================================== */
@@ -295,6 +335,8 @@ export interface JobRegistry {
 }
 
 export interface JobExecution<J extends ModelJobId> {
+  /** A short hash of the instructions sent, so a silent change of wording shows up on the task. */
+  promptHash?: string;
   output: JobOutput<J>;
   provider: ProviderId;
   model: string;
@@ -320,6 +362,11 @@ export type ExecuteJob = <J extends ModelJobId>(
     maxBudgetUsd?: number | null;
     timeoutMs?: number;
     signal?: AbortSignal;
+    /**
+     * Why the previous attempt's answer was rejected. When set, the model is shown the reason
+     * and asked to answer again. Used once per task, for an answer that failed validation.
+     */
+    repair?: string | null;
   },
 ) => Promise<JobExecution<J>>;
 
@@ -399,11 +446,53 @@ export interface Store {
   insertEvidence(evidence: Evidence): boolean;
   listEvidence(founderId: string, options?: { verifications?: Verification[] }): Evidence[];
   setVerification(evidenceId: string, verification: Verification, note: string | null): void;
+  /** Record whether code found an item's quoted words at the address it cites. */
+  setQuote(evidenceId: string, quote: QuoteStatus): void;
 
   insertAssessment(assessment: Assessment): void;
   latestAssessment(founderId: string): Assessment | null;
   assessmentHistory(founderId: string): Array<{ at: string; composite: number; decision: Assessment["decision"] }>;
   setMemo(assessmentId: string, memo: Memo): void;
+
+  /* ---- Companies ---- */
+
+  insertCompany(company: Company): void;
+  getCompany(id: string): Company | null;
+  updateCompany(id: string, patch: Partial<Omit<Company, "id" | "swarmId">>): Company;
+  /** The company a swarm knows under this site host, if any. */
+  findCompanyByDomain(swarmId: string, domain: string): Company | null;
+  /** Companies whose normalised name matches exactly. Name matching is a fallback for when there is no site. */
+  findCompaniesByName(swarmId: string, normalizedName: string): Company[];
+  listCompanies(filter: { swarmId: string; statuses?: CompanyStatus[] }): Company[];
+  /** Rows for the Companies page, with counts per status. */
+  companyRows(query: CompanyQuery): CompanyListDTO;
+  /** Founders that belong to a company, in the order they were first seen. */
+  foundersOfCompany(companyId: string): Founder[];
+
+  /** Replace-or-insert by (company, normalised name), so a later listing updates the same person. */
+  upsertCompanyMember(member: CompanyMember): CompanyMember;
+  listCompanyMembers(companyId: string): CompanyMember[];
+
+  /** Evidence about a company, across whichever founders it was filed under. */
+  listCompanyEvidence(companyId: string, options?: { verifications?: Verification[] }): Evidence[];
+
+  insertCompanyAssessment(assessment: CompanyAssessment): void;
+  latestCompanyAssessment(companyId: string): CompanyAssessment | null;
+  companyAssessmentHistory(companyId: string): Array<{ at: string; deal: number; decision: CompanyAssessment["decision"] }>;
+
+  insertCompanyFeedback(feedback: CompanyFeedback): void;
+  listCompanyFeedback(companyId: string): CompanyFeedback[];
+  /** Every call on any company of a swarm, oldest first. */
+  allCompanyFeedback(swarmId: string): CompanyFeedback[];
+
+  /* ---- A partner's uploaded contact list ---- */
+
+  /** Replace one owner's whole list. Returns the list as stored, with `previous` filled where a contact changed. */
+  replaceNetwork(owner: string, contacts: NetworkContact[]): NetworkContact[];
+  listNetwork(owner?: string): NetworkContact[];
+  removeNetwork(owner: string): number;
+  /** Contacts whose company matches this normalised company name. */
+  networkAtCompany(normalizedCompanyName: string): NetworkContact[];
 
   insertFeedback(feedback: Feedback): void;
   listFeedback(founderId: string): Feedback[];
@@ -430,7 +519,7 @@ export interface Store {
   updateTask(id: string, patch: Partial<Omit<TaskRun, "id" | "runId" | "swarmId">>): void;
   getTask(id: string, options: { withTrace: boolean }): TaskRun | null;
   /** Oldest first, without traces. */
-  listTasks(filter: { runId?: string; founderId?: string; agentId?: string; limit?: number }): TaskRun[];
+  listTasks(filter: { runId?: string; founderId?: string; companyId?: string; agentId?: string; limit?: number }): TaskRun[];
   /** Sum of known task cost for a run. */
   runCost(runId: string): number;
   /** Per-agent activity since a point in time. */
@@ -465,11 +554,71 @@ export interface Logger {
   error(message: string, detail?: Record<string, unknown>): void;
 }
 
+/* ================================================================== */
+/* Checks that code does without a model                                */
+/* ================================================================== */
+
+/**
+ * Opens the page an evidence item cites and looks for the item's quoted words there.
+ * Implemented in src/sources. It refuses addresses on the fetch deny list (see
+ * `DENIED_HOSTS`) and private network addresses, because the address comes from a model.
+ */
+export interface QuoteChecker {
+  check(url: string, excerpt: string, signal?: AbortSignal): Promise<{ status: QuoteStatus; detail: string }>;
+}
+
+/* ================================================================== */
+/* Professional-profile data                                            */
+/* ================================================================== */
+
+/** One person as a data vendor reports them. Professional details only. */
+export interface PersonRecord {
+  /** The vendor's own id for this person. */
+  vendorId: string;
+  /** Vendor name, for example "People Data Labs". */
+  vendor: string;
+  name: string;
+  headline: string | null;
+  location: string | null;
+  /** A pointer a person can open. The system never requests it. */
+  profileUrl: string | null;
+  current: { title: string | null; company: string | null; companyUrl: string | null; startDate: string | null } | null;
+  experience: Array<{ title: string | null; company: string | null; startDate: string | null; endDate: string | null }>;
+  education: Array<{ school: string | null; degrees: string[]; startDate: string | null; endDate: string | null }>;
+  /** When the vendor last confirmed the record, as the vendor reports it. */
+  lastVerifiedAt: string | null;
+  /** 0..1 how sure the vendor is that this is the person asked for. null for search results. */
+  matchConfidence: number | null;
+}
+
+/** How to ask for one person. A profile link is accepted, but a name and company is preferred. */
+export type PersonKey =
+  | { name: string; company: string | null }
+  | { profileUrl: string }
+  | { vendorId: string };
+
+/**
+ * Lookups against a professional-profile data vendor. The engine uses these to fill in a
+ * known founder's work history and a company's team. Implemented per vendor in src/sources.
+ */
+export interface PeopleLookup {
+  readonly vendor: string;
+  status(): Promise<{ configured: boolean; detail: string }>;
+  /** One person's record, or null when the vendor has no confident match. */
+  enrich(key: PersonKey, signal?: AbortSignal): Promise<PersonRecord | null>;
+  /** People who currently work at a company, most senior first, at most `limit`. */
+  team(company: { name: string; domain: string | null }, limit: number, signal?: AbortSignal): Promise<PersonRecord[]>;
+}
+
 /** What the engine is built from. Implemented by `createRunController` in src/engine. */
 export interface EngineDeps {
   store: Store;
   jobs: JobRegistry;
   executeJob: ExecuteJob;
+  /** Quote check for live runs. Absent in tests and simulations, where sources are not real pages. */
+  quotes?: QuoteChecker | null;
+  /** Vendor lookups for live runs. null when no vendor is connected. */
+  people?: PeopleLookup | null;
   /** Source adapters for each source mode. */
   sources: { sim: SourceRegistry; live: SourceRegistry };
   repos: { sim: RepoFinder; live: RepoFinder };

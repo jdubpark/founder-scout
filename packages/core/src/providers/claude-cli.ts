@@ -1,7 +1,7 @@
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import type { TraceTurn, Usage } from "@agentswarm/shared";
+import { claudeFetchDenyRules, type TraceTurn, type Usage } from "@agentswarm/shared";
 import { ProviderError, type ModelProvider, type ProviderRequest, type ProviderResult } from "../contracts";
 import {
   DEFAULT_TIMEOUT_MS,
@@ -13,6 +13,7 @@ import {
   validateOutput,
   type JobKindName,
 } from "./common";
+import { scrubEnv } from "./env";
 import { toProviderJsonSchema } from "./schema";
 import { findOnPath, runProcess, type ProcessOutcome, type ProcessRunner } from "./subprocess";
 
@@ -24,6 +25,20 @@ export const RESEARCH_TOOLS = ["WebSearch", "WebFetch"] as const;
 export const REVIEW_TOOLS = ["Read", "Grep", "Glob"] as const;
 /** Named explicitly as a second line of defence against any tool the set above might grow. */
 export const REVIEW_DENIED_TOOLS = ["Bash", "Edit", "Write", "NotebookEdit", "WebFetch", "WebSearch", "Agent"] as const;
+
+/** Environment variables the headless Claude process keeps. Everything else that looks like a secret is dropped. */
+export const CLAUDE_ENV_PREFIXES = ["ANTHROPIC_", "CLAUDE_"] as const;
+
+/**
+ * Claude Code can also sign in through a cloud provider, and then it needs that provider's
+ * credentials. They are kept only when the environment says that route is in use.
+ */
+export function claudeEnvPrefixes(env: NodeJS.ProcessEnv): string[] {
+  const prefixes: string[] = [...CLAUDE_ENV_PREFIXES];
+  if (env.CLAUDE_CODE_USE_BEDROCK) prefixes.push("AWS_");
+  if (env.CLAUDE_CODE_USE_VERTEX) prefixes.push("GOOGLE_", "GCLOUD_", "CLOUD_ML_", "VERTEX_");
+  return prefixes;
+}
 
 export interface ClaudeInvocation {
   kind: JobKindName;
@@ -68,7 +83,19 @@ export function buildClaudeArgs(inv: ClaudeInvocation): string[] {
       args.push("--tools", "");
       break;
     case "research":
-      args.push("--tools", RESEARCH_TOOLS.join(","), "--allowedTools", RESEARCH_TOOLS.join(","));
+      args.push(
+        "--tools",
+        RESEARCH_TOOLS.join(","),
+        "--allowedTools",
+        RESEARCH_TOOLS.join(","),
+        // Variadic, so it stays last. Verified by running the CLI on 2026-11-13: a rule for
+        // WebFetch(domain:example.com) blocks only that host, so www.example.com still loads;
+        // WebFetch(domain:*.example.com) blocks the subdomains. A deny rule wins over
+        // --allowedTools. Web search itself stays allowed: a search engine's result snippets
+        // are not a request to those hosts.
+        "--disallowedTools",
+        ...claudeFetchDenyRules(),
+      );
       break;
     case "repo_review":
       if (!inv.repoDir) throw new Error("repo_review needs a checkout directory");
@@ -267,7 +294,7 @@ export class ClaudeCliProvider implements ModelProvider {
         command: "claude",
         args,
         cwd: workdir,
-        env: this.env,
+        env: scrubEnv(this.env, claudeEnvPrefixes(this.env)),
         stdin: req.prompt,
         timeoutMs: req.timeoutMs ?? DEFAULT_TIMEOUT_MS[req.kind],
         signal: req.signal,

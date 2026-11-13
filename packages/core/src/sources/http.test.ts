@@ -56,6 +56,21 @@ describe("assertSuccessful", () => {
 });
 
 describe("httpGet", () => {
+  it("refuses never-fetch hosts before calling fetch", async () => {
+    for (const url of ["https://linkedin.com/profile", "https://www.linkedin.com/profile", "https://LINKEDIN.COM/profile"]) {
+      let called = false;
+      const fetchFn = async () => {
+        called = true;
+        throw new Error("fetch must not be called");
+      };
+
+      await expect(httpGet(fetchFn, "Test source", url)).rejects.toThrow(
+        "Test source cannot request this address because it is on the never-fetch list; nothing in this system requests it.",
+      );
+      expect(called).toBe(false);
+    }
+  });
+
   it("sends the agentswarm User-Agent and the caller's headers", async () => {
     const recorder = scriptedFetch(() => textResponse("ok"));
     await httpGet(recorder.fetch, "Test", "https://example.test/x", { headers: { Accept: "application/json" } });

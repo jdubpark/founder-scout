@@ -1,5 +1,8 @@
 import {
+  COMPANY_DIMENSIONS,
   DIMENSIONS,
+  type CompanyDimensionId,
+  type CompanyEvidenceDraft,
   type DimensionId,
   type EvidenceDraft,
   type EvidenceKind,
@@ -16,6 +19,7 @@ import {
 } from "@agentswarm/shared";
 import type {
   RepoFinder,
+  SimCompany,
   SimFounder,
   SimWorld,
   SourceAdapter,
@@ -671,6 +675,236 @@ function signalValue(rng: () => number, truth: SimMeta["truth"], latent: number)
   return rng();
 }
 
+const COMPANY_FOUNDER_ROLES = ["Co-founder and CTO", "Co-founder and COO", "Co-founder and head of product"] as const;
+const COMPANY_ROLES = ["Founding engineer", "Head of design", "Product lead", "Research lead", "Operations lead", "Customer engineer"] as const;
+const TEAM_BACKGROUNDS = [
+  "Built workflow software for regional operators and maintained its release process.",
+  "Designed data tools used by small product teams to review operational work.",
+  "Led integrations between internal systems and customer-facing applications.",
+  "Developed evaluation methods for software used in production environments.",
+  "Worked on product delivery across engineering, research and customer teams.",
+] as const;
+const NULL_PROFILE_LINKS: ProfileLinks = { github: null, linkedin: null, x: null, site: null, scholar: null };
+
+function companyCustomerAndProblem(sector: string): { customer: string; problem: string } {
+  switch (sector) {
+    case "Developer tools": return { customer: "small platform teams", problem: "reduce repeated deployment work" };
+    case "Applied AI": return { customer: "applied research teams", problem: "move models into dependable daily workflows" };
+    case "Climate software": return { customer: "energy operators", problem: "coordinate projects across changing grid conditions" };
+    case "Robotics": return { customer: "robotics teams", problem: "make field deployments easier to monitor and improve" };
+    case "Healthcare software": return { customer: "care operations teams", problem: "close gaps between clinical handoffs" };
+    case "Financial infrastructure": return { customer: "payments teams", problem: "reconcile complex transactions with fewer manual steps" };
+    case "Industrial automation": return { customer: "plant operators", problem: "spot production delays before they spread" };
+    default: return { customer: "school operations teams", problem: "coordinate work across busy learning environments" };
+  }
+}
+
+function makeCompany(founder: SimFounder, seed: number): SimCompany {
+  const rng = createRng(hashSeed(seed, founder.simId, "company"));
+  const quality = clamp(0.5 * founder.quality + 0.5 * clamp(0.45 + gaussian(rng) * 0.25));
+  const latent = {} as Record<CompanyDimensionId, number>;
+  for (const dimension of COMPANY_DIMENSIONS) {
+    if (dimension.id === "claims") {
+      latent.claims = rng() < 0.05 ? 0.08 + rng() * 0.1 : clamp(0.75 + gaussian(rng) * 0.12);
+    } else {
+      latent[dimension.id] = clamp(quality + gaussian(rng) * 0.15);
+    }
+  }
+  const site = `https://${slug(founder.companyName)}.example`;
+  const { customer, problem } = companyCustomerAndProblem(founder.sector);
+  const mission = latent.mission >= 0.62
+    ? `We help ${customer} ${problem} with ${founder.companyOneLiner}.`
+    : `We use ${founder.companyOneLiner} to make ${founder.sector.toLowerCase()} better for everyone.`;
+  const maximumTeamSize = Math.min(4, Math.floor(latent.team * 4) + 1);
+  const teamCount = Math.floor(rng() * (maximumTeamSize + 1));
+  const usedNames = new Set<string>();
+  const team = Array.from({ length: teamCount }, (_, index) => {
+    const isFounder = index === 0 && rng() < 0.65;
+    const role = isFounder ? choose(COMPANY_FOUNDER_ROLES, rng) : choose(COMPANY_ROLES, rng);
+    return {
+      name: uniqueName(rng, usedNames),
+      role,
+      isFounder,
+      background: choose(TEAM_BACKGROUNDS, rng),
+      sourceUrl: `${site}/team`,
+      links: { ...NULL_PROFILE_LINKS },
+    };
+  });
+  return {
+    simId: founder.simId,
+    name: founder.companyName,
+    url: site,
+    oneLiner: founder.companyOneLiner,
+    mission,
+    sector: founder.sector,
+    stage: founder.stage,
+    latent,
+    quality,
+    team,
+  };
+}
+
+type CompanyJob = "company.product" | "company.traction" | "company.team";
+type CompanyEvidenceSpec = {
+  facet: CompanyEvidenceDraft["facet"];
+  kind: CompanyEvidenceDraft["kind"];
+  title: string;
+  excerpt: string;
+  claim: string;
+  dimensions: readonly CompanyDimensionId[];
+  itemIndex: number;
+};
+
+function companyBand(value: number): number {
+  return Math.min(4, Math.floor(value * 5));
+}
+
+function companyEvidenceSpecs(
+  company: SimCompany,
+  founder: SimFounder,
+  jobId: CompanyJob,
+  depth: InvestigationDepth,
+): CompanyEvidenceSpec[] {
+  const quick = depth === "quick";
+  const deep = depth === "deep";
+  const specs: CompanyEvidenceSpec[] = [];
+  const add = (
+    facet: CompanyEvidenceDraft["facet"], kind: CompanyEvidenceDraft["kind"], title: string,
+    excerpt: string, claim: string, dimensions: readonly CompanyDimensionId[], itemIndex: number,
+  ) => specs.push({ facet, kind, title, excerpt, claim, dimensions, itemIndex });
+  const productText = [
+    "The public preview has no documented path for a customer to use the product yet.",
+    "A small demo is available, though it does not yet support an outside team's full workflow.",
+    "The release notes describe a working product that outside teams can use for routine tasks.",
+    "The changelog shows regular fixes and customers using the product in daily operations.",
+    "Independent operators describe relying on the product for work that competing tools do not cover.",
+  ];
+  const marketText = [
+    "The page identifies a narrow buyer group with few current purchases in this category.",
+    "The initial audience is a small group of buyers with limited budgets for this workflow.",
+    "Several established buyers already pay for products addressing this operational need.",
+    "The customer notes describe a growing buyer group and a clear first segment for the product.",
+    "The market brief points to a large category in transition, with no settled approach among buyers.",
+  ];
+  const productBand = companyBand(company.latent.product);
+  const marketBand = companyBand(company.latent.market);
+  if (jobId === "company.product") {
+    add("mission", "launch", `${company.name}: mission`, company.mission,
+      `${company.name} describes the customer problem it is working to solve.`, ["mission"], 0);
+    const productCount = deep ? 2 : 1;
+    for (let index = 0; index < productCount; index += 1) {
+      add("product", index === 0 ? "launch" : "article", `${company.name}: product release ${index + 1}`,
+        `${productText[productBand]} ${index === 0 ? `The release page also describes ${company.oneLiner}.` : "A later product note outlines the next workflow improvements."}`,
+        `${company.name} has a product record describing its current release.`, ["product", "edge"], index);
+    }
+    const roadmapCount = quick ? 0 : deep ? 2 : 1;
+    for (let index = 0; index < roadmapCount; index += 1) {
+      add("roadmap", "article", `${company.name}: product notes ${index + 1}`,
+        company.latent.plan > 0.6
+          ? `The product notes put ${index === 0 ? "customer onboarding" : "usage reporting"} before broader expansion and connect it to the current release.`
+          : `The product notes describe broad goals for ${company.sector.toLowerCase()} without dates or a clear order.`,
+        `${company.name} has published a note about its next product steps.`, ["plan"], index);
+    }
+    const marketCount = quick || !deep ? 1 : 2;
+    for (let index = 0; index < marketCount; index += 1) {
+      add("market", "article", `${company.name}: customer market note ${index + 1}`,
+        `${marketText[marketBand]} The brief connects this opportunity to ${company.oneLiner}.`,
+        `${company.name} has published a description of its target market.`, ["market", "edge"], index);
+    }
+    if (company.latent.claims < 0.2) {
+      add("risk", "article", `${company.name}: claim comparison`,
+        `The launch page says ${company.name} has active use across dozens of teams, while a separate usage note records no outside workspaces for the same period.`,
+        `A public usage claim by ${company.name} conflicts with a second company source.`, ["claims"], 0);
+    }
+  } else if (jobId === "company.traction") {
+    const tractionCount = quick ? 1 : deep ? 3 : 2;
+    const tractionText = [
+      "The dated update records early conversations but no outside use of the product.",
+      "The release note reports sign-ups and trial interest, without a record of regular use.",
+      "A customer note describes a small set of teams using the product in a pilot.",
+      "The update reports paying customers and higher monthly use than the prior quarter.",
+      "An outside customer report describes demand growing faster than the team can onboard it.",
+    ];
+    for (let index = 0; index < tractionCount; index += 1) {
+      add("traction", index === 0 ? "launch" : "article", `${company.name}: progress update ${index + 1}`,
+        `${tractionText[companyBand(company.latent.traction)]} The update also notes ${company.oneLiner}.`,
+        `${company.name} has published a dated update about customer use.`, ["traction", "momentum"], index);
+    }
+    if (founder.stage !== "pre-seed") {
+      const fundingCount = deep ? 2 : 1;
+      for (let index = 0; index < fundingCount; index += 1) {
+        add("funding", "funding", `${company.name}: funding update ${index + 1}`,
+          `The company announced a ${founder.stage === "series A" ? "series A" : "seed"} round to expand work on ${company.oneLiner}.`,
+          `${company.name} has announced a funding milestone.`, ["momentum"], index);
+      }
+    }
+  } else {
+    const teamCount = quick ? 1 : deep ? 3 : 2;
+    for (let index = 0; index < teamCount; index += 1) {
+      const excerpt = company.team.length === 0
+        ? "The team page lists the lead founder and no additional operating members. The company is still covering product and customer work with a small founding group."
+        : `The team page lists ${company.team.slice(0, Math.min(company.team.length, index + 1)).map((member) => `${member.name}, ${member.role}`).join("; ")}. ${index === 0 ? "Their backgrounds include product delivery and software operations." : "The listed roles add product and customer coverage alongside engineering."}`;
+      add("team", "article", `${company.name}: team page ${index + 1}`, excerpt,
+        `${company.name} has published a team listing with professional roles.`, ["team"], index);
+    }
+  }
+  return specs;
+}
+
+function companyEvidenceDate(founder: SimFounder, facet: CompanyEvidenceDraft["facet"], index: number): string {
+  const tractionOffsets = [520, 330, 145, 45];
+  const fundingOffsets = [430, 160];
+  const offset = facet === "traction" ? tractionOffsets[index] ?? 30
+    : facet === "funding" ? fundingOffsets[index] ?? 30 : 0;
+  return chooseDate(founder.appearsOnDay - offset);
+}
+
+function makeCompanyEvidence(
+  seed: number,
+  company: SimCompany,
+  founder: SimFounder,
+  jobId: CompanyJob,
+  depth: InvestigationDepth,
+): CompanyEvidenceDraft[] {
+  const rng = createRng(hashSeed(seed, founder.simId, jobId, depth, "company-evidence"));
+  const specs = companyEvidenceSpecs(company, founder, jobId, depth);
+  return specs.map((spec) => {
+    const bands = spec.dimensions.map((dimension) => companyBand(company.latent[dimension]));
+    const highestBand = Math.max(...bands);
+    const truthRoll = rng();
+    const supportCutoff = highestBand < 4 ? 0.8625 : 0.95;
+    const truth: SimMeta["truth"] = truthRoll < supportCutoff
+      ? "supported"
+      : highestBand < 4 && truthRoll < 0.95 ? "unsupported" : "wrong_person";
+    const signals = spec.dimensions.map((dimension): SimSignal => ({
+      dimension,
+      value: clamp(company.latent[dimension] + gaussian(rng) * 0.12),
+    }));
+    let excerpt = spec.excerpt;
+    let finalTruth: SimMeta["truth"] = truth;
+    if (spec.facet === "risk") {
+      finalTruth = "contradicted";
+    } else if (truth === "wrong_person") {
+      const suffixes = ["Labs", "Systems", "Works", "Studio"] as const;
+      const originalSuffix = company.name.split(" ").at(-1);
+      const alternatives = suffixes.filter((suffix) => suffix !== originalSuffix);
+      const similarName = `${company.name.split(" ")[0]} ${choose(alternatives, rng)}`;
+      excerpt = `This listing describes ${similarName}, a separate company with a similar name, rather than ${company.name}. Its page covers ${company.oneLiner}.`;
+    }
+    const sourcePath = spec.facet === "risk" ? `${company.url}/research/second-source` : company.url;
+    return {
+      kind: spec.kind,
+      facet: spec.facet,
+      url: `${sourcePath}/research/${spec.facet}/${spec.itemIndex + 1}`,
+      title: spec.title,
+      excerpt,
+      claim: spec.claim,
+      publishedAt: companyEvidenceDate(founder, spec.facet, spec.itemIndex),
+      sim: { truth: finalTruth, signals },
+    };
+  });
+}
+
 function claimFor(name: string, company: string, dimension: DimensionId, band: number): string {
   return `${name} ${CLAIM_VERBS[dimension]} ${company}; the available evidence is consistent with level ${band + 1} for ${DIMENSIONS.find((item) => item.id === dimension)?.label.toLowerCase() ?? dimension}.`;
 }
@@ -726,6 +960,19 @@ export function createSimWorld(options: { seed?: number; founders?: number; days
         localPath: null,
       };
     }).sort((first, second) => (second.stars ?? 0) - (first.stars ?? 0));
+  };
+
+  const companyFor = (simId: string): SimCompany | undefined => {
+    const founder = founderById.get(simId);
+    return founder ? makeCompany(founder, seed) : undefined;
+  };
+
+  const companyEvidenceFor = (simId: string, jobId: JobId, depth: InvestigationDepth): CompanyEvidenceDraft[] => {
+    const founder = founderById.get(simId);
+    if (!founder) return [];
+    if (jobId !== "company.product" && jobId !== "company.traction" && jobId !== "company.team") return [];
+    const company = makeCompany(founder, seed);
+    return makeCompanyEvidence(seed, company, founder, jobId, depth);
   };
 
   return {
@@ -814,6 +1061,8 @@ export function createSimWorld(options: { seed?: number; founders?: number; days
       }
       return result;
     },
+    company: companyFor,
+    companyEvidenceFor,
     repos: (simId) => repos(simId).map(copyRepo),
     transcript: (simId: string, kind: OutreachKind, targetName: string) => {
       const founder = founderById.get(simId);

@@ -1,11 +1,12 @@
 import { Link } from "react-router-dom";
 import { ArrowLeft } from "lucide-react";
-import type { Feedback, Founder, ProfileLinks } from "@agentswarm/shared";
+import type { Feedback, Founder, NetworkContact, ProfileLinks } from "@agentswarm/shared";
 import { useApi } from "../../../lib/api/context";
 import { Avatar } from "../../../components/ui/layout";
 import { Caution, Status } from "../../../components/ui/marks";
 import { STATUS_VIEW } from "../../../lib/stages";
 import { YesNo } from "../../../components/YesNo";
+import { SourceIcon } from "../../../components/icons";
 import { SourceLink } from "../SourceLink";
 
 const PROFILE_LINKS: Array<[keyof ProfileLinks, string]> = [
@@ -16,11 +17,22 @@ const PROFILE_LINKS: Array<[keyof ProfileLinks, string]> = [
   ["scholar", "Scholar"],
 ];
 
-export function DossierHeader({ founder, feedback, backTo }: { founder: Founder; feedback: Feedback[]; backTo: string }) {
+export function DossierHeader({
+  founder,
+  feedback,
+  backTo,
+  knownPeople = [],
+}: {
+  founder: Founder;
+  feedback: Feedback[];
+  backTo: string;
+  knownPeople?: NetworkContact[];
+}) {
   const { demo } = useApi();
   const status = STATUS_VIEW[founder.status];
   const latest = [...feedback].sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0] ?? null;
-  const company = [founder.company.name, founder.headline].filter(Boolean).join(" · ");
+  const companyName = founder.company.name;
+  const company = [companyName, founder.headline].filter(Boolean).join(" · ");
   const links = PROFILE_LINKS.flatMap(([key, label]) => {
     const href = founder.links[key];
     return href ? [{ key, label, href }] : [];
@@ -34,16 +46,42 @@ export function DossierHeader({ founder, feedback, backTo }: { founder: Founder;
       <Avatar name={founder.name} size="lg" />
       <div className="flex min-w-0 flex-1 flex-col gap-1.5">
         <h1 className="break-words text-2xl leading-tight font-black text-ink">{founder.name}</h1>
-        {company ? <p className="truncate text-base text-ink-2" title={company}>{company}</p> : null}
+        {company ? (
+          <p className="truncate text-base text-ink-2" title={company}>
+            {founder.companyId && companyName ? (
+              <Link to={`/companies/${encodeURIComponent(founder.companyId)}`} className="font-bold text-navy hover:underline">
+                {companyName}
+              </Link>
+            ) : (
+              companyName
+            )}
+            {founder.headline ? `${companyName ? " · " : ""}${founder.headline}` : null}
+          </p>
+        ) : null}
         <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5 text-sm">
           <Status state={status.mark}>{status.label}</Status>
-          {demo ? <Caution>Simulated</Caution> : null}
+          {/* A simulated founder is labelled wherever they appear, on a real server as much as in the demo. */}
+          {demo || founder.simId ? <Caution>Simulated</Caution> : null}
           {links.map((link) => (
             <SourceLink key={link.key} href={link.href}>
               {link.label}
             </SourceLink>
           ))}
         </div>
+        {knownPeople.length > 0 ? (
+          <div className="flex min-w-0 flex-wrap items-center gap-x-5 gap-y-1.5 text-sm">
+            <span className="flex items-center gap-1.5 font-bold text-ink-2">
+              <SourceIcon source="network" />
+              You know
+            </span>
+            {knownPeople.map((person) => (
+              <span key={person.id} className="flex min-w-0 items-baseline gap-1.5">
+                <span className="font-bold text-ink">{person.name}</span>
+                {person.position ? <span className="truncate text-ink-2" title={person.position}>{person.position}</span> : null}
+              </span>
+            ))}
+          </div>
+        ) : null}
       </div>
       <YesNo
         founderId={founder.id}

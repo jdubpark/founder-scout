@@ -2,9 +2,10 @@
  * The records the swarm keeps. Timestamps are ISO-8601 strings in UTC.
  */
 
+import type { CompanyDimensionId, EvidenceFacet } from "./company";
 import type { ClassId, JobId, ProviderId, SourceId } from "./registry";
 import type { DimensionId } from "./rubric";
-import type { Decision, DimensionScore, Level, ScoreFlag } from "./scoring";
+import type { CompanyDimensionScore, Decision, DimensionScore, Level, ScoreFlag } from "./scoring";
 import type { Usage } from "./models";
 import type { ParamValue } from "./params";
 
@@ -108,6 +109,8 @@ export interface Founder {
   headline: string | null;
   location: string | null;
   company: CompanyInfo;
+  /** The company record this founder belongs to, once one has been matched. */
+  companyId?: string | null;
   links: ProfileLinks;
   status: FounderStatus;
   /** Thesis fit 0..1 from the screener. */
@@ -177,7 +180,7 @@ export type Verification =
  * synthetic evidence. Real evidence never has this.
  */
 export interface SimSignal {
-  dimension: DimensionId;
+  dimension: DimensionId | CompanyDimensionId;
   /** 0..1 */
   value: number;
 }
@@ -191,17 +194,38 @@ export interface SimMeta {
   signals: SimSignal[];
   /** Whether the excerpt really supports the claim and is about this person. */
   truth: Exclude<Verification, "unverified">;
+  /**
+   * Set on a planted control. A planted claim is blatant by construction, so the simulated
+   * fact-checker misses it far less often than an ordinary unsupported claim.
+   */
+  planted?: boolean;
 }
 
-/** One sourced fact about a founder: an excerpt and the claim it supports. */
+/** Whether code found an item's quoted text at the address it cites. */
+export type QuoteStatus =
+  /** The quoted words are on the page. */
+  | "found"
+  /** The page was read and the quoted words are not on it. The item is rejected. */
+  | "not_found"
+  /** The page could not be read (blocked, too little text, not a web page). The fact-checker decides. */
+  | "unreachable";
+
+/** One sourced fact about a founder or a company: an excerpt and the claim it supports. */
 export interface Evidence {
   id: string;
+  /** The founder this was collected for. Company evidence is filed under the company's lead founder. */
   founderId: string;
+  /** Set when the fact is about the company rather than the person. */
+  companyId?: string | null;
+  /** What a company fact is about. null for facts about a person. */
+  facet?: EvidenceFacet | null;
+  /** Result of the quote check, when one ran. */
+  quote?: QuoteStatus | null;
   kind: EvidenceKind;
   source: SourceId;
   url: string | null;
   title: string;
-  /** A quote or close paraphrase of the source, at most about 1200 characters. */
+  /** The source's own words, at most about 1200 characters. */
   excerpt: string;
   /** What this evidence shows about the founder, in one sentence. */
   claim: string;
@@ -256,6 +280,168 @@ export interface Memo {
   risks: string[];
   openQuestions: string[];
   nextStep: string;
+}
+
+/* ----------------------------- Companies --------------------------- */
+
+export type CompanyStatus =
+  /** Known, not yet researched. */
+  | "tracked"
+  /** Above the bar: put in front of the partners for a yes or a no. */
+  | "surfaced"
+  /** Looks strong on thin evidence: more evidence is being gathered. */
+  | "needs_evidence"
+  /** Not there yet: re-checked on a schedule. */
+  | "watch"
+  /** Below the watch bar after research, or a partner said no. */
+  | "passed"
+  | "archived";
+
+/** A sentence in someone else's words, with where it was read. */
+export interface SourcedText {
+  text: string;
+  url: string | null;
+}
+
+export interface CompanyLinks {
+  github: string | null;
+  x: string | null;
+  /** Kept as a pointer a person can open. The system never requests it. */
+  linkedin: string | null;
+  docs: string | null;
+  careers: string | null;
+}
+
+export const EMPTY_COMPANY_LINKS: CompanyLinks = {
+  github: null,
+  x: null,
+  linkedin: null,
+  docs: null,
+  careers: null,
+};
+
+/** One company a swarm is following. Several founders can belong to it. */
+export interface Company {
+  id: string;
+  swarmId: string;
+  name: string;
+  /** The company's own site host, used to recognise the same company again. */
+  domain: string | null;
+  url: string | null;
+  /** What it does, in one plain sentence. */
+  oneLiner: string | null;
+  /** The mission in the company's own words. */
+  mission: SourcedText | null;
+  sector: string | null;
+  stage: string | null;
+  links: CompanyLinks;
+  status: CompanyStatus;
+  firstSeenAt: string;
+  updatedAt: string;
+  lastResearchedAt: string | null;
+  lastAssessedAt: string | null;
+  nextRecheckAt: string | null;
+  /** Set only for simulated companies. Never shown as a real identifier. */
+  simId: string | null;
+}
+
+/** One person on a company's team, as publicly listed. Professional details only. */
+export interface CompanyMember {
+  id: string;
+  companyId: string;
+  name: string;
+  role: string | null;
+  isFounder: boolean;
+  /** Set when this person is also a founder the swarm follows. */
+  founderId: string | null;
+  links: ProfileLinks;
+  /** One line of relevant earlier work. */
+  background: string | null;
+  source: SourceId;
+  /** Where the team listing was read. */
+  sourceUrl: string | null;
+  addedAt: string;
+}
+
+export interface CompanyJudgment {
+  dimension: CompanyDimensionId;
+  level: Level | null;
+  confidence: number;
+  rationale: string;
+  evidenceIds: string[];
+  counterEvidenceIds: string[];
+}
+
+/** A point in a brief, with the evidence it rests on. A point that cites nothing verified is dropped. */
+export interface CitedPoint {
+  text: string;
+  evidenceIds: string[];
+}
+
+/** The company in a few lines, for a partner with two minutes. */
+export interface CompanyBrief {
+  summary: string;
+  strengths: CitedPoint[];
+  risks: CitedPoint[];
+  openQuestions: string[];
+}
+
+export interface CompanyAssessment {
+  id: string;
+  companyId: string;
+  runId: string | null;
+  configId: string;
+  /** 0..1 the company on its own rubric. */
+  company: number;
+  companyCoverage: number;
+  companyPotential: number | null;
+  /** The founder whose score stands for the team, and that score. null when none is assessed. */
+  leadFounderId: string | null;
+  team: number | null;
+  /** 0..1 founders and company together. This is what the bar is applied to. */
+  deal: number;
+  coverage: number;
+  potential: number | null;
+  decision: Decision;
+  reasons: string[];
+  flags: ScoreFlag[];
+  breakdown: CompanyDimensionScore[];
+  judgments: CompanyJudgment[];
+  brief: CompanyBrief;
+  createdAt: string;
+}
+
+/** A partner's call on a company: would we fund this, yes or no, and why. */
+export interface CompanyFeedback {
+  id: string;
+  companyId: string;
+  author: string;
+  verdict: FeedbackVerdict;
+  /** Ids from COMPANY_REASONS for this verdict. */
+  reasonTags: string[];
+  note: string | null;
+  createdAt: string;
+}
+
+/* ----------------------------- Network ----------------------------- */
+
+/**
+ * One connection from a member's own exported contact list, uploaded by that
+ * member. Name, company and position only: the export's email column is never stored.
+ */
+export interface NetworkContact {
+  id: string;
+  /** Who uploaded the list. */
+  owner: string;
+  name: string;
+  company: string | null;
+  position: string | null;
+  /** A pointer a person can open. The system never requests it. */
+  profileUrl: string | null;
+  connectedOn: string | null;
+  importedAt: string;
+  /** What the same contact showed in the previous upload, when it differs. */
+  previous: { company: string | null; position: string | null } | null;
 }
 
 export type FeedbackVerdict = "yes" | "no";
@@ -388,6 +574,14 @@ export interface RunStats {
   tasks: number;
   failures: number;
   skippedBudget: number;
+  /** Companies researched, assessed and surfaced in this run. */
+  companiesResearched: number;
+  companiesAssessed: number;
+  companiesSurfaced: number;
+  /** Evidence rejected because its quoted text was not at the source it cites. */
+  quotesRejected: number;
+  /** Fact-check calls thrown away because the checker accepted a planted false claim. */
+  controlsFailed: number;
 }
 
 export const ZERO_STATS: RunStats = {
@@ -409,6 +603,11 @@ export const ZERO_STATS: RunStats = {
   tasks: 0,
   failures: 0,
   skippedBudget: 0,
+  companiesResearched: 0,
+  companiesAssessed: 0,
+  companiesSurfaced: 0,
+  quotesRejected: 0,
+  controlsFailed: 0,
 };
 
 export interface Run {
@@ -457,6 +656,8 @@ export interface TaskRun {
   classId: ClassId;
   stage: StageId;
   founderId: string | null;
+  /** Set for tasks that worked on a company. */
+  companyId?: string | null;
   status: TaskStatus;
   skipReason: string | null;
   attempt: number;
@@ -478,6 +679,12 @@ export interface TaskRun {
   error: string | null;
   startedAt: string | null;
   finishedAt: string | null;
+  /** Which wording of the job's prompt was used, for example "base" or "blind-pedigree". */
+  promptVariant?: string | null;
+  /** A short hash of the instructions this task was given, so a silent change of wording shows up. */
+  promptHash?: string | null;
+  /** For a fact-check call that carried a planted false claim: whether the checker rejected it. */
+  control?: "passed" | "failed" | null;
   /** Loaded only by the task detail endpoint. */
   trace?: TraceTurn[];
 }

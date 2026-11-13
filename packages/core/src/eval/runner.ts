@@ -394,6 +394,7 @@ export async function runEvalCase(options: RunEvalCaseOptions): Promise<EvalCase
         known: [],
         depth: "standard",
         repo: jobId === "investigate.code" ? world.repos(founder.simId)[0] ?? null : null,
+        gaps: [],
       };
       const execution = await execute(jobId, investigateInput);
       const drafts = execution.output.evidence;

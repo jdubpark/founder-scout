@@ -71,6 +71,42 @@ const migrations: readonly Migration[] = [
       CREATE INDEX audit_by_at ON audit(at DESC);
     `);
   },
+  (db) => {
+    db.exec(`
+      CREATE TABLE companies (
+        id TEXT PRIMARY KEY, swarm_id TEXT NOT NULL, domain TEXT, normalized_name TEXT NOT NULL,
+        status TEXT NOT NULL, updated_at TEXT NOT NULL, next_recheck_at TEXT, record TEXT NOT NULL
+      );
+      CREATE INDEX companies_by_swarm_domain ON companies(swarm_id, domain);
+      CREATE INDEX companies_by_swarm_name ON companies(swarm_id, normalized_name);
+      CREATE TABLE company_members (
+        id TEXT PRIMARY KEY, company_id TEXT NOT NULL, normalized_name TEXT NOT NULL,
+        record TEXT NOT NULL, UNIQUE(company_id, normalized_name)
+      );
+      CREATE INDEX company_members_by_company ON company_members(company_id);
+      CREATE TABLE company_assessments (
+        id TEXT PRIMARY KEY, company_id TEXT NOT NULL, created_at TEXT NOT NULL,
+        decision TEXT NOT NULL, deal REAL NOT NULL, record TEXT NOT NULL
+      );
+      CREATE INDEX company_assessments_by_company ON company_assessments(company_id, created_at DESC);
+      CREATE TABLE company_feedback (
+        id TEXT PRIMARY KEY, company_id TEXT NOT NULL, created_at TEXT NOT NULL, record TEXT NOT NULL
+      );
+      CREATE INDEX company_feedback_by_company ON company_feedback(company_id, created_at DESC);
+      CREATE TABLE network_contacts (
+        id TEXT PRIMARY KEY, owner TEXT NOT NULL, normalized_name TEXT NOT NULL,
+        normalized_company TEXT, record TEXT NOT NULL
+      );
+      CREATE INDEX network_contacts_by_owner ON network_contacts(owner);
+      CREATE INDEX network_contacts_by_company ON network_contacts(normalized_company);
+      ALTER TABLE founders ADD COLUMN company_id TEXT;
+      CREATE INDEX founders_by_company ON founders(company_id);
+      ALTER TABLE evidence ADD COLUMN company_id TEXT;
+      CREATE INDEX evidence_by_company ON evidence(company_id, captured_at);
+      ALTER TABLE tasks ADD COLUMN company_id TEXT;
+      CREATE INDEX tasks_by_company ON tasks(company_id, insertion_order);
+    `);
+  },
 ];
 
 export function migrate(db: Database.Database): void {

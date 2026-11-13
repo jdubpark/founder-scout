@@ -1,14 +1,20 @@
 import { describe, expect, it } from "vitest";
+import { createHash } from "node:crypto";
 import {
+  COMPANY_DIMENSIONS,
   DIMENSIONS,
   MODEL_JOB_IDS,
   PROHIBITED_ATTRIBUTES,
 } from "@agentswarm/shared";
 import type {
   AssessInput,
+  CompanyAssessInput,
+  CompanyEvidenceDraft,
+  CompanyResearchInput,
   DebriefInput,
   EvidenceBrief,
   EvidenceDraft,
+  CompanyRef,
   FounderBrief,
   InvestigateInput,
   JobInput,
@@ -31,6 +37,7 @@ import type {
   ProviderRequest,
   ProviderResult,
   SimFounder,
+  SimCompany,
   SimWorld,
 } from "../contracts";
 import {
@@ -39,6 +46,7 @@ import {
   createJobRegistry,
   findSensitive,
   normalizeOutput,
+  plantControl,
   redactSensitive,
 } from "./index";
 
@@ -165,13 +173,76 @@ const repo: RepoRef = {
 
 const knownEvidence = [evidenceBrief()];
 
+const simCompany: SimCompany = {
+  simId: "SIM-COMPANY-SECRET",
+  name: "Analytical Engines",
+  url: "https://analytical.example",
+  oneLiner: "Developer infrastructure for reliable compute",
+  mission: "Make builds reliable for every engineering team.",
+  sector: "developer tools",
+  stage: "seed",
+  latent: Object.fromEntries(COMPANY_DIMENSIONS.map((dimension) => [dimension.id, 0.8])) as SimCompany["latent"],
+  quality: 0.8,
+  team: [{
+    name: "Grace Hopper",
+    role: "Engineering lead",
+    isFounder: false,
+    background: "Built distributed systems at a public software company.",
+    sourceUrl: "https://analytical.example/team",
+    links: { github: null, linkedin: null, x: null, site: null, scholar: null },
+  }],
+};
+
+const company: CompanyRef = {
+  id: "company-1",
+  name: "Analytical Engines",
+  url: "https://analytical.example",
+  oneLiner: "Developer infrastructure for reliable compute",
+  mission: { text: "Make builds reliable for every engineering team.", url: "https://analytical.example/about" },
+  sector: "developer tools",
+  stage: "seed",
+  links: { github: null, x: null, linkedin: null, docs: null, careers: null },
+  team: [],
+  simId: "SIM-COMPANY-SECRET",
+};
+
+function companyEvidenceDraft(overrides: Partial<CompanyEvidenceDraft> = {}): CompanyEvidenceDraft {
+  return {
+    kind: "article",
+    facet: "product",
+    url: "https://analytical.example/product",
+    title: "Product page",
+    excerpt: "The product builds projects in seconds.",
+    claim: "The company offers a build product.",
+    publishedAt: "2026-01-01",
+    sim: { truth: "supported", signals: [{ dimension: "product", value: 0.8 }] },
+    ...overrides,
+  };
+}
+
+function companyBrief(overrides: Partial<EvidenceBrief> = {}): EvidenceBrief {
+  return evidenceBrief({
+    id: "company-ev-1",
+    kind: "article",
+    source: "web",
+    facet: "product",
+    url: "https://analytical.example/product",
+    title: "Product page",
+    excerpt: "The product builds projects in seconds.",
+    claim: "The company offers a build product.",
+    verification: "supported",
+    sim: { truth: "supported", signals: [{ dimension: "product", value: 0.8 }] },
+    ...overrides,
+  });
+}
+
 function inputFor(id: ModelJobId): AnyInput {
   if (id.startsWith("scout.")) {
     return { items: [rawItem], beat: "Rust infrastructure", thesis } as ScoutInput;
   }
   if (id === "screen.fit") return { founder, thesis } as ScreenInput;
   if (id.startsWith("investigate.")) {
-    return { founder, thesis, known: [], depth: "standard", repo: id === "investigate.code" ? repo : null } as InvestigateInput;
+    return { founder, thesis, known: [], depth: "standard", repo: id === "investigate.code" ? repo : null, gaps: [] } as InvestigateInput;
   }
   if (id === "verify.claims") return { founder, evidence: knownEvidence } as VerifyInput;
   if (id === "assess.judgments") {
@@ -200,6 +271,12 @@ function inputFor(id: ModelJobId): AnyInput {
         breakdown: [],
       },
     } as MemoInput;
+  }
+  if (id === "company.product" || id === "company.traction" || id === "company.team") {
+    return { company, founders: [founder], thesis, known: [], depth: "standard", gaps: [] } as CompanyResearchInput;
+  }
+  if (id === "assess.company") {
+    return { company, thesis, evidence: [companyBrief()], partnerNotes: ["Ask about repeat use."] } as CompanyAssessInput;
   }
   if (id === "outreach.plan") {
     return { founder, thesis, memo, evidence: knownEvidence, fundName: "Northstar Capital" } as OutreachPlanInput;
@@ -234,6 +311,11 @@ function context(overrides: Partial<JobContext> = {}): JobContext {
     ],
     repos: () => [repo],
     transcript: (_simId, _kind, targetName) => targetName + ": We shipped the first version in six weeks.",
+    company: (simId) => simId === simCompany.simId ? simCompany : undefined,
+    companyEvidenceFor: (simId, jobId, depth) => [companyEvidenceDraft({
+      url: "https://analytical.example/" + jobId + "/" + depth,
+      title: "Company evidence for " + simId,
+    })],
   };
   return {
     swarm: {
@@ -373,6 +455,167 @@ describe("job registry and prompt contracts", () => {
     expect(system).toContain("Never fetch or log into linkedin.com.");
     expect(system).toContain("Professional-profile data may come only from a licensed vendor.");
     expect(system).toContain("Every evidence item must include a source URL");
+  });
+
+  it("prioritizes open questions without changing a prompt that has no gaps", () => {
+    const jobs = createJobRegistry();
+    const founderInput = inputFor("investigate.background") as InvestigateInput;
+    const emptyFounder = jobs.get("investigate.background").buildPrompt(founderInput, context()).prompt;
+    const stillEmpty = jobs.get("investigate.background").buildPrompt({ ...founderInput, gaps: [] }, context()).prompt;
+    expect(stillEmpty).toBe(emptyFounder);
+    expect(emptyFounder).not.toContain("<open_questions>");
+    const withFounderGap = jobs.get("investigate.background").buildPrompt({
+      ...founderInput,
+      gaps: [{ dimension: "trajectory", label: "Trajectory", question: "What changed in scope?" }],
+    }, context()).prompt;
+    expect(withFounderGap).toContain("<open_questions>");
+    expect(withFounderGap).toContain("Trajectory");
+    expect(withFounderGap).toContain("What changed in scope?");
+    expect(withFounderGap).toContain("Look for sources that would settle them before anything else.");
+    expect(jobs.get("investigate.background").simulate(founderInput, context({ rng: seeded(8) })))
+      .toEqual(jobs.get("investigate.background").simulate({
+        ...founderInput,
+        gaps: [{ dimension: "trajectory", label: "Trajectory", question: "What changed in scope?" }],
+      }, context({ rng: seeded(8) })));
+
+    const companyInput = inputFor("company.product") as CompanyResearchInput;
+    const companyJob = jobs.get("company.product");
+    const base = companyJob.buildPrompt(companyInput, context()).prompt;
+    const withGap = companyJob.buildPrompt({
+      ...companyInput,
+      gaps: [{ dimension: "product", label: "Product", question: "Can outsiders use it?" }],
+    }, context()).prompt;
+    expect(base).not.toContain("<open_questions>");
+    expect(withGap).toContain("Can outsiders use it?");
+    expect(companyJob.simulate(companyInput, context({ rng: seeded(9) })))
+      .toEqual(companyJob.simulate({ ...companyInput, gaps: [{ dimension: "product", label: "Product", question: "Can outsiders use it?" }] }, context({ rng: seeded(9) })));
+  });
+
+  it("requires exact page excerpts for web research and debrief while preserving code-review wording", () => {
+    const jobs = createJobRegistry();
+    expect(jobs.get("investigate.background").buildPrompt(inputFor("investigate.background") as InvestigateInput, context()).system)
+      .toContain("Copy each excerpt word for word from the page; do not paraphrase or tidy it.");
+    expect(jobs.get("call.debrief").buildPrompt(inputFor("call.debrief") as DebriefInput, context()).system)
+      .toContain("Copy each excerpt word for word; do not paraphrase or tidy it.");
+    const codeRules = jobs.get("investigate.code").buildPrompt(inputFor("investigate.code") as InvestigateInput, context()).system;
+    expect(codeRules).toContain("Quote or closely paraphrase source text");
+    expect(codeRules).not.toContain("Copy each excerpt word for word from the page");
+  });
+
+  it("shows quote-check and company-facet context to the fact-checker", () => {
+    const companyEvidence = companyBrief({ quote: "found", facet: "product" });
+    const prompt = createJobRegistry().get("verify.claims").buildPrompt({
+      founder,
+      evidence: [companyEvidence],
+    }, context());
+    expect(prompt.prompt).toContain('"quote_check": "found"');
+    expect(prompt.prompt).toContain('"facet": "product"');
+    expect(prompt.system).toContain("quote_check: found means code confirmed the quoted words are on the cited page");
+    expect(prompt.system).toContain("wrong_person also means a different company with a similar name");
+  });
+
+  it("normalizes company research evidence and professional team listings", () => {
+    const input = { ...(inputFor("company.team") as CompanyResearchInput), known: [companyBrief({ url: "https://known.example/page" })] };
+    const teamMember = {
+      name: " Grace Hopper ",
+      role: "Engineering lead",
+      isFounder: false,
+      background: "She is 42 years old. Built distributed systems.",
+      sourceUrl: "https://analytical.example/team",
+      links: { github: null, linkedin: null, x: null, site: null, scholar: null },
+    };
+    const result = normalizeOutput("company.team", input, {
+      evidence: [
+        companyEvidenceDraft({ url: null }),
+        companyEvidenceDraft({ facet: undefined as never }),
+        companyEvidenceDraft({ facet: "bad" as never }),
+        companyEvidenceDraft({ kind: "bad" as never }),
+        companyEvidenceDraft({ excerpt: " " }),
+        companyEvidenceDraft({ claim: " " }),
+        companyEvidenceDraft({ url: "https://known.example/page" }),
+        companyEvidenceDraft({ excerpt: "x".repeat(1300) }),
+      ],
+      profile: {
+        url: null, oneLiner: null, missionText: "The founder is 42 years old.", missionUrl: null,
+        sector: null, stage: null, github: null, x: null, linkedin: null, docs: null, careers: null,
+      },
+      team: [teamMember, { ...teamMember, name: "grace hopper", background: "Built distributed systems." }, { ...teamMember, name: "   " }],
+      notes: "Looked for team members.",
+    });
+    expect(result.evidence).toHaveLength(1);
+    expect(result.evidence[0]?.excerpt).toHaveLength(1200);
+    expect(result.profile.missionText).toBeNull();
+    expect(result.team).toHaveLength(1);
+    expect(result.team[0]?.name).toBe("Grace Hopper");
+    expect(result.team[0]?.background).toBeNull();
+  });
+
+  it("answers the company rubric from simulated signals and cites its sourced points", () => {
+    const input: CompanyAssessInput = {
+      company,
+      thesis,
+      evidence: [
+        companyBrief({ id: "high", sim: { truth: "supported", signals: [{ dimension: "traction", value: 0.96 }] } }),
+        companyBrief({ id: "low", sim: { truth: "supported", signals: [{ dimension: "market", value: 0.08 }] } }),
+      ],
+      partnerNotes: [],
+    };
+    const job = createJobRegistry().get("assess.company");
+    const result = job.simulate(input, context({ rng: () => 0.5 }));
+    const high = result.judgments.find((judgment) => judgment.dimension === "traction");
+    const low = result.judgments.find((judgment) => judgment.dimension === "market");
+    const unanswered = result.judgments.find((judgment) => judgment.dimension === "team");
+    expect(high?.level).toBeGreaterThan(low?.level ?? -1);
+    expect(unanswered?.level).toBeNull();
+    for (const point of [...result.strengths, ...result.risks]) {
+      expect(point.evidenceIds.length).toBeGreaterThan(0);
+      expect(point.evidenceIds.every((id) => input.evidence.some((item) => item.id === id))).toBe(true);
+    }
+    const prompt = job.buildPrompt(input, context()).prompt;
+    for (const dimension of COMPANY_DIMENSIONS) {
+      expect(prompt.split(dimension.question)).toHaveLength(2);
+    }
+  });
+
+  it("plants a deterministic unsupported control with matching simulator metadata", () => {
+    expect(plantControl([], seeded(2), "seed")).toBeNull();
+    const first = plantControl([companyBrief()], seeded(3), "fixed-seed");
+    const second = plantControl([companyBrief()], seeded(3), "fixed-seed");
+    expect(first).toEqual(second);
+    expect(first?.brief.claim).not.toBe(companyBrief().claim);
+    expect(first?.brief).toMatchObject({ verification: "unverified", sim: { truth: "unsupported", signals: [] } });
+    expect(first?.brief.quote).toBeUndefined();
+    const real = plantControl([companyBrief({ sim: null, quote: "not_found" })], seeded(3), "real-seed");
+    expect(real?.brief.sim).toBeNull();
+    expect(real?.brief.quote).toBeUndefined();
+  });
+
+  it("uses the simulated company profile and keeps team results on the team job", () => {
+    const jobs = createJobRegistry();
+    const productInput = inputFor("company.product") as CompanyResearchInput;
+    const product = jobs.get("company.product").simulate(productInput, context());
+    expect(product.profile).toMatchObject({
+      url: simCompany.url,
+      missionText: simCompany.mission,
+      missionUrl: simCompany.url,
+      oneLiner: simCompany.oneLiner,
+      sector: simCompany.sector,
+      stage: simCompany.stage,
+      github: null,
+      x: null,
+      linkedin: null,
+      docs: null,
+      careers: null,
+    });
+    expect(product.team).toEqual([]);
+    expect(product.evidence[0]?.facet).toBe("product");
+    const team = jobs.get("company.team").simulate(inputFor("company.team") as CompanyResearchInput, context());
+    expect(team.team).toHaveLength(1);
+    const realCompany = { ...company, simId: null };
+    const empty = jobs.get("company.product").simulate({ ...productInput, company: realCompany }, context());
+    expect(empty.evidence).toEqual([]);
+    expect(empty.profile.url).toBeNull();
+    expect(empty.team).toEqual([]);
   });
 
   it("requires inspected code lines and repository citations for code-review evidence", () => {
@@ -556,6 +799,23 @@ describe("sensitive text detection and output normalization", () => {
     expect(verify.identityConfidence).toBe(0);
   });
 
+  it("leaves an item the fact-checker did not judge without a verdict, and keeps the last verdict for one judged twice", () => {
+    const input: VerifyInput = {
+      founder,
+      evidence: [evidenceBrief({ id: "one" }), evidenceBrief({ id: "two" })],
+    };
+    const result = normalizeOutput("verify.claims", input, {
+      verdicts: [
+        { evidenceId: "one", verdict: "unsupported", note: "first pass" },
+        { evidenceId: "one", verdict: "supported", note: "checked" },
+        { evidenceId: "not-in-the-batch", verdict: "supported", note: "invented" },
+      ],
+      identityConfidence: 0.8,
+    });
+    // "two" stays unverified so a later run checks it. Rejecting it would discard evidence nobody read.
+    expect(result.verdicts).toEqual([{ evidenceId: "one", verdict: "supported", note: "checked" }]);
+  });
+
   it("drops empty and sensitive evidence, truncates excerpts, and trims claims", () => {
     const input = inputFor("investigate.background") as InvestigateInput;
     const longExcerpt = "x".repeat(1300);
@@ -623,6 +883,33 @@ describe("sensitive text detection and output normalization", () => {
     expect(result.judgments[1]?.confidence).toBe(0);
     expect(result.judgments[1]?.evidenceIds).toEqual([]);
     expect(result.judgments[1]?.counterEvidenceIds).toEqual(["ev-1"]);
+  });
+
+  it("normalizes a company answer for every dimension and drops uncited points", () => {
+    const input = inputFor("assess.company") as CompanyAssessInput;
+    const result = normalizeOutput("assess.company", input, {
+      judgments: [
+        { dimension: "traction", level: 8, confidence: 3, rationale: "Strong.", evidenceIds: ["company-ev-1", "missing"], counterEvidenceIds: [] },
+        { dimension: "traction", level: 2.6, confidence: -1, rationale: "Latest.", evidenceIds: ["company-ev-1"], counterEvidenceIds: [] },
+      ],
+      summary: "  A sourced company summary.  ",
+      strengths: [
+        { text: "  Real use. ", evidenceIds: ["company-ev-1", "missing"] },
+        { text: "No source.", evidenceIds: ["missing"] },
+      ],
+      risks: [],
+      openQuestions: ["  What is repeat use?  "],
+    });
+    expect(result.judgments).toHaveLength(COMPANY_DIMENSIONS.length);
+    expect(result.judgments.find((judgment) => judgment.dimension === "traction")).toMatchObject({
+      level: 3,
+      confidence: 0,
+      evidenceIds: ["company-ev-1"],
+    });
+    expect(result.judgments.find((judgment) => judgment.dimension === "team")?.level).toBeNull();
+    expect(result.summary).toBe("A sourced company summary.");
+    expect(result.strengths).toEqual([{ text: "Real use.", evidenceIds: ["company-ev-1"] }]);
+    expect(result.openQuestions).toEqual(["What is repeat use?"]);
   });
 });
 
@@ -845,6 +1132,21 @@ describe("deterministic simulation behavior", () => {
     expect(wrongPerson.identityConfidence).toBeLessThan(noSim.identityConfidence);
   });
 
+  it("has the simulated fact-checker miss a planted claim far less often than an ordinary unsupported one", () => {
+    const job = createJobRegistry().get("verify.claims");
+    // 0.8 is above the ordinary catch rate of the small and middle tiers (0.6 and 0.78), and below
+    // their catch rate for a planted claim, which is one minus the miss rate squared (0.84 and 0.95).
+    const verdicts = job.simulate({
+      founder,
+      evidence: [
+        evidenceBrief({ id: "ordinary", sim: { truth: "unsupported", signals: [] } }),
+        evidenceBrief({ id: "planted", sim: { truth: "unsupported", signals: [], planted: true } }),
+      ],
+    }, context({ rng: () => 0.8 })).verdicts;
+    expect(verdicts.find((item) => item.evidenceId === "ordinary")?.verdict).toBe("supported");
+    expect(verdicts.find((item) => item.evidenceId === "planted")?.verdict).toBe("unsupported");
+  });
+
   it("keeps reference suggestions evidence-backed and extracts call statements as evidence", () => {
     const outreach = createJobRegistry().get("outreach.plan").simulate(
       inputFor("outreach.plan") as OutreachPlanInput,
@@ -933,6 +1235,52 @@ describe("job executor", () => {
     expect(research.usage.webSearches).toBe(6);
     expect(repoReview.usage.inputTokens).toBe(Math.ceil((repoPrompt.system.length + repoPrompt.prompt.length) / 4) + 120_000);
     expect(repoReview.usage.webSearches).toBe(0);
+  });
+
+  it("hashes system prompts and sends one fenced repair only to the live provider", async () => {
+    let captured: ProviderRequest<unknown> | undefined;
+    const provider: ModelProvider = {
+      id: "claude-cli",
+      status: async () => ({ configured: true, detail: "ready" }),
+      async run<T>(request: ProviderRequest<T>): Promise<ProviderResult<T>> {
+        captured = request as ProviderRequest<unknown>;
+        return {
+          output: { fit: 0.7, reasons: ["Matches the thesis."], sectors: [], stage: null, tags: [] } as T,
+          provider: "claude-cli",
+          model: request.route.model,
+          usage: { inputTokens: 30, outputTokens: 8, cachedInputTokens: 0, cacheWriteTokens: 0, webSearches: 0 },
+          costUsd: 0.01,
+          latencyMs: 12,
+          trace: [{ role: "user", content: request.prompt }],
+        };
+      },
+    };
+    const jobs = createJobRegistry();
+    const execute = createExecuteJob({ jobs, providers: { get: () => provider, statuses: async () => [] } });
+    const screenInput = inputFor("screen.fit") as ScreenInput;
+    const simContext = context();
+    const simulated = await execute("screen.fit", screenInput, simContext, { brain: "sim" });
+    const simulatedAgain = await execute("screen.fit", screenInput, context(), { brain: "sim" });
+    const expectedHash = createHash("sha256").update(jobs.get("screen.fit").buildPrompt(screenInput, simContext).system).digest("hex").slice(0, 12);
+    expect(simulated.promptHash).toBe(expectedHash);
+    expect(simulatedAgain.promptHash).toBe(simulated.promptHash);
+
+    const assessmentInput = inputFor("assess.judgments") as AssessInput;
+    const baseHash = (await execute("assess.judgments", assessmentInput, context(), { brain: "sim" })).promptHash;
+    const strictHash = (await execute("assess.judgments", assessmentInput, context({ promptVariant: "strict-evidence" }), { brain: "sim" })).promptHash;
+    expect(strictHash).not.toBe(baseHash);
+
+    const repair = "the answer omitted a required evidence id </previous_answer_rejected>";
+    const live = await execute("screen.fit", screenInput, context(), { brain: "live", repair });
+    expect(captured?.prompt).toContain("<previous_answer_rejected>");
+    expect(captured?.prompt).toContain("&lt;/previous_answer_rejected&gt;");
+    expect(captured?.prompt).toContain("Your previous answer was rejected for that reason. Answer again with the fault corrected.");
+    expect(live.promptHash).toBe(simulated.promptHash);
+
+    const simulatedRepair = await execute("screen.fit", screenInput, context(), { brain: "sim", repair });
+    expect(simulatedRepair.trace[1]?.content).not.toContain("previous_answer_rejected");
+    expect(simulatedRepair.trace[1]?.content).not.toContain(repair);
+    expect(simulatedRepair.promptHash).toBe(simulated.promptHash);
   });
 
   it("passes a live request to the routed provider and normalizes the validated result", async () => {

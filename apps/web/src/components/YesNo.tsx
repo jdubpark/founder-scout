@@ -1,14 +1,22 @@
 import { useEffect, useId, useState, type KeyboardEvent, type MouseEvent } from "react";
 import * as Popover from "@radix-ui/react-popover";
 import { Check, X } from "lucide-react";
-import { FEEDBACK_REASONS, reasonLabel, type FeedbackVerdict } from "@agentswarm/shared";
+import { FEEDBACK_REASONS, reasonLabel, type FeedbackInput, type FeedbackVerdict } from "@agentswarm/shared";
 import { cn } from "../lib/cn";
-import { useAddFeedback } from "../lib/queries";
+import { useAddCompanyFeedback, useAddFeedback } from "../lib/queries";
 import { Button } from "./ui/Button";
 import { useToast } from "./ui/overlay";
 
+/** The reasons offered for each call. Founders use FEEDBACK_REASONS; companies use COMPANY_REASONS. */
+export type ReasonOptions = Record<FeedbackVerdict, ReadonlyArray<{ id: string; label: string }>>;
+
 export interface YesNoProps {
-  founderId: string;
+  /** Set for a founder: the call is saved against this founder. */
+  founderId?: string;
+  /** Set for a company: the call is saved against this company. Give `reasons` too. */
+  companyId?: string;
+  /** The reasons to offer. Defaults to the founder reasons. */
+  reasonOptions?: ReasonOptions;
   /** The call in force, if a partner has already made one. */
   verdict: FeedbackVerdict | null;
   /** The reasons given with that call. */
@@ -19,12 +27,15 @@ export interface YesNoProps {
 }
 
 /**
- * The partner's call on a candidate. Tap Yes or No, tap a reason, save.
+ * The partner's call on a candidate or a company. Tap Yes or No, tap a reason, save.
  * A reason is required because the reasons are what the swarm learns from.
  */
-export function YesNo({ founderId, verdict, reasons, size = "row", className }: YesNoProps) {
+export function YesNo({ founderId, companyId, reasonOptions, verdict, reasons, size = "row", className }: YesNoProps) {
   const [draft, setDraft] = useState<FeedbackVerdict | null>(null);
   const full = size === "full";
+  const options: ReasonOptions = reasonOptions ?? FEEDBACK_REASONS;
+  const labelOf = (id: string) =>
+    [...options.yes, ...options.no].find((r) => r.id === id)?.label ?? reasonLabel(id);
 
   // Sits inside clickable rows, so it must not open the row.
   const contain = (e: MouseEvent | KeyboardEvent) => e.stopPropagation();
@@ -74,6 +85,8 @@ export function YesNo({ founderId, verdict, reasons, size = "row", className }: 
           >
             <ReasonForm
               founderId={founderId}
+              companyId={companyId}
+              options={options}
               verdict={kind}
               initialReasons={verdict === kind ? reasons : []}
               onDone={() => setDraft(null)}
@@ -101,7 +114,7 @@ export function YesNo({ founderId, verdict, reasons, size = "row", className }: 
               key={id}
               className="inline-flex h-[1.375rem] items-center rounded-full bg-sunk px-2 text-xs font-bold text-ink-2"
             >
-              {reasonLabel(id)}
+              {labelOf(id)}
             </span>
           ))}
         </span>
@@ -112,18 +125,24 @@ export function YesNo({ founderId, verdict, reasons, size = "row", className }: 
 
 function ReasonForm({
   founderId,
+  companyId,
+  options,
   verdict,
   initialReasons,
   onDone,
 }: {
-  founderId: string;
+  founderId?: string;
+  companyId?: string;
+  options: ReasonOptions;
   verdict: FeedbackVerdict;
   initialReasons: string[];
   onDone: () => void;
 }) {
   const [picked, setPicked] = useState<string[]>(initialReasons);
   const [note, setNote] = useState("");
-  const save = useAddFeedback();
+  const saveFounder = useAddFeedback();
+  const saveCompany = useAddCompanyFeedback();
+  const busy = companyId !== undefined ? saveCompany.isPending : saveFounder.isPending;
   const toast = useToast();
   const noteId = useId();
 
@@ -140,16 +159,16 @@ function ReasonForm({
 
   const submit = () => {
     if (!ready) return;
-    save.mutate(
-      { founderId, input: { verdict, reasonTags: picked, note: note.trim() || null } },
-      {
-        onSuccess: () => {
-          toast.done(verdict === "yes" ? "Yes saved" : "No saved");
-          onDone();
-        },
-        onError: (e) => toast.problem("Your call was not saved", e.message),
+    const input: FeedbackInput = { verdict, reasonTags: picked, note: note.trim() || null };
+    const done = {
+      onSuccess: () => {
+        toast.done(verdict === "yes" ? "Yes saved" : "No saved");
+        onDone();
       },
-    );
+      onError: (e: Error) => toast.problem("Your call was not saved", e.message),
+    };
+    if (companyId !== undefined) saveCompany.mutate({ companyId, input }, done);
+    else if (founderId !== undefined) saveFounder.mutate({ founderId, input }, done);
   };
 
   return (
@@ -162,7 +181,7 @@ function ReasonForm({
     >
       <p className="text-base font-black text-ink">{verdict === "yes" ? "Yes, because" : "No, because"}</p>
       <div className="flex flex-wrap gap-1.5" role="group" aria-label="Reasons">
-        {FEEDBACK_REASONS[verdict].map((r) => {
+        {options[verdict].map((r) => {
           const on = picked.includes(r.id);
           return (
             <button
@@ -199,7 +218,7 @@ function ReasonForm({
         <Button size="sm" variant="quiet" onClick={onDone}>
           Cancel
         </Button>
-        <Button size="sm" variant="primary" type="submit" disabled={!ready} busy={save.isPending} busyLabel="Saving">
+        <Button size="sm" variant="primary" type="submit" disabled={!ready} busy={busy} busyLabel="Saving">
           Save
         </Button>
       </div>

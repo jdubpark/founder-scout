@@ -1,5 +1,6 @@
 export * from "./registry";
 export * from "./rubric";
+export * from "./company";
 export * from "./params";
 export * from "./models";
 export * from "./steering";
@@ -11,3 +12,4 @@ export * from "./steering-view";
 export * from "./feedback";
 export * from "./ids";
 export * from "./judgments";
+export * from "./policy";

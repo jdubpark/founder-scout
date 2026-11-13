@@ -1,3 +1,5 @@
+import { isNeverFetchUrl } from "@agentswarm/shared";
+
 /**
  * One GET helper for every live adapter: identifies the client, enforces the
  * 20 second timeout, honours the caller's abort signal, and turns rate limits
@@ -45,6 +47,9 @@ export async function httpGet(
   url: string,
   options: { headers?: Record<string, string>; signal?: AbortSignal } = {},
 ): Promise<HttpResult> {
+  if (isNeverFetchUrl(url)) {
+    throw new Error(`${source} cannot request this address because it is on the never-fetch list; nothing in this system requests it.`);
+  }
   const timeout = AbortSignal.timeout(REQUEST_TIMEOUT_MS);
   const signal = options.signal ? AbortSignal.any([options.signal, timeout]) : timeout;
   try {

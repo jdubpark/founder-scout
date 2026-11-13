@@ -7,6 +7,7 @@ import { Input, Segmented, Select, type SegmentedOption } from "../components/ui
 import { EmptyState, ErrorNote, PageHeader, SkeletonRows } from "../components/ui/layout";
 import { TableScroll } from "../components/ui/table";
 import { BarPanel, BAR_PARAM, COVERAGE_PARAM, wouldSurface } from "../features/founders/BarPanel";
+import { AddFounder } from "../features/founders/AddFounder";
 import { FounderTable } from "../features/founders/FounderTable";
 import { PAGE_SIZE, SORT_OPTIONS, WAITING, useFounderListState } from "../features/founders/listState";
 import { count } from "../lib/format";
@@ -143,6 +144,7 @@ export default function FoundersPage() {
         title="Founders"
         actions={
           <>
+            <AddFounder swarmId={swarmId} />
             <div className="relative w-64">
               <Search className="pointer-events-none absolute top-1/2 left-2.5 size-4 -translate-y-1/2 text-ink-3" aria-hidden />
               <Input

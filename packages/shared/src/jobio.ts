@@ -13,15 +13,19 @@
  */
 
 import { z } from "zod";
+import { COMPANY_DIMENSION_IDS, EVIDENCE_FACETS, type CompanyDimensionId, type EvidenceFacet } from "./company";
 import { DIMENSION_IDS, type DimensionId } from "./rubric";
 import type {
   CompanyInfo,
+  CompanyLinks,
   EvidenceKind,
   Judgment,
   Memo,
   OutreachKind,
   ProfileLinks,
+  QuoteStatus,
   SimMeta,
+  SourcedText,
   Thesis,
   Verification,
 } from "./domain";
@@ -100,8 +104,24 @@ export interface EvidenceBrief {
   claim: string;
   publishedAt: string | null;
   verification: Verification;
+  /** What a company fact is about. Absent for facts about a person. */
+  facet?: EvidenceFacet | null;
+  /** Whether code found the quoted words at the source. Absent when no check ran. */
+  quote?: QuoteStatus | null;
   /** Simulator only. Prompt builders must not include it. */
   sim: SimMeta | null;
+}
+
+/**
+ * A rubric question the evidence has not settled yet. Code works these out from the last
+ * assessment and hands them to the researchers on a follow-up, so a second look goes where
+ * the first one came up short.
+ */
+export interface GapQuestion {
+  /** A founder or company rubric dimension id. */
+  dimension: string;
+  label: string;
+  question: string;
 }
 
 export interface RepoRef {
@@ -176,13 +196,15 @@ export interface InvestigateInput {
   depth: InvestigationDepth;
   /** Set for the code reviewer only. */
   repo: RepoRef | null;
+  /** Rubric questions still open after the last assessment. Empty on a first look. */
+  gaps: GapQuestion[];
 }
 
 export const EvidenceDraftSchema = z.object({
   kind: z.enum(EVIDENCE_KINDS),
   url: nullableString,
   title: z.string(),
-  /** A quote or close paraphrase of the source. */
+  /** The exact words from the source. Code looks for them at the address the item cites. */
   excerpt: z.string(),
   /** One sentence: what this shows about the founder. */
   claim: z.string(),
@@ -344,6 +366,127 @@ export type DebriefOutput = Omit<z.infer<typeof DebriefOutputSchema>, "evidence"
   evidence: EvidenceDraft[];
 };
 
+/* ----------------------------- Companies --------------------------- */
+
+/** What a model is told about a company. */
+export interface CompanyRef {
+  id: string;
+  name: string;
+  url: string | null;
+  oneLiner: string | null;
+  mission: SourcedText | null;
+  sector: string | null;
+  stage: string | null;
+  links: CompanyLinks;
+  /** People already known to be on the team. */
+  team: Array<{ name: string; role: string | null; isFounder: boolean }>;
+  /** Simulator only. Prompt builders must not include it. */
+  simId: string | null;
+}
+
+export interface CompanyResearchInput {
+  company: CompanyRef;
+  /** The founders of this company the swarm follows. */
+  founders: FounderBrief[];
+  thesis: Thesis;
+  /** Company evidence already on file, so the agent does not collect it again. */
+  known: EvidenceBrief[];
+  depth: InvestigationDepth;
+  /** Company rubric questions still open after the last assessment. Empty on a first look. */
+  gaps: GapQuestion[];
+}
+
+export const CompanyEvidenceDraftSchema = z.object({
+  kind: z.enum(EVIDENCE_KINDS),
+  facet: z.enum(EVIDENCE_FACETS),
+  url: nullableString,
+  title: z.string(),
+  /** The exact words from the source. */
+  excerpt: z.string(),
+  /** One sentence: what this shows about the company. */
+  claim: z.string(),
+  /** ISO date of the event or the page, if the source states one. */
+  publishedAt: nullableString,
+});
+
+export const CompanyProfileUpdateSchema = z.object({
+  url: nullableString,
+  oneLiner: nullableString,
+  /** The mission in the company's own words, copied exactly. */
+  missionText: nullableString,
+  /** The page the mission was copied from. */
+  missionUrl: nullableString,
+  sector: nullableString,
+  stage: nullableString,
+  github: nullableString,
+  x: nullableString,
+  linkedin: nullableString,
+  docs: nullableString,
+  careers: nullableString,
+});
+
+export const TeamMemberDraftSchema = z.object({
+  name: z.string(),
+  role: nullableString,
+  isFounder: z.boolean(),
+  /** One line of relevant earlier work. Professional details only. */
+  background: nullableString,
+  /** The page that lists this person as part of the team. */
+  sourceUrl: nullableString,
+  links: ProfileLinksSchema,
+});
+
+export const CompanyResearchOutputSchema = z.object({
+  evidence: z.array(CompanyEvidenceDraftSchema),
+  profile: CompanyProfileUpdateSchema,
+  team: z.array(TeamMemberDraftSchema),
+  /** What was looked for and not found. */
+  notes: z.string(),
+});
+
+export type CompanyEvidenceDraft = z.infer<typeof CompanyEvidenceDraftSchema> & { sim?: SimMeta | null };
+export type CompanyProfileUpdate = z.infer<typeof CompanyProfileUpdateSchema>;
+export type TeamMemberDraft = z.infer<typeof TeamMemberDraftSchema>;
+export type CompanyResearchOutput = Omit<z.infer<typeof CompanyResearchOutputSchema>, "evidence"> & {
+  evidence: CompanyEvidenceDraft[];
+};
+
+export interface CompanyAssessInput {
+  company: CompanyRef;
+  thesis: Thesis;
+  /** Verified company evidence only. */
+  evidence: EvidenceBrief[];
+  /** Notes partners have left on this company. */
+  partnerNotes: string[];
+}
+
+export const CompanyJudgmentDraftSchema = z.object({
+  dimension: z.enum(COMPANY_DIMENSION_IDS as [CompanyDimensionId, ...CompanyDimensionId[]]),
+  /** 0..4, or null when the evidence does not settle the question. */
+  level: z.number().nullable(),
+  /** 0..1 */
+  confidence: z.number(),
+  rationale: z.string(),
+  evidenceIds: z.array(z.string()),
+  counterEvidenceIds: z.array(z.string()),
+});
+
+export const CitedPointSchema = z.object({
+  text: z.string(),
+  evidenceIds: z.array(z.string()),
+});
+
+export const CompanyAssessOutputSchema = z.object({
+  judgments: z.array(CompanyJudgmentDraftSchema),
+  /** What the company is and where it stands, in a short paragraph. */
+  summary: z.string(),
+  strengths: z.array(CitedPointSchema),
+  risks: z.array(CitedPointSchema),
+  openQuestions: z.array(z.string()),
+});
+export type CompanyJudgmentDraft = z.infer<typeof CompanyJudgmentDraftSchema>;
+export type CompanyAssessOutput = z.infer<typeof CompanyAssessOutputSchema>;
+
 /* --------------------------- Job I/O map --------------------------- */
 
 /** Input and output types per model-backed job. */
@@ -358,9 +501,13 @@ export interface JobIO {
   "investigate.company": { input: InvestigateInput; output: InvestigateOutput };
   "investigate.media": { input: InvestigateInput; output: InvestigateOutput };
   "investigate.redflags": { input: InvestigateInput; output: InvestigateOutput };
+  "company.product": { input: CompanyResearchInput; output: CompanyResearchOutput };
+  "company.traction": { input: CompanyResearchInput; output: CompanyResearchOutput };
+  "company.team": { input: CompanyResearchInput; output: CompanyResearchOutput };
   "verify.claims": { input: VerifyInput; output: VerifyOutput };
   "assess.judgments": { input: AssessInput; output: AssessOutput };
   "assess.memo": { input: MemoInput; output: MemoOutput };
+  "assess.company": { input: CompanyAssessInput; output: CompanyAssessOutput };
   "outreach.plan": { input: OutreachPlanInput; output: OutreachPlanOutput };
   "call.debrief": { input: DebriefInput; output: DebriefOutput };
 }
@@ -381,9 +528,13 @@ export const MODEL_JOB_IDS = [
   "investigate.company",
   "investigate.media",
   "investigate.redflags",
+  "company.product",
+  "company.traction",
+  "company.team",
   "verify.claims",
   "assess.judgments",
   "assess.memo",
+  "assess.company",
   "outreach.plan",
   "call.debrief",
 ] as const satisfies readonly ModelJobId[];
@@ -400,9 +551,13 @@ export const JOB_OUTPUT_SCHEMAS = {
   "investigate.company": InvestigateOutputSchema,
   "investigate.media": InvestigateOutputSchema,
   "investigate.redflags": InvestigateOutputSchema,
+  "company.product": CompanyResearchOutputSchema,
+  "company.traction": CompanyResearchOutputSchema,
+  "company.team": CompanyResearchOutputSchema,
   "verify.claims": VerifyOutputSchema,
   "assess.judgments": AssessOutputSchema,
   "assess.memo": MemoOutputSchema,
+  "assess.company": CompanyAssessOutputSchema,
   "outreach.plan": OutreachPlanOutputSchema,
   "call.debrief": DebriefOutputSchema,
 } as const satisfies Record<ModelJobId, z.ZodType>;

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { createLiveRepoFinder, createLiveSources, sanitizeCheckout } from "./index";
+import { createLivePeopleLookup, createLiveRepoFinder, createLiveSources, sanitizeCheckout } from "./index";
 import { createPeopleDataAdapter, NOT_CONFIGURED_ERROR, type ProfileDataVendor } from "./people_data";
 import { request, scriptedFetch } from "./test-support";
 
@@ -22,16 +22,25 @@ describe("createLiveSources", () => {
       "Hacker News",
       "GitHub",
       "arXiv",
-      "Professional profiles (licensed)",
+      "Professional profiles (data vendor)",
     ]);
   });
 
-  it("reports people data as not configured, and never as a LinkedIn integration", async () => {
+  it("reports people data as not configured without a vendor key", async () => {
     const statuses = await createLiveSources({}).statuses();
     const people = statuses.find((s) => s.id === "people_data");
     expect(people?.configured).toBe(false);
-    expect(people?.detail).toContain("A licensed professional-profile data vendor must be connected");
-    expect(people?.detail).toContain("never logs in to or scrapes LinkedIn");
+    expect(people?.detail).toContain("data vendor under contract or not at all");
+    expect(people?.detail).toContain("never requests the professional network's own site");
+  });
+
+  it("configures PDL from a non-empty key and exposes the same live lookup", async () => {
+    const env = { PDL_API_KEY: "test-pdl-key" };
+    const status = (await createLiveSources(env).statuses()).find((s) => s.id === "people_data");
+    expect(status?.configured).toBe(true);
+    expect(status?.detail).toContain("People Data Labs");
+    expect(createLivePeopleLookup(env)?.vendor).toBe("People Data Labs");
+    expect(createLivePeopleLookup({ PDL_API_KEY: "  " })).toBeNull();
   });
 
   it("says whether a GitHub token is in use", async () => {

@@ -1,4 +1,4 @@
-import { Info } from "lucide-react";
+import { Check, Info } from "lucide-react";
 import type { Evidence } from "@agentswarm/shared";
 import { IconButton } from "../../../components/ui/Button";
 import { Panel } from "../../../components/ui/layout";
@@ -43,6 +43,11 @@ export function EvidenceCard({ item, role }: { item: Evidence; role?: "supports"
           {item.publishedAt ? <span className="figure">{dateShort(item.publishedAt)}</span> : null}
         </span>
         <Status state={verification.mark}>{rejected ? `${verification.label}, not counted` : verification.label}</Status>
+        {item.quote === "found" ? (
+          <span role="img" aria-label="Quote found at source" title="Quote found at source" className="inline-flex">
+            <Check className="size-3.5 text-green-2" aria-hidden />
+          </span>
+        ) : null}
         {detail ? (
           <Hint text={detail}>
             <IconButton label="Claim and check">

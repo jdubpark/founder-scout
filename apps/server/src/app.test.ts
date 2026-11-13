@@ -9,7 +9,7 @@ import { buildServer } from "./app";
 
 type Call = { actor: string; method: string; args: unknown[] };
 type RouteCase = {
-  method: "GET" | "POST" | "PATCH";
+  method: "GET" | "POST" | "PATCH" | "DELETE";
   url: string;
   apiMethod: string;
   args?: unknown[];
@@ -109,6 +109,36 @@ const routeCases: RouteCase[] = [
     args: ["f-1", { verdict: "yes", reasonTags: ["builder"] }],
     body: { verdict: "yes", reasonTags: ["builder"] },
   },
+  {
+    method: "POST",
+    url: "/api/founders",
+    apiMethod: "addFounder",
+    args: [{ swarmId: "sw-1", name: "Ada Lovelace", companyName: "Analytical Engines", why: "Built an early computing concept." }],
+    body: { swarmId: "sw-1", name: "Ada Lovelace", companyName: "Analytical Engines", why: "Built an early computing concept." },
+  },
+  {
+    method: "GET",
+    url: "/api/companies?swarmId=sw-1&status=needs_evidence&q=Orbit&sort=deal&limit=15&offset=3",
+    apiMethod: "listCompanies",
+    args: [{ swarmId: "sw-1", status: "needs_evidence", q: "Orbit", sort: "deal", limit: 15, offset: 3 }],
+  },
+  { method: "GET", url: "/api/companies/co-1", apiMethod: "getCompany", args: ["co-1"] },
+  {
+    method: "POST",
+    url: "/api/companies/co-1/feedback",
+    apiMethod: "addCompanyFeedback",
+    args: ["co-1", { verdict: "yes", reasonTags: ["real_pull"] }],
+    body: { verdict: "yes", reasonTags: ["real_pull"] },
+  },
+  { method: "GET", url: "/api/network", apiMethod: "getNetwork" },
+  {
+    method: "POST",
+    url: "/api/network/import",
+    apiMethod: "importNetwork",
+    args: [{ csv: "First Name,Last Name\nAda,Lovelace\n" }],
+    body: { csv: "First Name,Last Name\nAda,Lovelace\n" },
+  },
+  { method: "DELETE", url: "/api/network/Partner", apiMethod: "removeNetwork", args: ["Partner"] },
   { method: "GET", url: "/api/outreach?swarmId=sw-1&status=proposed", apiMethod: "listOutreach", args: [{ swarmId: "sw-1", status: "proposed" }] },
   {
     method: "POST",
@@ -190,6 +220,43 @@ describe("buildServer routes", () => {
     expect(malformedScope.json().fields.scope).toBe("Scope must be valid JSON");
     expect(badScopeShape.json().fields.scope).toBe("Scope has an invalid shape");
     expect(calls).toHaveLength(0);
+  });
+
+  it("strictly validates the company query contract", async () => {
+    const { service, calls } = fakeService();
+    const app = await serverFor(service);
+    const unsupportedStatus = await app.inject({ method: "GET", url: "/api/companies?swarmId=sw-1&status=unknown" });
+    const unsupportedSort = await app.inject({ method: "GET", url: "/api/companies?swarmId=sw-1&sort=score" });
+    const unknownQuery = await app.inject({ method: "GET", url: "/api/companies?swarmId=sw-1&surprise=yes" });
+
+    for (const response of [unsupportedStatus, unsupportedSort, unknownQuery]) {
+      expect(response.statusCode).toBe(400);
+      expect(response.json()).toMatchObject({ error: "Request validation failed", fields: expect.any(Object) });
+    }
+    expect(unsupportedStatus.json().fields.status).toBeDefined();
+    expect(unsupportedSort.json().fields.sort).toBeDefined();
+    expect(unknownQuery.json().fields.request).toBeDefined();
+    expect(calls).toHaveLength(0);
+  });
+
+  it("allows a 2 MB network import while retaining the default body cap elsewhere", async () => {
+    const { service, calls } = fakeService();
+    const app = await serverFor(service);
+    const imported = await app.inject({
+      method: "POST",
+      url: "/api/network/import",
+      payload: { csv: "x".repeat(2 * 1024 * 1024) },
+    });
+    expect(imported.statusCode).toBe(200);
+    expect(calls.at(-1)?.method).toBe("importNetwork");
+
+    const defaultLimited = await app.inject({
+      method: "POST",
+      url: "/api/swarms",
+      payload: { name: "x".repeat(1024 * 1024), thesis },
+    });
+    expect(defaultLimited.statusCode).toBe(413);
+    expect(calls).toHaveLength(1);
   });
 
   it("reports a missing required body field", async () => {

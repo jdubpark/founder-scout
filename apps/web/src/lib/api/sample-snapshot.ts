@@ -7,10 +7,13 @@
 import {
   AGENT_CLASSES,
   BASE_CONFIG,
+  COMPANY_DIMENSIONS,
   DEFAULT_ROUTES,
   DEFAULT_SETTINGS,
   DIMENSIONS,
+  EMPTY_COMPANY_LINKS,
   EMPTY_LINKS,
+  FACET_DIMENSIONS,
   JOBS,
   PROVIDERS,
   SOURCES,
@@ -21,29 +24,45 @@ import {
   resolveSteering,
   scopeLabel,
   scopeLevel,
+  scoreCompany,
   scoreFounder,
   stableId,
   swarmIdentity,
   type Agent,
   type Assessment,
+  type Company,
+  type CompanyAssessment,
+  type CompanyDetailDTO,
+  type CompanyDimensionId,
+  type CompanyFeedback,
+  type CompanyJudgment,
+  type CompanyMember,
+  type CompanyRow,
+  type CompanyStatus,
   type DemoSnapshot,
+  type Decision,
   type Directive,
   type DirectiveRow,
   type Evidence,
+  type EvidenceFacet,
+  type EvidenceKind,
   type Founder,
   type FounderDetailDTO,
   type FounderRow,
   type FounderStatus,
   type Judgment,
   type Level,
+  type NetworkContact,
   type NodeStats,
   type OutreachRow,
+  type QuoteStatus,
   type Run,
   type ScopeSelector,
   type SourceId,
   type Swarm,
   type SwarmTreeDTO,
   type TaskRun,
+  type Verification,
 } from "@agentswarm/shared";
 
 const NOW = Date.parse("2026-11-12T15:30:00Z");
@@ -633,6 +652,412 @@ for (const t of tasks.slice(0, 4)) {
 
 for (const d of Object.values(details)) d.tasks = tasks.filter((t) => t.founderId === d.founder.id).slice(0, 8);
 
+/* ------------------------------ Companies -------------------------- */
+
+// Companies are filed under the lead founder of the same name, so each one has a person behind it.
+// Every name, site and person here is invented.
+
+interface EvidenceSeed {
+  facet: EvidenceFacet;
+  kind: EvidenceKind;
+  source: SourceId;
+  title: string;
+  excerpt: string;
+  claim: string;
+  /** How many days before the sample's "now" the source was published. */
+  days: number;
+  verification?: Verification;
+  quote?: QuoteStatus;
+  note?: string;
+}
+
+interface CompanySeed {
+  id: string;
+  name: string;
+  host: string;
+  oneLiner: string;
+  sector: string;
+  stage: string;
+  mission: string;
+  status: CompanyStatus;
+  decision: Decision;
+  /** Index into `rows`, the lead founder. */
+  lead: number;
+  /** Levels in COMPANY_DIMENSIONS order; null where the evidence does not settle the question. */
+  levels: Array<Level | null>;
+  reasons: string[];
+  feedback: { verdict: "yes" | "no"; reasonTags: string[]; note: string | null } | null;
+  members: Array<{ name: string; role: string; isFounder: boolean; background: string }>;
+  evidence: EvidenceSeed[];
+  brief: {
+    summary: string;
+    strengths: Array<{ text: string; ev: number[] }>;
+    risks: Array<{ text: string; ev: number[] }>;
+    openQuestions: string[];
+  };
+  known: Array<{ name: string; position: string }>;
+}
+
+const COMPANY_SEEDS: CompanySeed[] = [
+  {
+    id: "cmp_sample_tessaly",
+    name: "Tessaly",
+    host: "tessaly",
+    oneLiner: "Finds the clip behind a robot failure in its telemetry logs.",
+    sector: "Robotics data",
+    stage: "pre-seed",
+    mission: "Tessaly finds the one clip that explains a robot failure, from months of telemetry, in seconds.",
+    status: "surfaced",
+    decision: "surface",
+    lead: 0,
+    levels: [3, 2, 4, 3, 3, 3, 3, 3, 2],
+    reasons: ["The open core works end to end and outside users have tried it.", "Pull is early: pilots, not paid contracts."],
+    feedback: null,
+    members: [
+      { name: "Teodor Anand", role: "Co-founder, hardware integration", isFounder: true, background: "Six years integrating sensors on logistics robots." },
+      { name: "Ines Caldwell", role: "Machine learning engineer", isFounder: false, background: "Built retrieval systems for video search." },
+    ],
+    evidence: [
+      { facet: "mission", kind: "profile", source: "web", title: "About Tessaly", excerpt: "Tessaly finds the one clip that explains a robot failure, from months of telemetry logs, in seconds.", claim: "States the problem as finding the clip behind a robot failure.", days: 340 },
+      { facet: "product", kind: "repo", source: "github", title: "tessaly/core: v0.1 release", excerpt: "First public release. An index over robot telemetry with a write-ahead log and a documented on-disk format.", claim: "Ships a usable open core.", days: 318 },
+      { facet: "product", kind: "repo", source: "github", title: "tessaly/core: replay command", excerpt: "A replay command re-runs a logged session through the index and prints the matching clips.", claim: "The product does the core job end to end.", days: 250 },
+      { facet: "traction", kind: "launch", source: "hackernews", title: "Show HN: Tessaly", excerpt: "Posted by the founder. 210 points. Several commenters from robotics teams say they are trying it on real logs.", claim: "Got early interest from outside the company.", days: 214 },
+      { facet: "traction", kind: "article", source: "web", title: "Customer story: field robotics team", excerpt: "Three field robotics teams run Tessaly on production logs, according to the company's customer page.", claim: "Has at least three production users.", days: 170 },
+      { facet: "funding", kind: "funding", source: "web", title: "Pre-seed round announced", excerpt: "Announces a $2.4 million pre-seed round led by a fund that invests in developer tools.", claim: "Raised a pre-seed round.", days: 150 },
+      { facet: "team", kind: "profile", source: "web", title: "Co-founder joins from a robotics company", excerpt: "Teodor Anand joins as co-founder for hardware integration after six years at a logistics robotics firm.", claim: "Added a co-founder with relevant hardware experience.", days: 128 },
+      { facet: "product", kind: "launch", source: "github", title: "Release 0.4 adds replay across sessions", excerpt: "Replay now spans several sessions and keeps clip order. Twelve issues closed, four of them from outside users.", claim: "Shipped a meaningful feature in response to outside requests.", days: 96 },
+      { facet: "traction", kind: "article", source: "web", title: "Pilot with a warehouse operator", excerpt: "A warehouse operator says it is piloting Tessaly on its autonomous forklift logs for one quarter.", claim: "Has a pilot with a named kind of operator.", days: 71 },
+      { facet: "roadmap", kind: "post", source: "web", title: "What comes next", excerpt: "A hosted version is planned for the first quarter, with a per-site retention policy.", claim: "Has a dated next step that follows from the open core.", days: 60 },
+      { facet: "market", kind: "article", source: "web", title: "Market note on robot telemetry tools", excerpt: "Sizes spending on telemetry tooling for field robots and names five vendors in the category.", claim: "Describes a category with paying buyers.", days: 45 },
+      { facet: "risk", kind: "article", source: "web", title: "Trade profile: 40 customers", excerpt: "Reports that Tessaly has 40 customers. The company's own customer page lists 12.", claim: "Claims 40 customers.", days: 30, verification: "contradicted", quote: "not_found", note: "The company's own page lists 12 customers. The trade profile's figure is not counted." },
+    ],
+    brief: {
+      summary: "Tessaly makes field-robot logs searchable. The open core works, outside users have tried it, and a pre-seed round is in place. Pull rests on pilots so far.",
+      strengths: [
+        { text: "The open core does the job end to end and is public.", ev: [1, 2] },
+        { text: "Outside users asked for features and got them in the next release.", ev: [7, 3] },
+        { text: "Three production users are named on the company's own page.", ev: [4] },
+      ],
+      risks: [
+        { text: "Commercial pull rests on pilots, not paid contracts.", ev: [8, 4] },
+        { text: "No sales lead is on record yet.", ev: [6] },
+      ],
+      openQuestions: ["How many pilots convert to paid?", "Who leads sales once the pilots end?"],
+    },
+    known: [
+      { name: "Dana Whitcombe", position: "Director of Engineering, field robotics" },
+      { name: "Rafa Okonjo", position: "Head of Data, logistics automation" },
+    ],
+  },
+  {
+    id: "cmp_sample_quillmark",
+    name: "Quillmark",
+    host: "quillmark",
+    oneLiner: "Replays failed agent runs one step at a time.",
+    sector: "Developer tools",
+    stage: "seed",
+    mission: "Quillmark makes agent workflows replayable, so a failed run can be re-run one step at a time.",
+    status: "surfaced",
+    decision: "surface",
+    lead: 1,
+    levels: [3, 3, 4, 3, 3, 4, 3, 3, 3],
+    reasons: ["The replay engine works across frameworks.", "Usage is rising by the company's own figure."],
+    feedback: { verdict: "yes", reasonTags: ["strong_product", "real_pull"], note: "Replay works on my own failed runs." },
+    members: [
+      { name: "Priya Nandakumar", role: "Head of engineering", isFounder: false, background: "Ran the platform team at a database company." },
+    ],
+    evidence: [
+      { facet: "mission", kind: "profile", source: "web", title: "About Quillmark", excerpt: "Quillmark makes agent workflows replayable, so a failed run can be re-run one step at a time.", claim: "States the problem as debugging failed agent runs.", days: 300 },
+      { facet: "product", kind: "repo", source: "github", title: "quillmark/replay: first release", excerpt: "Records every tool call of an agent run and replays it deterministically against a pinned model response.", claim: "Ships a working replay engine.", days: 280 },
+      { facet: "traction", kind: "launch", source: "hackernews", title: "Show HN: Quillmark", excerpt: "A launch thread with 180 points. Users report replaying their own failed runs for the first time.", claim: "Launched and got users talking about the core job.", days: 240 },
+      { facet: "traction", kind: "post", source: "web", title: "Changelog names two design partners", excerpt: "The changelog names two design partners running replay on their agent pipelines.", claim: "Has two named design partners.", days: 200 },
+      { facet: "funding", kind: "funding", source: "web", title: "Seed round of $6 million", excerpt: "Announces a $6 million seed round led by a developer-tools fund.", claim: "Raised a seed round.", days: 160 },
+      { facet: "team", kind: "profile", source: "web", title: "Head of engineering joins", excerpt: "Priya Nandakumar joins as head of engineering. She ran the platform team at a database company.", claim: "Added an engineering leader with platform experience.", days: 130 },
+      { facet: "product", kind: "repo", source: "github", title: "Release 0.5 records tool calls", excerpt: "Replay now records tool calls as well as model output, for a closed list of tools.", claim: "Extended the product in a dated release.", days: 100 },
+      { facet: "roadmap", kind: "post", source: "web", title: "Self-hosted edition planned", excerpt: "A self-hosted edition is planned for next year, for teams with data rules.", claim: "Has a dated plan that follows from the product.", days: 80 },
+      { facet: "market", kind: "article", source: "web", title: "Survey of agent builders", excerpt: "A survey of 300 agent builders ranks debugging of failed runs as their top unmet need.", claim: "Shows that the problem is widely felt.", days: 60 },
+      { facet: "traction", kind: "post", source: "web", title: "Status page: weekly replays", excerpt: "The company's public update reports about 3,000 replays a week, up from 900 in the spring.", claim: "Usage is rising, per the company's own figure.", days: 42 },
+      { facet: "product", kind: "article", source: "web", title: "Independent check across frameworks", excerpt: "A reviewer ran the replay engine against three agent frameworks and reported matching results on all three.", claim: "Works across frameworks, per an outside reviewer.", days: 25 },
+      { facet: "risk", kind: "article", source: "web", title: "Trade profile: used by 40 enterprises", excerpt: "Says the product is used by 40 enterprises. No named enterprise customer could be found.", claim: "Claims 40 enterprise customers.", days: 15, verification: "unsupported", quote: "not_found", note: "No named enterprise customer could be found. Not counted." },
+    ],
+    brief: {
+      summary: "Quillmark makes failed agent runs replayable. The engine works across frameworks and a seed round is in place. Named enterprise customers are not yet on record.",
+      strengths: [
+        { text: "An outside reviewer found replay matching across three frameworks.", ev: [10] },
+        { text: "Usage is rising by the company's own figure, from 900 to 3,000 a week.", ev: [9] },
+        { text: "Two design partners are named.", ev: [3] },
+      ],
+      risks: [
+        { text: "The seed round is recent and the sales team is not yet on record.", ev: [4] },
+      ],
+      openQuestions: ["Which enterprises pay today?", "Will the self-hosted edition cut into hosted revenue?"],
+    },
+    known: [],
+  },
+  {
+    id: "cmp_sample_loomfield",
+    name: "Loomfield",
+    host: "loomfield",
+    oneLiner: "A scheduler that packs inference jobs onto idle accelerators.",
+    sector: "Cloud infrastructure",
+    stage: "pre-seed",
+    mission: "Loomfield schedules inference jobs onto idle accelerators, so clusters waste less time.",
+    status: "watch",
+    decision: "watch",
+    lead: 2,
+    levels: [2, 2, 3, 2, 2, 2, 2, 2, 3],
+    reasons: ["A published trial shows a real result on one cluster.", "The category is crowded and pull is interest only."],
+    feedback: null,
+    members: [
+      { name: "Matteo Varga", role: "Operations lead", isFounder: false, background: "Ran cluster operations for a university compute centre." },
+    ],
+    evidence: [
+      { facet: "mission", kind: "profile", source: "web", title: "About Loomfield", excerpt: "Loomfield schedules inference jobs onto idle accelerators, so clusters waste less time.", claim: "Names a cost problem for clusters.", days: 290 },
+      { facet: "product", kind: "repo", source: "github", title: "loomfield/scheduler: prototype", excerpt: "A scheduler prototype that packs jobs onto idle accelerators. It runs in simulation and on one test cluster.", claim: "Has a working prototype.", days: 260 },
+      { facet: "product", kind: "paper", source: "arxiv", title: "Scheduling paper with a production trial", excerpt: "The paper reports a trial that cut idle accelerator time by a fifth on one cluster.", claim: "Has a published result from a trial.", days: 200 },
+      { facet: "traction", kind: "launch", source: "hackernews", title: "Show HN: Loomfield", excerpt: "A launch thread with 60 points. Comments mostly ask about pricing.", claim: "Some interest, with no sign of use yet.", days: 150 },
+      { facet: "funding", kind: "funding", source: "web", title: "Pre-seed round from angels", excerpt: "Announces a $900,000 pre-seed round from angel investors.", claim: "Raised a small pre-seed round.", days: 120 },
+      { facet: "traction", kind: "article", source: "web", title: "Operator evaluating the scheduler", excerpt: "A cluster operator says it is evaluating the scheduler for one quarter.", claim: "Has an evaluation with one operator.", days: 95 },
+      { facet: "team", kind: "profile", source: "web", title: "Operations lead joins", excerpt: "Matteo Varga joins as operations lead after running cluster operations for a university compute centre.", claim: "Added an operations lead with cluster experience.", days: 85 },
+      { facet: "roadmap", kind: "post", source: "web", title: "Managed service planned", excerpt: "A managed service is planned, with no date given.", claim: "Has a plan without a date.", days: 70 },
+      { facet: "market", kind: "article", source: "web", title: "Market note on GPU scheduling", excerpt: "Describes cluster schedulers as a crowded category with three well-funded incumbents.", claim: "Describes a crowded market.", days: 55 },
+      { facet: "product", kind: "repo", source: "github", title: "Documentation site", excerpt: "The docs site lists installation steps and three integrations.", claim: "Has documentation for early users.", days: 35 },
+      { facet: "market", kind: "other", source: "web", title: "Pricing page", excerpt: "Lists per-accelerator pricing for the managed service, which is not yet available.", claim: "Has a price for a product that does not exist yet.", days: 20 },
+      { facet: "risk", kind: "article", source: "web", title: "Trade profile: 60% savings", excerpt: "Claims cluster-wide savings of 60 percent. The paper reports a fifth on one cluster.", claim: "Claims 60 percent savings.", days: 12, verification: "unsupported", quote: "not_found", note: "The paper reports a fifth on one cluster. The trade figure is not counted." },
+    ],
+    brief: {
+      summary: "Loomfield is a prototype scheduler with a published trial. Pull is early and the category has established rivals. Re-check in a quarter.",
+      strengths: [
+        { text: "A published trial reports a fifth of accelerator time recovered.", ev: [2] },
+        { text: "The scheduler runs on a real test cluster.", ev: [1] },
+      ],
+      risks: [
+        { text: "The category is crowded with well-funded rivals.", ev: [8] },
+        { text: "Traction is interest only so far.", ev: [3] },
+      ],
+      openQuestions: ["Will a cluster operator pay for the managed service?", "Can the trial result be repeated on a second cluster?"],
+    },
+    known: [],
+  },
+];
+
+const companyScoreWeights = Object.fromEntries(COMPANY_DIMENSIONS.map((d) => [d.id, d.defaultWeight])) as Record<
+  CompanyDimensionId,
+  number
+>;
+
+const companyRows: CompanyRow[] = [];
+const companies: Company[] = [];
+const companyDetails: Record<string, CompanyDetailDTO> = {};
+
+COMPANY_SEEDS.forEach((seed, index) => {
+  const lead = rows[seed.lead]!;
+  const leadDetail = details[lead.id];
+  const companyId = seed.id;
+
+  const evidence: Evidence[] = seed.evidence.map((item, i): Evidence => ({
+    id: stableId("evd", `${companyId}-${i}`),
+    founderId: lead.id,
+    companyId,
+    facet: item.facet,
+    quote: item.quote ?? "found",
+    kind: item.kind,
+    source: item.source,
+    url: `https://sim.invalid/${seed.host}/${i}`,
+    title: item.title,
+    excerpt: item.excerpt,
+    claim: item.claim,
+    publishedAt: iso(item.days * DAY),
+    capturedAt: iso(10 * 60),
+    collectedByTaskId: null,
+    hash: `h${companyId}${i}`,
+    verification: item.verification ?? "supported",
+    verificationNote: item.note ?? null,
+    sim: null,
+  }));
+
+  const judgments: CompanyJudgment[] = COMPANY_DIMENSIONS.map((d, i) => {
+    const level = seed.levels[i] ?? null;
+    const backing = evidence.filter(
+      (e) => e.verification === "supported" && e.facet && FACET_DIMENSIONS[e.facet].includes(d.id),
+    );
+    const against = d.id === "claims" ? evidence.filter((e) => e.verification !== "supported").map((e) => e.id) : [];
+    return {
+      dimension: d.id,
+      level,
+      confidence: level === null ? 0 : 0.62 + ((index + i) % 4) * 0.08,
+      rationale: level === null ? "Nothing in the verified evidence settles this." : d.levels[level],
+      evidenceIds: level === null ? [] : backing.slice(0, 2).map((e) => e.id),
+      counterEvidenceIds: against,
+    };
+  });
+
+  const score = scoreCompany({
+    judgments: judgments.map((j) => ({ dimension: j.dimension, level: j.level, confidence: j.confidence })),
+    weights: companyScoreWeights,
+    unknownPrior: 0.4,
+  });
+  const teamScore = lead.founderScore ?? null;
+  const deal = teamScore === null ? score.composite : (teamScore + score.composite) / 2;
+  const supportedCount = evidence.filter((e) => e.verification === "supported").length;
+  const flags = score.flags;
+
+  const brief = {
+    summary: seed.brief.summary,
+    strengths: seed.brief.strengths.map((p) => ({ text: p.text, evidenceIds: p.ev.map((i) => evidence[i]!.id) })),
+    risks: seed.brief.risks.map((p) => ({ text: p.text, evidenceIds: p.ev.map((i) => evidence[i]!.id) })),
+    openQuestions: seed.brief.openQuestions,
+  };
+
+  const assessment: CompanyAssessment = {
+    id: stableId("asm", `company-${companyId}`),
+    companyId,
+    runId: null,
+    configId: BASE_CONFIG.id,
+    company: score.composite,
+    companyCoverage: score.coverage,
+    companyPotential: score.potential,
+    leadFounderId: lead.id,
+    team: teamScore,
+    deal,
+    coverage: score.coverage,
+    potential: score.potential,
+    decision: seed.decision,
+    reasons: seed.reasons,
+    flags,
+    breakdown: score.breakdown,
+    judgments,
+    brief,
+    createdAt: iso(9 * 60),
+  };
+
+  const company: Company = {
+    id: companyId,
+    swarmId: SWARM_ID,
+    name: seed.name,
+    domain: `${seed.host}.example`,
+    url: `https://${seed.host}.example`,
+    oneLiner: seed.oneLiner,
+    mission: { text: seed.mission, url: `https://${seed.host}.example/about` },
+    sector: seed.sector,
+    stage: seed.stage,
+    links: { ...EMPTY_COMPANY_LINKS, github: `https://github.example/${seed.host}` },
+    status: seed.status,
+    firstSeenAt: iso((4 + index) * DAY),
+    updatedAt: iso(9 * 60 + index * 5),
+    lastResearchedAt: iso(9 * 60),
+    lastAssessedAt: iso(9 * 60),
+    nextRecheckAt: seed.status === "watch" ? iso(-21 * DAY) : null,
+    simId: `sim-company-${index}`,
+  };
+  companies.push(company);
+
+  const members: CompanyMember[] = [
+    {
+      id: stableId("fnd", `${companyId}-lead`),
+      companyId,
+      name: lead.name,
+      role: "Founder",
+      isFounder: true,
+      founderId: lead.id,
+      links: { ...EMPTY_LINKS },
+      background: null,
+      source: "web",
+      sourceUrl: `https://${seed.host}.example/team`,
+      addedAt: iso(20 * DAY),
+    },
+    ...seed.members.map((m, i): CompanyMember => ({
+      id: `mem_${companyId}_${i}`,
+      companyId,
+      name: m.name,
+      role: m.role,
+      isFounder: m.isFounder,
+      founderId: null,
+      links: { ...EMPTY_LINKS },
+      background: m.background,
+      source: "web",
+      sourceUrl: `https://${seed.host}.example/team`,
+      addedAt: iso(20 * DAY),
+    })),
+  ];
+
+  const knownPeople: NetworkContact[] = seed.known.map((k, i) => ({
+    id: `net_${companyId}_${i}`,
+    owner: "Partner",
+    name: k.name,
+    company: seed.name,
+    position: k.position,
+    profileUrl: null,
+    connectedOn: "2023-09-14",
+    importedAt: iso(12 * DAY),
+    previous: null,
+  }));
+
+  const feedback: CompanyFeedback[] = seed.feedback
+    ? [
+        {
+          id: stableId("fbk", `${companyId}-call`),
+          companyId,
+          author: "Partner",
+          verdict: seed.feedback.verdict,
+          reasonTags: seed.feedback.reasonTags,
+          note: seed.feedback.note,
+          createdAt: iso(4 * 60),
+        },
+      ]
+    : [];
+
+  const companyTasks: TaskRun[] = tasks.slice(index * 2, index * 2 + 2).map((t) => ({
+    ...t,
+    id: `${t.id}-${companyId}`,
+    companyId,
+    founderId: null,
+  }));
+  for (const t of companyTasks) taskDetails[t.id] = { ...t, trace: [] };
+
+  const leadRow = rows[seed.lead]!;
+  const share = Math.round(deal * 100) / 100;
+  companyRows.push({
+    id: companyId,
+    name: seed.name,
+    oneLiner: seed.oneLiner,
+    sector: seed.sector,
+    stage: seed.stage,
+    status: seed.status,
+    decision: seed.decision,
+    deal: share,
+    company: Math.round(score.composite * 100) / 100,
+    team: teamScore,
+    coverage: Math.round(score.coverage * 100) / 100,
+    founders: [{ id: leadRow.id, name: leadRow.name }],
+    teamSize: members.length,
+    evidenceCount: supportedCount,
+    flagCount: flags.filter((f) => f.severity !== "info").length,
+    feedback: feedback[0]?.verdict ?? null,
+    feedbackReasons: feedback[0]?.reasonTags ?? [],
+    knownPeople: knownPeople.length,
+    firstSeenAt: iso((4 + index) * DAY),
+    updatedAt: iso(9 * 60 + index * 5),
+  });
+
+  companyDetails[companyId] = {
+    company,
+    members,
+    founders: leadDetail ? [leadRow] : [],
+    assessment,
+    history: [
+      { at: iso(8 * DAY), deal: Math.max(0, share - 0.05), decision: "watch" },
+      { at: iso(9 * 60), deal: share, decision: seed.decision },
+    ],
+    evidence: [...evidence].reverse(),
+    feedback,
+    tasks: companyTasks,
+    knownPeople,
+  };
+});
+
+const companyWaiting = companyRows.filter((r) => r.status === "surfaced" && r.feedback === null).length;
+
 /* ------------------------------ Assemble --------------------------- */
 
 const directiveRows: DirectiveRow[] = directives.map((d, i) => ({
@@ -648,7 +1073,7 @@ const classCost = (classId: string) => tree.classes.find((c) => c.cls.id === cla
 
 export const SAMPLE_SNAPSHOT: DemoSnapshot = {
   generatedAt: new Date(NOW).toISOString(),
-  note: "Simulated founders. No real people or companies.",
+  note: "Simulated founders and companies. No real people or companies.",
   settings: {
     settings: { ...DEFAULT_SETTINGS, schedule: { ...DEFAULT_SETTINGS.schedule, enabled: true } },
     providers: PROVIDERS.map((p) => ({
@@ -683,6 +1108,8 @@ export const SAMPLE_SNAPSHOT: DemoSnapshot = {
       }),
       totals: { leads: 2140, founders: 1388, screenedIn: 471, investigated: 318, surfaced: 62 },
       topFounders: rows.filter((r) => r.status === "surfaced").slice(0, 8),
+      topCompanies: companyRows.filter((r) => r.status === "surfaced").slice(0, 8),
+      companiesWaiting: companyWaiting,
       alerts: [
         { id: "al1", level: "warning", title: "The talks and interviews analyst failed twice", detail: "Two page fetches timed out in the last run. Those founders were assessed without media evidence.", at: iso(9 * 60 + 20), link: "/activity" },
         { id: "al2", level: "info", title: "Professional-profile source is not connected", detail: "The talent-move scout is paused until a licensed data vendor is added.", at: iso(2 * DAY), link: "/settings" },
@@ -724,6 +1151,8 @@ export const SAMPLE_SNAPSHOT: DemoSnapshot = {
   directives: directiveRows,
   founders: { [SWARM_ID]: rows },
   founderDetails: details,
+  companies: { [SWARM_ID]: companyRows },
+  companyDetails,
   outreach: { [SWARM_ID]: outreach },
   runs: { [SWARM_ID]: runs },
   runDetails: {
