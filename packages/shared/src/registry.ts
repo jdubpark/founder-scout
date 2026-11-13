@@ -490,8 +490,8 @@ export const PROVIDERS = [
   {
     id: "opencode-cli",
     vendor: "none",
-    label: "OpenCode (headless)",
-    capabilities: { structured: true, research: false, repoReview: false },
+    label: "opencode (headless)",
+    capabilities: { structured: true, research: false, search: false, repoReview: false },
     note: "Uses the existing OpenCode login. Structured calls have no tools.",
   },
   {
