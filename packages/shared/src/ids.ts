@@ -36,14 +36,15 @@ export function stableId(prefix: IdPrefix, seed: string): string {
     const c = seed.charCodeAt(i);
     h1 = Math.imul(h1 ^ c, 0x01000193) >>> 0;
     h2 = Math.imul(h2 + c, 0x85ebca6b) >>> 0;
-    h2 ^= h2 >>> 13;
+    // Bitwise results are signed in JavaScript; keep the hash unsigned so it can index the alphabet.
+    h2 = (h2 ^ (h2 >>> 13)) >>> 0;
   }
   let out = "";
   let a = h1;
   let b = h2;
   for (let i = 0; i < 12; i++) {
     const v = i % 2 === 0 ? a : b;
-    out += ALPHABET[v % ALPHABET.length];
+    out += ALPHABET[(v >>> 0) % ALPHABET.length];
     if (i % 2 === 0) a = Math.imul(a ^ (a >>> 5), 0x9e3779b1) >>> 0;
     else b = Math.imul(b ^ (b >>> 7), 0xc2b2ae35) >>> 0;
   }

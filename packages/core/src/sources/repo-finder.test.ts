@@ -261,3 +261,40 @@ describe("checkout", () => {
     expect(readdirSync(workDir)).toEqual([]);
   });
 });
+
+describe("contributors", () => {
+  it("returns commit counts by person, most first, without bots", async () => {
+    const recorder = scriptedFetch(() =>
+      jsonResponse([
+        { login: "ada-example", contributions: 412, type: "User" },
+        { login: "dependabot[bot]", contributions: 60, type: "Bot" },
+        { login: "sam-example", contributions: 9, type: "User" },
+        { contributions: 3 },
+      ]),
+    );
+    const finder = createLiveRepoFinder({ env: {}, workDir, fetch: recorder.fetch });
+    await expect(finder.contributors?.(REPO)).resolves.toEqual([
+      { login: "ada-example", commits: 412 },
+      { login: "sam-example", commits: 9 },
+    ]);
+    expect(new URL(recorder.urls[0] ?? "").pathname).toBe("/repos/acme-labs/widget/contributors");
+  });
+
+  it("says nothing when the host cannot count, and never asks about a non-GitHub URL", async () => {
+    const tooLarge = createLiveRepoFinder({
+      env: {},
+      workDir,
+      fetch: scriptedFetch(() => jsonResponse({ message: "too large to list contributors" }, { status: 403 })).fetch,
+    });
+    await expect(tooLarge.contributors?.(REPO)).resolves.toBeNull();
+
+    const recorder = scriptedFetch(() => jsonResponse([]));
+    const finder = createLiveRepoFinder({ env: {}, workDir, fetch: recorder.fetch });
+    await expect(finder.contributors?.({ ...REPO, url: "https://gitlab.com/acme-labs/widget" })).resolves.toBeNull();
+    expect(recorder.urls).toHaveLength(0);
+
+    // A mirror whose committers have no account on the host lists nobody.
+    await expect(finder.contributors?.(REPO)).resolves.toBeNull();
+    expect(recorder.urls).toHaveLength(1);
+  });
+});

@@ -46,6 +46,7 @@ import type {
   ProviderId,
   ProviderStatus,
   RawItem,
+  RepoContributor,
   RepoRef,
   ResolvedSteering,
   Run,
@@ -189,6 +190,11 @@ export interface RepoFinder {
    * simulation). `cleanup` removes anything created.
    */
   checkout(repo: RepoRef): Promise<{ repo: RepoRef; cleanup(): Promise<void> }>;
+  /**
+   * Who committed to the repository and how much, most commits first, or null when the host
+   * cannot say. Optional: the simulated finder has no such record.
+   */
+  contributors?(repo: RepoRef): Promise<RepoContributor[] | null>;
 }
 
 /* ================================================================== */
@@ -513,8 +519,11 @@ export interface SwarmService {
   as(actor: string): ApiClient;
   readonly runs: RunController;
   readonly evals: EvalService;
-  /** Start a scheduled run for every active swarm that is not already running. */
-  runScheduled(): Promise<Run[]>;
+  /**
+   * Start a scheduled run for every active swarm that is not already running. With `only`,
+   * for those swarms alone, so a catch-up for one swarm does not rerun the others.
+   */
+  runScheduled(only?: readonly string[]): Promise<Run[]>;
   /** Create the first swarm with sensible defaults if the store is empty. */
   ensureSeeded(): Promise<void>;
   close(): void;

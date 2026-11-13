@@ -69,6 +69,19 @@ describe("scoreFounder", () => {
     expect(r.flags.map((f) => f.code)).toContain("thin_evidence");
   });
 
+  it("asks for more evidence when the answers point above the bar but are not firm enough yet", () => {
+    // Strong on every question, each held loosely: 0.6 * 0.75 + 0.4 * 0.35 = 0.59, under the bar of 0.62.
+    const r = score(everyDimension(3, 0.6));
+    expect(r.coverage).toBeGreaterThanOrEqual(THRESHOLDS.minCoverage);
+    expect(r.composite).toBeCloseTo(0.59, 3);
+    expect(r.potential).toBeCloseTo(0.75, 3);
+    expect(r.decision).toBe("needs_evidence");
+    expect(r.reasons[0]).toContain("not firm enough yet");
+
+    // The same answers held firmly clear the bar.
+    expect(score(everyDimension(3, 0.9)).decision).toBe("surface");
+  });
+
   it("puts a middling founder on the watchlist and a weak one in pass", () => {
     expect(score(everyDimension(2, 0.9)).decision).toBe("watch"); // 0.9*0.5 + 0.1*0.35 = 0.485
     expect(score(everyDimension(1, 0.9)).decision).toBe("pass");
@@ -92,6 +105,16 @@ describe("scoreFounder", () => {
     expect(r.composite).toBeGreaterThan(THRESHOLDS.surface);
     expect(r.decision).toBe("watch");
     expect(r.flags).toContainEqual(expect.objectContaining({ code: "integrity_critical", severity: "critical" }));
+  });
+
+  it("holds a possible misrepresentation even when the founder is outside the thesis", () => {
+    const judgments = everyDimension(2, 0.9).map((j) =>
+      j.dimension === "integrity" ? { ...j, level: 0 as Level, confidence: 0.9 } : j,
+    );
+    // Fit 0.4 is under the minimum of 0.55. Without the hold this founder would be passed and never seen.
+    const r = score(judgments, { fit: 0.4 });
+    expect(r.decision).toBe("watch");
+    expect(r.flags.map((f) => f.code)).toEqual(expect.arrayContaining(["integrity_critical", "outside_thesis"]));
   });
 
   it("does not raise an integrity flag on a low-confidence concern", () => {

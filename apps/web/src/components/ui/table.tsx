@@ -24,7 +24,7 @@ export function Th({ numeric, sort, className, children, ...rest }: ThProps) {
       scope="col"
       aria-sort={ariaSort}
       className={cn(
-        "label-caps border-b border-rule-strong px-2 py-1.5 font-semibold whitespace-nowrap first:pl-0 last:pr-0",
+        "label-caps border-b border-rule px-2 py-2 whitespace-nowrap first:pl-0 last:pr-0",
         numeric && "text-right",
         className,
       )}
@@ -35,7 +35,7 @@ export function Th({ numeric, sort, className, children, ...rest }: ThProps) {
           type="button"
           onClick={sort.onSort}
           className={cn(
-            "inline-flex items-center gap-1 uppercase tracking-[0.07em] hover:text-ink",
+            "inline-flex items-center gap-1 font-bold hover:text-ink",
             sort.active && "text-ink",
           )}
         >
@@ -67,7 +67,7 @@ export function Tr({ selected, interactive, className, ...rest }: TrProps) {
       aria-selected={selected || undefined}
       className={cn(
         "border-b border-rule",
-        interactive && "cursor-pointer transition-colors duration-150 hover:bg-surface",
+        interactive && "cursor-pointer transition-colors duration-150 hover:bg-sunk",
         selected && "bg-green-tint hover:bg-green-tint",
         className,
       )}
@@ -83,7 +83,7 @@ export interface TdProps extends TdHTMLAttributes<HTMLTableCellElement> {
 export function Td({ numeric, className, ...rest }: TdProps) {
   return (
     <td
-      className={cn("px-2 py-2 align-top first:pl-0 last:pr-0", numeric && "figure text-right whitespace-nowrap", className)}
+      className={cn("px-2 py-2.5 align-middle first:pl-0 last:pr-0", numeric && "figure text-right whitespace-nowrap", className)}
       {...rest}
     />
   );

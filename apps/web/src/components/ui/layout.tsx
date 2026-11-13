@@ -2,9 +2,9 @@ import type { ReactNode } from "react";
 import { cn } from "../../lib/cn";
 
 /**
- * A titled region of a page. Regions sit on the paper and are separated by a
- * rule above the title; they are not boxes. Use `boxed` only for something
- * that is a separate object on the page, such as a draft to approve.
+ * A titled region of a page. Regions are separated by space and a light rule;
+ * they are not boxes. Use `boxed` only for something that is a separate
+ * object on the page, such as a draft to approve.
  */
 export function Panel({
   title,
@@ -15,7 +15,7 @@ export function Panel({
   id,
 }: {
   title?: ReactNode;
-  /** What needs a person here, a count, or the panel's one action. Sits right of the title. */
+  /** A count, or the panel's one action. Never a sentence. */
   aside?: ReactNode;
   children: ReactNode;
   boxed?: boolean;
@@ -23,17 +23,10 @@ export function Panel({
   id?: string;
 }) {
   return (
-    <section
-      id={id}
-      className={cn(
-        "min-w-0",
-        boxed ? "border border-rule bg-surface p-4" : "border-t border-rule-strong pt-3",
-        className,
-      )}
-    >
+    <section id={id} className={cn("min-w-0", boxed && "rounded-md border border-rule bg-surface p-4", className)}>
       {title || aside ? (
-        <header className="mb-3 flex min-w-0 flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
-          {title ? <h2 className="name-caps text-sm text-ink">{title}</h2> : <span />}
+        <header className="mb-3 flex min-w-0 flex-wrap items-center justify-between gap-x-4 gap-y-1">
+          {title ? <h2 className="text-md font-black text-ink">{title}</h2> : <span />}
           {aside ? <div className="flex items-center gap-2 text-sm text-ink-3">{aside}</div> : null}
         </header>
       ) : null}
@@ -42,27 +35,27 @@ export function Panel({
   );
 }
 
-/** The heading block at the top of every page. */
+/**
+ * The heading at the top of every page: the title and its actions. There is
+ * deliberately no subtitle. `description` is accepted for compatibility and
+ * is not shown; a page should be clear from its content.
+ */
 export function PageHeader({
   title,
-  description,
   actions,
   children,
 }: {
   title: ReactNode;
-  /** One plain sentence saying what this page is for. */
+  /** Not rendered. Kept so existing callers still compile. */
   description?: ReactNode;
   actions?: ReactNode;
   /** Filters or tabs that belong to the whole page. */
   children?: ReactNode;
 }) {
   return (
-    <header className="mb-6 flex flex-col gap-3">
-      <div className="flex flex-wrap items-start justify-between gap-x-6 gap-y-3">
-        <div className="min-w-0">
-          <h1 className="font-serif text-2xl font-normal text-ink">{title}</h1>
-          {description ? <p className="prose-measure mt-1 text-base text-ink-2">{description}</p> : null}
-        </div>
+    <header className="mb-6 flex flex-col gap-3 border-b border-rule pb-4">
+      <div className="flex flex-wrap items-center justify-between gap-x-6 gap-y-3">
+        <h1 className="min-w-0 text-lg font-black text-ink">{title}</h1>
         {actions ? <div className="flex shrink-0 flex-wrap items-center gap-2">{actions}</div> : null}
       </div>
       {children}
@@ -70,7 +63,7 @@ export function PageHeader({
   );
 }
 
-/** Empty states teach: say what will appear here and how to make it appear. */
+/** Shown when there is nothing yet: a few words and, at most, one action. */
 export function EmptyState({
   title,
   children,
@@ -83,8 +76,8 @@ export function EmptyState({
   className?: string;
 }) {
   return (
-    <div className={cn("flex flex-col items-start gap-2 border border-dashed border-rule-strong px-4 py-5", className)}>
-      <p className="text-base font-semibold text-ink">{title}</p>
+    <div className={cn("flex flex-col items-start gap-2 rounded-md bg-sunk px-4 py-5", className)}>
+      <p className="text-base font-bold text-ink">{title}</p>
       {children ? <div className="prose-measure text-base text-ink-2">{children}</div> : null}
       {action ? <div className="mt-1">{action}</div> : null}
     </div>
@@ -94,8 +87,8 @@ export function EmptyState({
 /** A problem loading or saving, with what to do about it. */
 export function ErrorNote({ title, children, action }: { title: string; children?: ReactNode; action?: ReactNode }) {
   return (
-    <div role="alert" className="flex flex-col items-start gap-2 border border-red bg-red-tint px-4 py-3">
-      <p className="text-base font-semibold text-red">{title}</p>
+    <div role="alert" className="flex flex-col items-start gap-2 rounded-md border border-red bg-red-tint px-4 py-3">
+      <p className="text-base font-bold text-red">{title}</p>
       {children ? <div className="prose-measure text-base text-ink">{children}</div> : null}
       {action}
     </div>
@@ -103,7 +96,7 @@ export function ErrorNote({ title, children, action }: { title: string; children
 }
 
 export function Skeleton({ className }: { className?: string }) {
-  return <div aria-hidden className={cn("animate-[skeleton_1.6s_ease-in-out_infinite] bg-sunk", className)} />;
+  return <div aria-hidden className={cn("animate-[skeleton_1.6s_ease-in-out_infinite] rounded-sm bg-sunk", className)} />;
 }
 
 /** Placeholder rows while a list loads, so the layout does not jump. */
@@ -111,19 +104,46 @@ export function SkeletonRows({ rows = 5, className }: { rows?: number; className
   return (
     <div role="status" aria-label="Loading" className={cn("flex flex-col gap-2", className)}>
       {Array.from({ length: rows }, (_, i) => (
-        <Skeleton key={i} className="h-8 w-full" />
+        <Skeleton key={i} className="h-9 w-full" />
       ))}
     </div>
   );
 }
 
-/** A label and its value on one line, for definition-style lists. */
+/** A label and its value on one line. */
 export function Fact({ label, children, className }: { label: string; children: ReactNode; className?: string }) {
   return (
-    <div className={cn("flex min-w-0 items-baseline justify-between gap-4 border-b border-rule py-1.5", className)}>
-      <dt className="shrink-0 text-sm text-ink-3">{label}</dt>
-      <dd className="figure m-0 min-w-0 text-right text-base text-ink">{children}</dd>
+    <div className={cn("flex min-w-0 items-baseline justify-between gap-4 border-b border-rule py-2", className)}>
+      <dt className="shrink-0 text-base text-ink-2">{label}</dt>
+      <dd className="figure m-0 min-w-0 text-right text-base font-bold text-ink">{children}</dd>
     </div>
+  );
+}
+
+const AVATAR_TONES = [
+  "bg-green-tint text-green",
+  "bg-blue-tint text-navy",
+  "bg-gold-tint text-gold-ink",
+  "bg-bistre-tint text-bistre",
+  "bg-red-tint text-red",
+  "bg-sunk text-ink-2",
+] as const;
+
+/** A person or company as a rounded square with initials. The colour is stable for a given name. */
+export function Avatar({ name, size = "md", className }: { name: string; size?: "sm" | "md" | "lg"; className?: string }) {
+  const words = name.trim().split(/\s+/).filter(Boolean);
+  const initials = ((words[0]?.[0] ?? "") + (words.length > 1 ? (words[words.length - 1]?.[0] ?? "") : "")).toUpperCase() || "?";
+  let hash = 0;
+  for (let i = 0; i < name.length; i++) hash = (hash * 31 + name.charCodeAt(i)) >>> 0;
+  const tone = AVATAR_TONES[hash % AVATAR_TONES.length];
+  const dims = size === "sm" ? "size-6 text-2xs" : size === "lg" ? "size-12 text-lg" : "size-9 text-sm";
+  return (
+    <span
+      aria-hidden
+      className={cn("inline-flex shrink-0 items-center justify-center rounded-md font-black", dims, tone, className)}
+    >
+      {initials}
+    </span>
   );
 }
 
@@ -159,19 +179,19 @@ export function Meter({
         aria-valuemax={100}
         aria-valuenow={known ? Math.round(pct) : undefined}
         aria-valuetext={known ? `${Math.round(pct)} out of 100` : "Not known"}
-        className="relative h-1.5 min-w-12 flex-1 bg-sunk"
+        className="relative h-2 min-w-12 flex-1 rounded-full bg-sunk"
       >
-        {known ? <div className={cn("absolute inset-y-0 left-0", fill)} style={{ width: `${pct}%` }} /> : null}
+        {known ? <div className={cn("absolute inset-y-0 left-0 rounded-full", fill)} style={{ width: `${pct}%` }} /> : null}
         {threshold !== undefined ? (
           <div
             aria-hidden
-            className="absolute -inset-y-1 w-px bg-ink"
+            className="absolute -inset-y-1 w-0.5 rounded-full bg-ink"
             style={{ left: `${Math.max(0, Math.min(1, threshold)) * 100}%` }}
           />
         ) : null}
       </div>
       {showFigure ? (
-        <span className="figure w-7 shrink-0 text-right text-sm font-semibold text-ink">
+        <span className="figure w-7 shrink-0 text-right text-sm font-bold text-ink">
           {known ? Math.round(pct) : "—"}
         </span>
       ) : null}

@@ -128,7 +128,7 @@ describe("arXiv adapter", () => {
 
     const first = result.items[0];
     expect(first).toMatchObject({
-      ref: "http://arxiv.org/abs/2611.15569v1",
+      ref: "https://arxiv.org/abs/2611.15569v1",
       source: "arxiv",
       title: "TraceKV: Policy-Preserving Low-Rank KV Cache Compression for Reasoning Vision-Language Models",
       author: "Ada Example",
@@ -161,7 +161,7 @@ describe("arXiv adapter", () => {
     expect(defaultWindow.items).toEqual([]);
 
     const narrower = await adapter.fetch(request({ since: "2026-11-11T12:00:00Z", limit: 10 }));
-    expect(narrower.items.map((item) => item.ref)).toEqual(["http://arxiv.org/abs/2611.15569v1"]);
+    expect(narrower.items.map((item) => item.ref)).toEqual(["https://arxiv.org/abs/2611.15569v1"]);
   });
 
   it("returns nothing new on a second call with the cursor from the first", async () => {

@@ -39,17 +39,17 @@ export function Sheet({
   return (
     <Dialog.Root open={open} onOpenChange={onOpenChange}>
       <Dialog.Portal>
-        <Dialog.Overlay className="fixed inset-0 z-40 animate-[fade-in_150ms_var(--ease-out)] bg-ink/25" />
+        <Dialog.Overlay className="fixed inset-0 z-40 animate-[fade-in_150ms_var(--ease-out)] bg-ink/30" />
         <Dialog.Content
           className={cn(
-            "fixed inset-y-0 right-0 z-50 flex w-full flex-col border-l border-rule-strong bg-ground shadow-overlay",
+            "fixed inset-y-0 right-0 z-50 flex w-full flex-col bg-surface shadow-overlay",
             "animate-[sheet-in_220ms_var(--ease-out)]",
             width === "lg" ? "max-w-[46rem]" : "max-w-[34rem]",
           )}
         >
-          <header className="flex items-start justify-between gap-4 border-b border-rule-strong px-5 py-4">
+          <header className="flex items-start justify-between gap-4 border-b border-rule px-5 py-4">
             <div className="min-w-0">
-              <Dialog.Title className="font-serif text-xl font-normal text-ink">{title}</Dialog.Title>
+              <Dialog.Title className="text-lg font-black text-ink">{title}</Dialog.Title>
               {description ? (
                 <Dialog.Description className="mt-0.5 text-sm text-ink-3">{description}</Dialog.Description>
               ) : null}
@@ -75,7 +75,7 @@ export function TabList({ children, className, label }: { children: ReactNode; c
   return (
     <TabsPrimitive.List
       aria-label={label}
-      className={cn("flex min-w-0 gap-5 overflow-x-auto border-b border-rule-strong", className)}
+      className={cn("flex min-w-0 gap-5 overflow-x-auto border-b border-rule", className)}
     >
       {children}
     </TabsPrimitive.List>
@@ -87,7 +87,7 @@ export function Tab({ value, children, count }: { value: string; children: React
     <TabsPrimitive.Trigger
       value={value}
       className={cn(
-        "-mb-px inline-flex h-9 shrink-0 items-center gap-1.5 border-b-2 border-transparent text-base font-medium text-ink-3",
+        "-mb-px inline-flex h-9 shrink-0 items-center gap-1.5 border-b-2 border-transparent text-base font-bold text-ink-3",
         "transition-colors duration-150 hover:text-ink",
         "data-[state=active]:border-green-2 data-[state=active]:text-ink",
       )}
@@ -114,7 +114,7 @@ export function Hint({ text, children }: { text: string; children: ReactNode }) 
       <TooltipPrimitive.Portal>
         <TooltipPrimitive.Content
           sideOffset={6}
-          className="z-50 max-w-72 rounded-sm bg-ink px-2.5 py-1.5 text-sm leading-snug text-surface shadow-overlay"
+          className="z-50 max-w-72 rounded-md bg-ink px-2.5 py-1.5 text-sm leading-snug font-bold text-surface shadow-overlay"
         >
           {text}
         </TooltipPrimitive.Content>
@@ -174,11 +174,11 @@ export function ToastProvider({ children }: { children: ReactNode }) {
             key={t.id}
             role={t.tone === "problem" ? "alert" : "status"}
             className={cn(
-              "pointer-events-auto animate-[fade-in_150ms_var(--ease-out)] border bg-surface px-3.5 py-2.5 shadow-overlay",
-              t.tone === "problem" ? "border-red" : "border-rule-strong",
+              "pointer-events-auto animate-[fade-in_150ms_var(--ease-out)] rounded-md border bg-surface px-3.5 py-2.5 shadow-overlay",
+              t.tone === "problem" ? "border-red" : "border-transparent",
             )}
           >
-            <p className={cn("text-base font-semibold", t.tone === "problem" ? "text-red" : "text-ink")}>{t.title}</p>
+            <p className={cn("text-base font-bold", t.tone === "problem" ? "text-red" : "text-ink")}>{t.title}</p>
             {t.detail ? <p className="mt-0.5 text-sm text-ink-2">{t.detail}</p> : null}
           </div>
         ))}

@@ -1,9 +1,8 @@
 import { useState } from "react";
 import { Radar, Rocket, ShieldCheck, Users } from "lucide-react";
-import { AGENT_CLASSES, type DimensionId } from "@agentswarm/shared";
+import { AGENT_CLASSES } from "@agentswarm/shared";
 import { FunnelDiagram } from "../components/FunnelDiagram";
 import { ClassIcon, DecisionIcon, EvidenceIcon, KindIcon, SourceIcon } from "../components/icons";
-import { RubricRadar } from "../components/RubricRadar";
 import { ScoreDial } from "../components/ScoreDial";
 import { SwarmMap, nodeToParam, type SwarmNodeRef } from "../components/SwarmMap";
 import { YesNo } from "../components/YesNo";
@@ -21,7 +20,6 @@ export default function KitPage() {
   const first = founders.data?.rows[0];
   const detail = useFounder(first?.id ?? null);
   const [node, setNode] = useState<SwarmNodeRef>({ kind: "swarm" });
-  const [dimension, setDimension] = useState<DimensionId | null>(null);
 
   if (!tree.data || !overview.data) return <SkeletonRows rows={6} />;
   const stats = overview.data.lastRun?.stats ?? null;
@@ -31,7 +29,7 @@ export default function KitPage() {
       <PageHeader title="Shared visuals" />
       <div className="flex flex-col gap-8">
         <Panel title="Swarm map" aside={<span>selected: {nodeToParam(node)}</span>}>
-          <SwarmMap tree={tree.data} stats={stats} selected={node} onSelect={setNode} waiting={overview.data.calls.waiting} activeStage="investigate" />
+          <SwarmMap tree={tree.data} stats={stats} selected={node} onSelect={setNode} waiting={overview.data.calls.waiting} />
         </Panel>
         <Panel title="Swarm map, compact">
           <SwarmMap tree={tree.data} stats={stats} compact waiting={overview.data.calls.waiting} />
@@ -53,9 +51,8 @@ export default function KitPage() {
           <Panel title="Score dials and radar">
             {detail.data?.assessment ? (
               <div className="flex flex-wrap items-center gap-6">
-                <RubricRadar breakdown={detail.data.assessment.breakdown} selected={dimension} onSelect={setDimension} />
                 <div className="grid grid-cols-3 gap-4">
-                  <ScoreDial value={detail.data.assessment.composite} label="Overall" threshold={0.62} tone="gold" />
+                  <ScoreDial value={detail.data.assessment.composite} label="Overall" threshold={0.58} tone="gold" />
                   <ScoreDial value={detail.data.assessment.cracked} label="Engineering" />
                   <ScoreDial value={detail.data.assessment.founderScore} label="Founder" />
                   <ScoreDial value={detail.data.assessment.fit} label="Thesis fit" threshold={0.55} />

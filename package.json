@@ -9,7 +9,7 @@
   "scripts": {
     "dev": "pnpm --parallel --filter @agentswarm/server --filter @agentswarm/web dev",
     "start": "pnpm --filter @agentswarm/web build && pnpm --filter @agentswarm/server start",
-    "swarm": "pnpm --filter @agentswarm/server exec tsx src/cli.ts",
+    "swarm": "pnpm --filter @agentswarm/server exec ../../node_modules/.bin/tsx src/cli.ts",
     "test": "vitest run",
     "typecheck": "pnpm -r typecheck",
     "check": "pnpm typecheck && pnpm test"

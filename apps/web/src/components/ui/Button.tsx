@@ -16,8 +16,7 @@ export interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
 const VARIANT: Record<Variant, string> = {
   primary:
     "bg-green-2 text-on-green border border-green-2 hover:bg-green hover:border-green active:bg-green-deep",
-  secondary:
-    "bg-surface text-ink border border-rule-strong hover:border-ink-3 hover:bg-ground active:bg-sunk",
+  secondary: "bg-surface text-ink border border-rule-strong hover:bg-sunk active:bg-rule",
   quiet: "bg-transparent text-ink-2 border border-transparent hover:bg-sunk hover:text-ink active:bg-rule",
   // Red is reserved for cautions, so the destructive button is outlined, never a red slab.
   caution: "bg-surface text-red border border-red hover:bg-red-tint active:bg-red-tint",
@@ -25,7 +24,7 @@ const VARIANT: Record<Variant, string> = {
 
 const SIZE: Record<Size, string> = {
   sm: "h-7 px-2.5 text-sm gap-1.5",
-  md: "h-9 px-3.5 text-base gap-2",
+  md: "h-9 px-4 text-base gap-2",
 };
 
 /** The one button shape used everywhere. `primary` appears at most once per view. */
@@ -40,7 +39,7 @@ export const Button = forwardRef<HTMLButtonElement, ButtonProps>(function Button
       disabled={disabled || busy}
       aria-busy={busy || undefined}
       className={cn(
-        "inline-flex shrink-0 items-center justify-center rounded-sm font-medium whitespace-nowrap select-none",
+        "inline-flex shrink-0 items-center justify-center rounded-sm font-bold whitespace-nowrap select-none",
         "transition-colors duration-150 disabled:cursor-not-allowed disabled:opacity-50",
         VARIANT[variant],
         SIZE[size],

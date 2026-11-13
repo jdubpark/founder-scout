@@ -76,7 +76,7 @@ async function errorOf(promise: Promise<unknown>): Promise<ProviderError> {
 }
 
 const OPENAI_ENV = { OPENAI_API_KEY: "test-openai-key" };
-const DEEPSEEK_ENV = { DEEPSEEK_API_KEY: "test-deepseek-key" };
+const DEEPSEEK_ENV = { DEEPSEEK_API_KEY: "test-deepseek-key", DEEPSEEK_BASE_URL: "https://deepseek-host.example.test/v1" };
 const META_ENV = { META_API_KEY: "test-llama-key", META_BASE_URL: "https://llama.example.test/v1" };
 
 describe("structured modes", () => {
@@ -146,10 +146,15 @@ describe("configuration", () => {
     expect(status).toEqual({ configured: false, detail: "Set OPENAI_API_KEY to call this endpoint." });
   });
 
-  it("defaults the DeepSeek base URL", () => {
-    const config = resolveConfig(COMPATIBLE_SPECS["deepseek-api"], DEEPSEEK_ENV);
-    expect(config.baseURL).toBe("https://api.deepseek.com");
-    expect(config.configured).toBe(true);
+  it("has no default DeepSeek endpoint: a key alone sends founder data nowhere", () => {
+    const keyOnly = resolveConfig(COMPATIBLE_SPECS["deepseek-api"], { DEEPSEEK_API_KEY: "test-deepseek-key" });
+    expect(keyOnly.configured).toBe(false);
+    expect(keyOnly.baseURL).toBeUndefined();
+    expect(keyOnly.detail).toContain("DEEPSEEK_BASE_URL");
+
+    const chosen = resolveConfig(COMPATIBLE_SPECS["deepseek-api"], DEEPSEEK_ENV);
+    expect(chosen.configured).toBe(true);
+    expect(chosen.baseURL).toBe("https://deepseek-host.example.test/v1");
   });
 
   it("keeps Llama unconfigured until its base URL is set, even with a key", async () => {

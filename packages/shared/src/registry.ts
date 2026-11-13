@@ -101,7 +101,7 @@ export const SOURCES = [
   },
   {
     id: "people_data",
-    label: "Professional profiles (LinkedIn-derived)",
+    label: "Professional profiles (licensed)",
     access: "Licensed data vendor only. The system never logs in to or scrapes LinkedIn.",
     compliance: "licensed",
   },

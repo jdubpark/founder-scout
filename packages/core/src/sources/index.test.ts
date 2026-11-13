@@ -22,7 +22,7 @@ describe("createLiveSources", () => {
       "Hacker News",
       "GitHub",
       "arXiv",
-      "Professional profiles (LinkedIn-derived)",
+      "Professional profiles (licensed)",
     ]);
   });
 

@@ -112,6 +112,16 @@ export interface RepoRef {
   language: string | null;
   /** Local checkout for the reviewing agent, when one exists. */
   localPath: string | null;
+  /**
+   * Commit counts by contributor from the host's API, most commits first. A checkout has no
+   * history, so this is the only authorship signal the reviewer gets. Absent when not known.
+   */
+  contributors?: RepoContributor[] | null;
+}
+
+export interface RepoContributor {
+  login: string;
+  commits: number;
 }
 
 export type InvestigationDepth = "quick" | "standard" | "deep";

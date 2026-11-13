@@ -47,7 +47,7 @@ export function YesNo({ founderId, verdict, reasons, size = "row", className }: 
                   : "No"
             }
             className={cn(
-              "inline-flex shrink-0 items-center justify-center gap-1.5 rounded-sm border font-semibold transition-colors duration-150",
+              "inline-flex shrink-0 items-center justify-center gap-1.5 rounded-sm border font-bold transition-colors duration-150",
               full ? "h-10 px-4 text-base" : "size-8",
               kind === "yes"
                 ? active
@@ -70,7 +70,7 @@ export function YesNo({ founderId, verdict, reasons, size = "row", className }: 
             collisionPadding={12}
             onClick={contain}
             onKeyDown={contain}
-            className="z-50 w-[19rem] border border-rule-strong bg-surface p-3 shadow-overlay"
+            className="z-50 w-[19rem] rounded-md bg-surface p-3 shadow-overlay"
           >
             <ReasonForm
               founderId={founderId}
@@ -99,7 +99,7 @@ export function YesNo({ founderId, verdict, reasons, size = "row", className }: 
           {reasons.map((id) => (
             <span
               key={id}
-              className="inline-flex h-5 items-center rounded-sm border border-rule-strong px-1.5 text-xs font-medium text-ink-2"
+              className="inline-flex h-[1.375rem] items-center rounded-full bg-sunk px-2 text-xs font-bold text-ink-2"
             >
               {reasonLabel(id)}
             </span>
@@ -160,7 +160,7 @@ function ReasonForm({
       }}
       className="flex flex-col gap-2.5"
     >
-      <p className="text-sm font-semibold text-ink">{verdict === "yes" ? "Yes, because" : "No, because"}</p>
+      <p className="text-base font-black text-ink">{verdict === "yes" ? "Yes, because" : "No, because"}</p>
       <div className="flex flex-wrap gap-1.5" role="group" aria-label="Reasons">
         {FEEDBACK_REASONS[verdict].map((r) => {
           const on = picked.includes(r.id);
@@ -171,10 +171,10 @@ function ReasonForm({
               aria-pressed={on}
               onClick={() => toggle(r.id)}
               className={cn(
-                "h-7 rounded-sm border px-2 text-sm font-medium transition-colors duration-150",
+                "h-7 rounded-full border px-2.5 text-sm font-bold transition-colors duration-150",
                 on
                   ? "border-green-2 bg-green-tint text-green"
-                  : "border-rule-strong bg-surface text-ink-2 hover:border-ink-3 hover:text-ink",
+                  : "border-rule-strong bg-surface text-ink-2 hover:bg-sunk hover:text-ink",
               )}
             >
               {r.label}

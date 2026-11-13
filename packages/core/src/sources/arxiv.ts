@@ -133,6 +133,11 @@ function baseId(id: string): string {
   return id.replace(/v\d+$/, "");
 }
 
+/** The API returns entry ids as http:// links to arxiv.org. The site serves them over https. */
+function secureLink(id: string): string {
+  return id.replace(/^http:\/\/(?=(?:export\.)?arxiv\.org\/)/i, "https://");
+}
+
 export function toRawItem(entry: ArxivEntry): RawItem {
   // Authors come first so a long abstract cannot push them out of the trimmed text.
   const text = [
@@ -142,7 +147,7 @@ export function toRawItem(entry: ArxivEntry): RawItem {
     entry.summary,
   ].join("\n");
   return {
-    ref: entry.id,
+    ref: secureLink(entry.id),
     source: "arxiv",
     title: cleanPlain(entry.title, 300),
     text: cleanPlain(text),

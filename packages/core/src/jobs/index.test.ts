@@ -39,6 +39,7 @@ import {
   createJobRegistry,
   findSensitive,
   normalizeOutput,
+  redactSensitive,
 } from "./index";
 
 type AnyInput = JobInput<ModelJobId>;
@@ -379,12 +380,81 @@ describe("job registry and prompt contracts", () => {
       inputFor("investigate.code") as InvestigateInput,
       context(),
     ).system;
-    expect(system).toContain("open and read relevant source files with file-reading tools");
+    expect(system).toContain("open and read relevant source files");
+    // Codex has no file-reading tool, only a read-only shell. Reading must be allowed, running must not.
+    expect(system).toContain("read-only shell commands such as ls, cat");
+    expect(system).toContain("Never run, build, install, test or otherwise execute anything from the repository");
     expect(system).toContain("quote lines from files actually read");
     expect(system).toContain("file path and line range");
     expect(system).toContain("If code could not be read, return no evidence and say so in notes.");
     expect(system).toContain("Do not describe the repository based on its name or README alone.");
     expect(system).toContain("Use evidence kind code_review for every evidence item.");
+  });
+
+  it("takes sentences that state a personal attribute out of text, and leaves the rest", () => {
+    expect(redactSensitive("She shipped the engine in 2024. She is 42 years old. The repository has 1,800 commits."))
+      .toBe("She shipped the engine in 2024. [removed: personal detail] The repository has 1,800 commits.");
+    // Years of experience, company dates and plain text are not personal attributes.
+    const plain = "Twelve years of experience. Founded the company in 2019.\nSecond line.";
+    expect(redactSensitive(plain)).toBe(plain);
+  });
+
+  it("applies the privacy boundary to every kind of stored model text, not only evidence", () => {
+    const investigation = normalizeOutput("investigate.background", inputFor("investigate.background") as InvestigateInput, {
+      evidence: [],
+      profile: { headline: "Founder, age 42", location: "Austin, Texas", companyName: "Vector Works", companyUrl: null, companyOneLiner: null, companyStage: null, links: { github: null, linkedin: null, x: null, site: null, scholar: null } },
+      notes: "Strong systems background. He is married with two children.",
+    } as never) as { profile: { headline: string | null; location: string | null }; notes: string };
+    expect(investigation.profile.headline).toBeNull();
+    expect(investigation.profile.location).toBe("Austin, Texas");
+    expect(investigation.notes).toBe("Strong systems background. [removed: personal detail]");
+
+    const screen = normalizeOutput("screen.fit", inputFor("screen.fit") as ScreenInput, {
+      fit: 0.7, reasons: ["Builds developer tools.", "The founder is 29 years old."], sectors: [], stage: null, tags: [],
+    } as never) as { reasons: string[] };
+    expect(screen.reasons).toEqual(["Builds developer tools.", "[removed: personal detail]"]);
+  });
+
+  it("removes personal attributes from the stored transcript of a live call, keeping JSON valid", async () => {
+    const provider = {
+      id: "claude-cli" as const,
+      status: async () => ({ configured: true, detail: "ready" }),
+      run: async () => ({
+        output: { fit: 0.7, reasons: ["Builds developer tools."], sectors: [], stage: null, tags: [] },
+        provider: "claude-cli" as const,
+        model: "claude-haiku-5-5",
+        usage: null,
+        costUsd: 0.001,
+        latencyMs: 5,
+        trace: [
+          { role: "system" as const, content: "Never record date of birth." },
+          { role: "user" as const, content: "A launch post. I am 42 years old. I built a database." },
+          { role: "assistant" as const, content: JSON.stringify({ fit: 0.7, reasons: ["Builds developer tools.", "The founder is 42 years old."] }) },
+        ],
+      }),
+    };
+    const execute = createExecuteJob({ jobs: createJobRegistry(), providers: { get: () => provider, statuses: async () => [] } as never });
+    const result = await execute("screen.fit", inputFor("screen.fit") as never, context({ route: { provider: "claude-cli", model: "claude-haiku-5-5", effort: "medium" } }), { brain: "live" });
+    const [system, user, assistant] = result.trace;
+    // The system turn is the program's own rule text and is kept; the other turns pass the boundary.
+    expect(system?.content).toBe("Never record date of birth.");
+    expect(user?.content).toBe("A launch post. [removed: personal detail] I built a database.");
+    expect(JSON.parse(assistant?.content ?? "{}")).toEqual({ fit: 0.7, reasons: ["Builds developer tools.", "[removed: personal detail]"] });
+  });
+
+  it("shows the code reviewer who committed to the repository, when the host says", () => {
+    const base = inputFor("investigate.code") as InvestigateInput;
+    const job = createJobRegistry().get("investigate.code");
+    const withCounts = job.buildPrompt(
+      { ...base, repo: { ...base.repo!, contributors: [{ login: "ada-example", commits: 412 }, { login: "sam-example", commits: 9 }] } },
+      context(),
+    );
+    expect(withCounts.prompt).toContain('"login": "ada-example"');
+    expect(withCounts.prompt).toContain('"commits": 412');
+    expect(withCounts.system).toContain("use them to say how much of the work is the founder's own");
+
+    const without = job.buildPrompt({ ...base, repo: { ...base.repo!, contributors: null } }, context());
+    expect(without.prompt).toContain('"contributors": null');
   });
 
   it("maps founder and reference conversations to distinct debrief evidence kinds", () => {
@@ -680,7 +750,8 @@ describe("deterministic simulation behavior", () => {
     const assessBase = inputFor("assess.judgments") as AssessInput;
     const assessInput: AssessInput = {
       ...assessBase,
-      evidence: [supportedEvidenceWithSignal("built_hard_things", 0.82)],
+      // 0.7 sits in the middle of the fourth of five bands, so the true level is 3.
+      evidence: [supportedEvidenceWithSignal("built_hard_things", 0.7)],
     };
     const errors: Record<"small" | "frontier", number[]> = { small: [], frontier: [] };
     for (let trial = 1; trial <= 400; trial += 1) {
@@ -691,7 +762,7 @@ describe("deterministic simulation behavior", () => {
           rng: seeded(trial),
         }));
         const level = output.judgments.find((item) => item.dimension === "built_hard_things")?.level ?? 0;
-        errors[tier].push(Math.abs(level / 4 - 0.82));
+        errors[tier].push(Math.abs(level - 3));
       }
     }
     const mean = (values: number[]) => values.reduce((sum, value) => sum + value, 0) / values.length;
@@ -721,7 +792,9 @@ describe("deterministic simulation behavior", () => {
     const base = inputFor("assess.judgments") as AssessInput;
     const input: AssessInput = {
       ...base,
-      evidence: [supportedEvidenceWithSignal("built_hard_things", 0.37)],
+      // 0.39 is just under the edge between the second and third bands (0.4), so a leak of
+      // 0.03 across the whole pedigree range (plus or minus 0.015) is enough to cross it.
+      evidence: [supportedEvidenceWithSignal("built_hard_things", 0.39)],
     };
     const noNoise = () => 0.25;
     const score = (pedigree: number, promptVariant: string) =>

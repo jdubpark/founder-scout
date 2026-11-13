@@ -127,11 +127,11 @@ export function healthMark(health: NodeHealth): MarkState {
 type ChipTone = "neutral" | "green" | "gold" | "red" | "bistre";
 
 const CHIP: Record<ChipTone, string> = {
-  neutral: "border-rule-strong text-ink-2 bg-surface",
-  green: "border-green-3 text-green bg-green-tint",
-  gold: "border-gold text-gold-ink bg-gold-tint",
-  red: "border-red text-red bg-red-tint",
-  bistre: "border-bistre text-bistre bg-bistre-tint",
+  neutral: "border-rule text-ink-2 bg-sunk",
+  green: "border-green-tint text-green bg-green-tint",
+  gold: "border-gold-tint text-gold-ink bg-gold-tint",
+  red: "border-red-tint text-red bg-red-tint",
+  bistre: "border-bistre-tint text-bistre bg-bistre-tint",
 };
 
 /** A short label attached to a row. Gold means surfaced, red a caution, bistre the watchlist. */
@@ -150,7 +150,7 @@ export function Chip({
     <span
       title={title}
       className={cn(
-        "inline-flex h-5 items-center gap-1 rounded-sm border px-1.5 text-xs font-medium whitespace-nowrap",
+        "inline-flex h-[1.375rem] items-center gap-1 rounded-full border px-2 text-xs font-bold whitespace-nowrap",
         CHIP[tone],
         className,
       )}
@@ -168,11 +168,11 @@ export function Caution({ children, className }: { children: ReactNode; classNam
   return (
     <p
       className={cn(
-        "flex items-start gap-1.5 text-xs leading-snug font-semibold tracking-[0.04em] text-red uppercase",
+        "flex items-start gap-1.5 text-sm leading-snug font-bold text-red",
         className,
       )}
     >
-      <svg width="10" height="10" viewBox="0 0 10 10" aria-hidden className="mt-[3px] shrink-0">
+      <svg width="11" height="11" viewBox="0 0 10 10" aria-hidden className="mt-[4px] shrink-0">
         <path d="M5 0.8 9.4 9.2H0.6Z" fill="none" stroke="currentColor" strokeWidth="1.2" />
         <path d="M5 4v2.4" stroke="currentColor" strokeWidth="1.2" />
         <circle cx="5" cy="7.6" r="0.6" fill="currentColor" />
@@ -230,8 +230,8 @@ export function KindChip({ kind }: { kind: DirectiveKind }) {
   return (
     <span
       className={cn(
-        "inline-flex h-5 items-center rounded-sm border px-1.5 text-xs font-semibold whitespace-nowrap",
-        kind === "rule" ? "border-ink bg-ink text-surface" : "border-rule-strong bg-surface text-ink-2",
+        "inline-flex h-[1.375rem] items-center rounded-full border px-2 text-xs font-bold whitespace-nowrap",
+        kind === "rule" ? "border-ink bg-ink text-surface" : "border-rule bg-sunk text-ink-2",
       )}
     >
       {KIND_NAME[kind]}

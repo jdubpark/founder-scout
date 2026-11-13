@@ -1,14 +1,14 @@
 /*
- * Layout concept: a committed engraving-green rail, a pale safety-paper ground,
- * hairline-ruled panels with square corners, and dense tabular figures.
- * Colour has one meaning each: green operates and selects, gold marks
- * "surfaced", red is only ever a caution, bistre is the watchlist.
+ * Layout concept: the familiar team-chat layout. A deep purple sidebar holds
+ * the pages and lists the swarms like channels; the work area is white with
+ * rounded, lightly bordered regions and one typeface. Green is the action and
+ * "yes", red is a count that needs you or a caution, yellow marks "surfaced".
  */
 @import "tailwindcss";
-@import "@fontsource-variable/libre-franklin/wght.css";
-@import "@fontsource-variable/libre-franklin/wght-italic.css";
-@import "@fontsource/libre-caslon-text/latin-400.css";
-@import "@fontsource/libre-caslon-text/latin-700.css";
+@import "@fontsource/lato/latin-400.css";
+@import "@fontsource/lato/latin-400-italic.css";
+@import "@fontsource/lato/latin-700.css";
+@import "@fontsource/lato/latin-900.css";
 
 @theme {
   /* Only these tokens exist. The default Tailwind palette, radii and shadows are removed on purpose. */
@@ -18,59 +18,67 @@
   --text-*: initial;
   --font-*: initial;
 
-  --font-sans: "Libre Franklin Variable", "Franklin Gothic Medium", "Helvetica Neue", Arial, sans-serif;
-  --font-serif: "Libre Caslon Text", "Big Caslon", "Book Antiqua", Palatino, Georgia, serif;
+  --font-sans: "Lato", "Helvetica Neue", Helvetica, Arial, sans-serif;
+  /* Kept as an alias of the one family, so markup that asks for it still renders consistently. */
+  --font-serif: "Lato", "Helvetica Neue", Helvetica, Arial, sans-serif;
   --font-mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
 
-  /* Paper */
-  --color-ground: oklch(0.966 0.006 148);
-  --color-surface: oklch(0.994 0.002 148);
-  --color-sunk: oklch(0.94 0.009 150);
-  --color-rule: oklch(0.872 0.012 152);
-  --color-rule-strong: oklch(0.70 0.02 154);
+  /* Work area */
+  --color-ground: #ffffff;
+  --color-surface: #ffffff;
+  --color-sunk: #f4f4f5;
+  --color-rule: #e4e4e7;
+  --color-rule-strong: #c6c6cb;
 
-  /* Ink */
-  --color-ink: oklch(0.225 0.028 162);
-  --color-ink-2: oklch(0.385 0.026 160);
-  --color-ink-3: oklch(0.468 0.022 158);
+  /* Text */
+  --color-ink: #1d1c1d;
+  --color-ink-2: #454245;
+  --color-ink-3: #6b696b;
 
-  /* Engraving green: the rail, primary actions, selection, the lead data series */
-  --color-green: oklch(0.318 0.066 162);
-  --color-green-deep: oklch(0.262 0.056 164);
-  --color-green-2: oklch(0.405 0.092 160);
-  --color-green-3: oklch(0.56 0.105 158);
-  --color-green-tint: oklch(0.928 0.034 158);
-  --color-on-green: oklch(0.955 0.018 150);
-  --color-on-green-2: oklch(0.80 0.045 154);
+  /* Sidebar */
+  --color-rail: #3f1142;
+  --color-rail-hover: #53195a;
+  --color-rail-active: #1466a8;
+  --color-on-rail: #ffffff;
+  --color-on-rail-2: #d3c4d6;
 
-  /* Seal gold: reserved for "surfaced" */
-  --color-gold: oklch(0.745 0.128 84);
-  --color-gold-ink: oklch(0.468 0.096 78);
-  --color-gold-tint: oklch(0.945 0.045 90);
+  /* Green: the main action, "yes", selection */
+  --color-green: #006048;
+  --color-green-deep: #004d3a;
+  --color-green-2: #007a5a;
+  --color-green-3: #2ea873;
+  --color-green-tint: #e5f4ee;
+  --color-on-green: #ffffff;
+  --color-on-green-2: #c9e8dc;
 
-  /* Legend red: reserved for cautions (simulated, unverified, flagged, failed) */
-  --color-red: oklch(0.478 0.178 27);
-  --color-red-tint: oklch(0.948 0.03 25);
+  /* Yellow: "surfaced" only */
+  --color-gold: #f2b824;
+  --color-gold-ink: #8a5a00;
+  --color-gold-tint: #fff5d9;
 
-  /* Bistre: the watchlist and the second data series */
-  --color-bistre: oklch(0.452 0.072 58);
-  --color-bistre-tint: oklch(0.94 0.028 70);
+  /* Red: a count that needs you, a failure, a caution */
+  --color-red: #c81e4e;
+  --color-red-tint: #fdecf1;
 
-  /* Navy: the third data series only */
-  --color-navy: oklch(0.402 0.086 256);
+  /* Amber: watching, needs attention, the second data series */
+  --color-bistre: #9a5b00;
+  --color-bistre-tint: #fff1d6;
 
-  --color-white: oklch(1 0 0);
+  /* Blue: links, focus, the third data series */
+  --color-navy: #1264a3;
+  --color-blue-tint: #e8f1f8;
+
+  --color-white: #ffffff;
   --color-transparent: transparent;
   --color-current: currentColor;
 
-  /* Fixed rem scale, ratio about 1.17 */
   --text-2xs: 0.6875rem;
   --text-2xs--line-height: 1rem;
   --text-xs: 0.75rem;
   --text-xs--line-height: 1.0625rem;
   --text-sm: 0.8125rem;
   --text-sm--line-height: 1.1875rem;
-  --text-base: 0.90625rem;
+  --text-base: 0.9375rem;
   --text-base--line-height: 1.375rem;
   --text-md: 1rem;
   --text-md--line-height: 1.5rem;
@@ -78,17 +86,19 @@
   --text-lg--line-height: 1.5rem;
   --text-xl: 1.3125rem;
   --text-xl--line-height: 1.625rem;
-  --text-2xl: 1.5625rem;
+  --text-2xl: 1.5rem;
   --text-2xl--line-height: 1.875rem;
-  --text-3xl: 1.875rem;
+  --text-3xl: 1.75rem;
   --text-3xl--line-height: 2.125rem;
 
   --radius-none: 0;
-  --radius-sm: 2px;
+  --radius-sm: 6px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
   --radius-full: 9999px;
 
-  /* The only elevation: things that float above the page. Panels use rules, never shadows. */
-  --shadow-overlay: 0 18px 40px -12px oklch(0.2 0.04 162 / 0.34), 0 3px 8px -2px oklch(0.2 0.04 162 / 0.18);
+  /* Only for things that float: menus, the side sheet, toasts. */
+  --shadow-overlay: 0 8px 28px rgb(29 28 29 / 0.16), 0 0 0 1px rgb(29 28 29 / 0.08);
 
   --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
 }
@@ -98,6 +108,7 @@
     height: 100%;
     font-family: var(--font-sans);
     font-size: 16px;
+    color-scheme: light;
     -webkit-text-size-adjust: 100%;
     text-rendering: optimizeLegibility;
     -webkit-font-smoothing: antialiased;
@@ -112,7 +123,7 @@
     color: var(--color-ink);
     font-size: var(--text-base);
     line-height: var(--text-base--line-height);
-    caret-color: var(--color-green-2);
+    caret-color: var(--color-navy);
     accent-color: var(--color-green-2);
   }
 
@@ -121,12 +132,12 @@
   }
 
   ::selection {
-    background: var(--color-green-tint);
+    background: var(--color-blue-tint);
     color: var(--color-ink);
   }
 
   :focus-visible {
-    outline: 2px solid var(--color-green-2);
+    outline: 2px solid var(--color-navy);
     outline-offset: 2px;
   }
 
@@ -141,7 +152,7 @@
   h3,
   h4 {
     margin: 0;
-    font-weight: 600;
+    font-weight: 900;
     text-wrap: balance;
   }
 
@@ -174,22 +185,17 @@
 }
 
 @layer components {
-  /* Small capitals set in the gothic, for table heads and field labels. */
+  /* Column heads and field labels: small, bold, sentence case. */
   .label-caps {
-    font-size: var(--text-2xs);
-    line-height: var(--text-2xs--line-height);
-    font-weight: 600;
-    letter-spacing: 0.07em;
-    text-transform: uppercase;
+    font-size: var(--text-sm);
+    line-height: var(--text-sm--line-height);
+    font-weight: 700;
     color: var(--color-ink-3);
   }
 
-  /* Caslon capitals, the voice of names and headings. Never for controls or data. */
+  /* A person's or a thing's name: bold, nothing more. */
   .name-caps {
-    font-family: var(--font-serif);
-    font-weight: 400;
-    letter-spacing: 0.045em;
-    text-transform: uppercase;
+    font-weight: 700;
   }
 
   .figure {
@@ -203,9 +209,9 @@
 }
 
 @utility on-rail {
-  /* Focus ring that stays visible on the green rail. */
+  /* Focus ring that stays visible on the purple sidebar. */
   &:focus-visible {
-    outline-color: var(--color-gold);
+    outline-color: var(--color-white);
   }
 }
 

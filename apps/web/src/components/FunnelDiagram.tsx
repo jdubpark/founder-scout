@@ -13,7 +13,7 @@ export interface FunnelStep {
 /**
  * Counts narrowing through stages, drawn to scale. Bar height follows the
  * square root of the count so a small last stage stays visible; the figures
- * carry the exact values, and the share kept at each step sits between bars.
+ * under the bars carry the exact values.
  */
 export function FunnelDiagram({ steps, className }: { steps: readonly FunnelStep[]; className?: string }) {
   if (steps.length === 0) return null;
@@ -62,26 +62,22 @@ export function FunnelDiagram({ steps, className }: { steps: readonly FunnelStep
               y={mid - h / 2}
               width={w}
               height={h}
+              rx="1"
               fill={s.tone === "gold" ? "var(--color-gold)" : "var(--color-green-2)"}
             />
           );
         })}
       </svg>
       <ol className="m-0 mt-2 grid list-none p-0" style={{ gridTemplateColumns: `repeat(${steps.length}, minmax(0, 1fr))` }}>
-        {steps.map((s, i) => {
-          const prev = i > 0 ? steps[i - 1]! : null;
-          const kept = prev && prev.value > 0 ? Math.round((s.value / prev.value) * 100) : null;
-          return (
-            <li key={s.id} className="flex min-w-0 flex-col items-center gap-0.5 px-1 text-center">
-              <span className="figure text-lg font-semibold text-ink">{s.value.toLocaleString("en-US")}</span>
-              <span className="flex min-w-0 items-center gap-1 text-xs font-medium text-ink-2">
-                {s.icon}
-                <span className="truncate">{s.label}</span>
-              </span>
-              <span className="figure h-4 text-xs text-ink-3">{kept !== null ? `${kept}% kept` : ""}</span>
-            </li>
-          );
-        })}
+        {steps.map((s) => (
+          <li key={s.id} className="flex min-w-0 flex-col items-center gap-0.5 px-1 text-center">
+            <span className="figure text-xl font-black text-ink">{s.value.toLocaleString("en-US")}</span>
+            <span className="flex min-w-0 items-center gap-1 text-sm font-bold text-ink-2">
+              {s.icon}
+              <span className="truncate">{s.label}</span>
+            </span>
+          </li>
+        ))}
       </ol>
     </div>
   );

@@ -125,7 +125,9 @@ export const PARAM_DEFS: readonly ParamDef[] = [
     label: "Bar to surface a founder",
     help: "Overall score (0 to 1) at or above which a founder is put in front of the partners.",
     type: "number",
-    default: 0.62,
+    // A starting point, not a finding: in simulation this surfaces about a tenth of the founders
+    // investigated. Set it from the first week of real runs, with the slider on the Founders page.
+    default: 0.58,
     min: 0,
     max: 1,
     step: 0.01,

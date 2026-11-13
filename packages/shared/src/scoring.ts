@@ -162,7 +162,19 @@ export function scoreFounder(input: ScoreInput): ScoreResult {
   let decision: Decision;
   const outsideThesis = input.fit !== null && input.fit < thresholds.minFit;
 
-  if (outsideThesis) {
+  if (integrityCritical) {
+    // Never surfaced automatically and never silently dropped: a person decides. This comes
+    // before the thesis gate, so a founder outside the thesis is still held, not passed.
+    decision = "watch";
+    reasons.push("Held for human review because of a possible material misrepresentation.");
+    if (outsideThesis) {
+      flags.push({
+        code: "outside_thesis",
+        severity: "info",
+        message: "Thesis fit is below the minimum for this swarm.",
+      });
+    }
+  } else if (outsideThesis) {
     decision = "pass";
     flags.push({
       code: "outside_thesis",
@@ -172,28 +184,27 @@ export function scoreFounder(input: ScoreInput): ScoreResult {
     reasons.push(
       `Thesis fit ${pct(input.fit as number)} is below the minimum of ${pct(thresholds.minFit)}.`,
     );
-  } else if (integrityCritical) {
-    // Never surfaced automatically and never silently dropped: a person decides.
-    decision = "watch";
-    reasons.push("Held for human review because of a possible material misrepresentation.");
   } else if (composite >= thresholds.surface && coverage >= thresholds.minCoverage) {
     decision = "surface";
     reasons.push(
       `Overall score ${pct(composite)} is at or above the bar of ${pct(thresholds.surface)}, with ${pct(coverage)} of the rubric backed by evidence.`,
     );
-  } else if (
-    potential !== null &&
-    potential >= thresholds.surface &&
-    coverage < thresholds.minCoverage
-  ) {
+  } else if (potential !== null && potential >= thresholds.surface) {
+    // The answers given point above the bar. The overall score is short of it only because
+    // too little is known, or known too loosely. That calls for a deeper look, not a wait.
     decision = "needs_evidence";
+    const thinCoverage = coverage < thresholds.minCoverage;
     flags.push({
       code: "thin_evidence",
       severity: "info",
-      message: "What is known looks strong, but too little of the rubric is backed by evidence.",
+      message: thinCoverage
+        ? "What is known looks strong, but too little of the rubric is backed by evidence."
+        : "What is known looks strong, but the evidence is not yet firm enough to be sure.",
     });
     reasons.push(
-      `The evidence so far points to ${pct(potential)}, but only ${pct(coverage)} of the rubric is covered (minimum ${pct(thresholds.minCoverage)}). More evidence is needed.`,
+      thinCoverage
+        ? `The evidence so far points to ${pct(potential)}, but only ${pct(coverage)} of the rubric is covered (minimum ${pct(thresholds.minCoverage)}). More evidence is needed.`
+        : `The evidence so far points to ${pct(potential)}, above the bar of ${pct(thresholds.surface)}, but it is not firm enough yet: the overall score is ${pct(composite)}. More evidence is needed.`,
     );
   } else if (composite >= thresholds.watch) {
     decision = "watch";

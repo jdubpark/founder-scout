@@ -10,7 +10,7 @@
 import { spawn } from "node:child_process";
 import { lstat, mkdir, mkdtemp, readdir, rm } from "node:fs/promises";
 import { join, resolve } from "node:path";
-import type { ProfileLinks, RepoRef } from "@agentswarm/shared";
+import type { ProfileLinks, RepoContributor, RepoRef } from "@agentswarm/shared";
 import type { RepoFinder } from "../contracts";
 import {
   assertSuccessful,
@@ -32,6 +32,8 @@ const SOURCE = "GitHub";
 export const CLONE_TIMEOUT_MS = 120_000;
 export const MAX_CHECKOUT_BYTES = 200 * 1024 * 1024;
 const SIZE_CHECK_INTERVAL_MS = 1000;
+/** Enough to show whether one person wrote the repository or many did. */
+const MAX_CONTRIBUTORS = 5;
 const LOGIN_RE = /^[A-Za-z0-9](?:[A-Za-z0-9]|-(?=[A-Za-z0-9])){0,38}$/;
 const REPO_URL_RE = /^https:\/\/github\.com\/([A-Za-z0-9](?:[A-Za-z0-9-]{0,38}))\/([A-Za-z0-9._-]{1,100})$/;
 
@@ -287,6 +289,31 @@ export function createLiveRepoFinder(options: RepoFinderOptions): RepoFinder {
         repo: { ...repo, url: parsed.canonical, localPath: dir },
         cleanup: () => removeQuietly(root),
       };
+    },
+
+    async contributors(repo: RepoRef): Promise<RepoContributor[] | null> {
+      const parsed = parseRepoUrl(repo.url);
+      if (!parsed) return null;
+      const res = await httpGet(
+        fetchFn,
+        SOURCE,
+        `${GITHUB_API_ORIGIN}/repos/${parsed.owner}/${parsed.name}/contributors?per_page=${MAX_CONTRIBUTORS}`,
+        { headers: githubHeaders(token) },
+      );
+      // 204 is an empty repository; 403 is a history too large for GitHub to count.
+      if (res.status !== 200) return null;
+      const data = parseJson(SOURCE, res.body);
+      if (!Array.isArray(data)) return null;
+      const people = data
+        .flatMap((row: unknown) => {
+          const entry = row as { login?: unknown; contributions?: unknown; type?: unknown } | null;
+          return entry && typeof entry.login === "string" && typeof entry.contributions === "number" && entry.type !== "Bot"
+            ? [{ login: entry.login, commits: entry.contributions }]
+            : [];
+        })
+        .slice(0, MAX_CONTRIBUTORS);
+      // A mirror whose committers have no account on the host lists nobody: that is "not known".
+      return people.length > 0 ? people : null;
     },
   };
 }

@@ -49,8 +49,10 @@ export const COMPATIBLE_SPECS: Record<CompatibleProviderId, CompatibleSpec> = {
     id: "deepseek-api",
     apiKeyEnv: "DEEPSEEK_API_KEY",
     baseUrlEnv: "DEEPSEEK_BASE_URL",
-    defaultBaseUrl: "https://api.deepseek.com",
-    requiresBaseUrl: false,
+    // No default on purpose. Founder dossiers are personal data, and the design calls for a
+    // hosting provider chosen for it, not the first-party endpoint, so the operator must name one.
+    defaultBaseUrl: null,
+    requiresBaseUrl: true,
     modeEnv: "DEEPSEEK_STRUCTURED_MODE",
     defaultMode: "json_object",
   },

@@ -1,5 +1,5 @@
 import { Fragment, type ReactNode } from "react";
-import { ChevronRight, SlidersHorizontal, UserRound } from "lucide-react";
+import { ChevronRight, Database, SlidersHorizontal, UserRound } from "lucide-react";
 import {
   isClassId,
   isJobId,
@@ -9,12 +9,11 @@ import {
   type JobNode,
   type NodeHealth,
   type RunStats,
-  type SourceId,
   type StageId,
   type SwarmTreeDTO,
 } from "@agentswarm/shared";
 import { cn } from "../lib/cn";
-import { ClassIcon, SourceIcon } from "./icons";
+import { ClassIcon } from "./icons";
 import { StateMark, healthMark } from "./ui/marks";
 
 /** A point in the swarm that can be selected and steered. */
@@ -69,15 +68,8 @@ const JOB_SHORT: Record<JobId, string> = {
   "assess.memo": "Memo",
   "outreach.plan": "Drafts",
   "call.founder": "Founder call",
-  "call.reference": "Ref call",
+  "call.reference": "Reference call",
   "call.debrief": "Debrief",
-};
-
-const SOURCE_SHORT: Partial<Record<SourceId, string>> = {
-  hackernews: "Hacker News",
-  github: "GitHub",
-  arxiv: "arXiv",
-  people_data: "Profiles",
 };
 
 /** Which class is working during each stage of a run. */
@@ -104,7 +96,7 @@ function classFigure(classId: ClassId, stats: RunStats | null): { value: number;
     case "screener":
       return { value: stats.screenedIn, unit: "in thesis" };
     case "investigator":
-      return { value: stats.evidence, unit: "evidence" };
+      return { value: stats.evidence, unit: "facts" };
     case "verifier":
       return { value: stats.evidenceRejected, unit: "rejected" };
     case "analyst":
@@ -125,24 +117,23 @@ const HEALTH_WORD: Record<NodeHealth, string> = {
 
 export interface SwarmMapProps {
   tree: SwarmTreeDTO;
-  /** The last run's totals, for the figure under each class. */
+  /** The last run's totals, for the figure on each class. */
   stats: RunStats | null;
   selected?: SwarmNodeRef | null;
   onSelect?: (node: SwarmNodeRef) => void;
   /** The stage a run is in right now, which makes that class pulse. */
   activeStage?: StageId | null;
-  /** Surfaced founders waiting for a yes or a no, shown at the end of the flow. */
+  /** Surfaced founders waiting for a yes or a no. */
   waiting?: number;
-  /** Classes and figures only, without the job nodes. */
+  /** One row of classes only, without the jobs of the selected class. */
   compact?: boolean;
   className?: string;
 }
 
 /**
- * The swarm drawn as a flow, left to right: sources, the seven classes of
- * agent with each job as a node, and the partner at the end. Every class and
- * job is a button that selects it for steering. The figure under a class is
- * what it handed on in the last run.
+ * The swarm as one line: sources, the seven classes of agent, and you. Each
+ * class is a button. Selecting one opens its jobs underneath, and each job
+ * (and each agent of a job that has several) is a button too.
  */
 export function SwarmMap({
   tree,
@@ -157,164 +148,85 @@ export function SwarmMap({
   const activeClass = activeStage ? (STAGE_CLASS[activeStage] ?? null) : null;
   const interactive = Boolean(onSelect);
 
-  const scoutJobs = tree.classes.find((c) => c.cls.id === "scout")?.jobs ?? [];
-  const sources = scoutJobs
-    .filter((j) => j.job.source)
-    .map((j) => ({ source: j.job.source as SourceId, health: j.health }));
+  // The class whose jobs are open: the selected class, or the class of the selected job or agent.
+  const open =
+    selected && selected.kind !== "swarm"
+      ? (tree.classes.find((c) =>
+          selected.kind === "class"
+            ? c.cls.id === selected.classId
+            : c.jobs.some((j) =>
+                selected.kind === "job"
+                  ? j.job.id === selected.jobId
+                  : j.agents.some((a) => a.agent.id === selected.agentId),
+              ),
+        ) ?? null)
+      : null;
 
   return (
-    <div className={cn("min-w-0 overflow-x-auto", className)}>
-      <div className={cn("flex items-stretch", compact ? "min-w-[40rem]" : "min-w-[66rem]")}>
-        <Column
-          header={<ColumnTitle icon={<DatabaseGlyph />} label="Sources" compact={compact} />}
-          figure={stats ? { value: stats.rawItems, unit: "items" } : null}
-          compact={compact}
-          width="w-[7rem]"
-        >
-          {sources.map((s) => (
-            <div
-              key={s.source}
-              className="flex h-7 min-w-0 items-center gap-1.5 px-1.5 text-sm text-ink-2"
-              title={`${SOURCE_SHORT[s.source] ?? s.source}: ${HEALTH_WORD[s.health]}`}
-            >
-              <SourceIcon source={s.source} className="size-3.5 text-ink-3" />
-              <span className="truncate">{SOURCE_SHORT[s.source] ?? s.source}</span>
-              {s.health === "paused" || s.health === "planned" ? (
-                <StateMark state={healthMark(s.health)} className="ml-auto" />
-              ) : null}
-            </div>
+    <div className={cn("min-w-0", className)}>
+      <div className="min-w-0 overflow-x-auto">
+        <div className="flex min-w-[52rem] items-center gap-1">
+          <EndCap icon={<Database className="size-4" aria-hidden />} label="Sources" />
+          {tree.classes.map((c) => (
+            <Fragment key={c.cls.id}>
+              <ChevronRight className="size-4 shrink-0 text-rule-strong" aria-hidden />
+              <ClassCard
+                node={c}
+                figure={classFigure(c.cls.id, stats)}
+                running={activeClass === c.cls.id}
+                selected={sameNode(selected, { kind: "class", classId: c.cls.id })}
+                open={open?.cls.id === c.cls.id}
+                onSelect={onSelect}
+                interactive={interactive}
+                compact={compact}
+              />
+            </Fragment>
           ))}
-        </Column>
-
-        {tree.classes.map((c) => (
-          <Fragment key={c.cls.id}>
-            <Arrow />
-            <ClassColumn
-              node={c}
-              figure={classFigure(c.cls.id, stats)}
-              running={activeClass === c.cls.id}
-              selected={selected ?? null}
-              onSelect={onSelect}
-              interactive={interactive}
-              compact={compact}
-            />
-          </Fragment>
-        ))}
-
-        <Arrow />
-        <Column
-          header={<ColumnTitle icon={<UserRound aria-hidden className="size-4 shrink-0" />} label="You" compact={compact} />}
-          figure={waiting === undefined ? null : { value: waiting, unit: "to call" }}
-          compact={compact}
-          tone="gold"
-          width="w-[5.5rem]"
-        >
-          <div className="flex h-7 items-center px-1.5 text-sm text-ink-2">Yes or no</div>
-          <div className="flex h-7 items-center px-1.5 text-sm text-ink-2">Approve</div>
-        </Column>
+          <ChevronRight className="size-4 shrink-0 text-rule-strong" aria-hidden />
+          <EndCap icon={<UserRound className="size-4" aria-hidden />} label="You" count={waiting} />
+        </div>
       </div>
+
+      {open && !compact ? (
+        <div
+          className="mt-3 flex flex-wrap items-center gap-2 rounded-md bg-sunk p-3"
+          role="group"
+          aria-label={`${open.cls.label}: jobs`}
+        >
+          {open.jobs.map((j) => (
+            <JobPill key={j.job.id} job={j} selected={selected ?? null} onSelect={onSelect} interactive={interactive} />
+          ))}
+        </div>
+      ) : null}
     </div>
   );
 }
 
-function DatabaseGlyph() {
+function EndCap({ icon, label, count }: { icon: ReactNode; label: string; count?: number }) {
   return (
-    <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden className="shrink-0">
-      <ellipse cx="8" cy="3.5" rx="5" ry="2" fill="none" stroke="currentColor" strokeWidth="1.25" />
-      <path d="M3 3.5v9c0 1.1 2.2 2 5 2s5-.9 5-2v-9M3 8c0 1.1 2.2 2 5 2s5-.9 5-2" fill="none" stroke="currentColor" strokeWidth="1.25" />
-    </svg>
-  );
-}
-
-function Arrow() {
-  return (
-    <div className="flex w-3.5 shrink-0 items-start justify-center pt-2.5 text-rule-strong" aria-hidden>
-      <ChevronRight className="size-3.5" />
-    </div>
-  );
-}
-
-/** In the full map the title is one line; in the compact map the label sits under the icon so it never truncates. */
-function titleClass(compact: boolean): string {
-  return compact
-    ? "flex min-h-[3.25rem] w-full min-w-0 flex-col items-center justify-center gap-1 px-1 py-1.5 text-center text-xs leading-tight font-semibold text-ink"
-    : "flex h-9 w-full min-w-0 items-center gap-1.5 px-1.5 text-left text-sm font-semibold text-ink";
-}
-
-function ColumnTitle({ icon, label, compact }: { icon: ReactNode; label: string; compact: boolean }) {
-  return (
-    <div className={titleClass(compact)}>
-      {icon}
-      <span className={compact ? undefined : "truncate"}>{label}</span>
-    </div>
-  );
-}
-
-function Figure({
-  figure,
-  tone,
-  compact,
-  trailing,
-}: {
-  figure: { value: number; unit: string } | null;
-  tone?: "gold";
-  compact: boolean;
-  /** Shown at the right of the figure row in the full map. */
-  trailing?: ReactNode;
-}) {
-  return (
-    <div
-      className={cn(
-        "flex min-w-0 border-t border-rule px-1.5",
-        compact ? "flex-col items-center py-1 text-center" : "h-9 items-baseline gap-1 pt-1.5",
-      )}
-    >
-      {figure ? (
-        <>
-          <span className={cn("figure text-md font-semibold", tone === "gold" ? "text-gold-ink" : "text-ink")}>
-            {figure.value.toLocaleString("en-US")}
+    <div className="flex w-16 shrink-0 flex-col items-center gap-1 text-center">
+      <span className="relative inline-flex size-9 items-center justify-center rounded-full bg-sunk text-ink-2">
+        {icon}
+        {count ? (
+          <span
+            className="figure absolute -top-1 -right-2 inline-flex h-[1.125rem] min-w-[1.125rem] items-center justify-center rounded-full bg-red px-1 text-2xs font-black text-white"
+            aria-label={`${count} waiting for your call`}
+          >
+            {count}
           </span>
-          <span className="truncate text-xs text-ink-3">{figure.unit}</span>
-        </>
-      ) : (
-        <span className="text-xs text-ink-3">No run yet</span>
-      )}
-      {trailing && !compact ? <span className="ml-auto shrink-0 self-center">{trailing}</span> : null}
+        ) : null}
+      </span>
+      <span className="text-sm font-bold text-ink-2">{label}</span>
     </div>
   );
 }
 
-/** The two end columns (sources and the partner). Narrower than a class column. */
-function Column({
-  header,
-  figure,
-  children,
-  compact,
-  tone,
-  width,
-}: {
-  header: ReactNode;
-  figure: { value: number; unit: string } | null;
-  children: ReactNode;
-  compact: boolean;
-  tone?: "gold";
-  /** Width class in the full map. */
-  width: string;
-}) {
-  return (
-    <div className={cn("flex min-w-0 shrink-0 flex-col border border-rule bg-surface", compact ? "w-[4.75rem]" : width)}>
-      {header}
-      {compact ? null : <div className="flex flex-1 flex-col gap-1 border-t border-rule px-1 py-1.5">{children}</div>}
-      <Figure figure={figure} tone={tone} compact={compact} />
-    </div>
-  );
-}
-
-function ClassColumn({
+function ClassCard({
   node,
   figure,
   running,
   selected,
+  open,
   onSelect,
   interactive,
   compact,
@@ -322,77 +234,70 @@ function ClassColumn({
   node: ClassNode;
   figure: { value: number; unit: string } | null;
   running: boolean;
-  selected: SwarmNodeRef | null;
+  selected: boolean;
+  open: boolean;
   onSelect?: (node: SwarmNodeRef) => void;
   interactive: boolean;
   compact: boolean;
 }) {
-  const ref: SwarmNodeRef = { kind: "class", classId: node.cls.id };
-  const isSelected = sameNode(selected, ref);
   const mark = running ? "running" : healthMark(node.health);
-  const steered = node.directiveCount > 0;
+  const steering = node.directiveCount;
+  const label = `${node.cls.label}: ${running ? "working now" : HEALTH_WORD[node.health]}${
+    figure ? `, ${figure.value} ${figure.unit}` : ""
+  }${steering ? `, ${steering} steering attached` : ""}`;
+  const lit = selected || open;
 
-  const headerInner = (
+  const inner = (
     <>
-      <span className="relative shrink-0">
-        <ClassIcon classId={node.cls.id} className={isSelected ? "text-green" : "text-ink-2"} />
-        <StateMark state={mark} className="absolute -top-1 -right-1.5 size-2" />
+      <span className="relative inline-flex size-9 items-center justify-center rounded-md bg-green-tint text-green">
+        <ClassIcon classId={node.cls.id} className="size-[1.125rem]" />
+        <StateMark state={mark} className="absolute -top-1 -right-1 size-2.5 rounded-full ring-2 ring-surface" />
       </span>
-      <span className={compact ? undefined : "truncate pl-0.5"}>{node.cls.label}</span>
+      <span className="text-sm leading-tight font-bold text-ink">{node.cls.label}</span>
+      {figure ? (
+        <span className="flex items-baseline gap-1">
+          <span className={cn("figure font-black text-ink", compact ? "text-md" : "text-lg")}>
+            {figure.value.toLocaleString("en-US")}
+          </span>
+          <span className="text-xs text-ink-3">{figure.unit}</span>
+        </span>
+      ) : null}
+      {steering > 0 && !compact ? (
+        <span className="figure absolute top-1.5 left-2 inline-flex items-center gap-0.5 text-xs font-bold text-navy">
+          <SlidersHorizontal className="size-3" aria-hidden />
+          {steering}
+        </span>
+      ) : null}
     </>
   );
-  const headerClass = cn(
-    titleClass(compact),
-    interactive && "transition-colors duration-150 hover:bg-ground",
-    isSelected && "bg-green-tint hover:bg-green-tint",
-  );
-  const label = `${node.cls.label}: ${running ? "working now" : HEALTH_WORD[node.health]}${
-    steered ? `, ${node.directiveCount} steering attached` : ""
-  }`;
 
-  return (
-    <div
-      className={cn(
-        "flex min-w-0 flex-1 basis-0 flex-col border bg-surface",
-        isSelected ? "border-green-2" : "border-rule",
-      )}
+  const cls = cn(
+    "relative flex min-w-0 flex-1 basis-0 flex-col items-center gap-1.5 self-stretch rounded-lg border px-1.5 text-center",
+    compact ? "py-2.5" : "py-3",
+    lit ? "border-navy bg-blue-tint" : "border-rule bg-surface",
+    interactive && !lit && "transition-colors duration-150 hover:bg-sunk",
+  );
+
+  return interactive ? (
+    <button
+      type="button"
+      className={cls}
+      aria-pressed={selected}
+      aria-expanded={compact ? undefined : open}
+      aria-label={label}
+      title={node.cls.description}
+      onClick={() => onSelect?.({ kind: "class", classId: node.cls.id })}
     >
-      {interactive ? (
-        <button type="button" className={headerClass} aria-pressed={isSelected} aria-label={label} title={node.cls.description} onClick={() => onSelect?.(ref)}>
-          {headerInner}
-        </button>
-      ) : (
-        <div className={headerClass} title={node.cls.description} aria-label={label}>
-          {headerInner}
-        </div>
-      )}
-      {compact ? null : (
-        <div className="flex flex-1 flex-col gap-1 border-t border-rule px-1 py-1.5">
-          {node.jobs.map((j) => (
-            <JobButton key={j.job.id} job={j} selected={selected} onSelect={onSelect} interactive={interactive} />
-          ))}
-        </div>
-      )}
-      <Figure
-        figure={figure}
-        tone={node.cls.id === "analyst" ? "gold" : undefined}
-        compact={compact}
-        trailing={steered ? <Steered count={node.directiveCount} /> : undefined}
-      />
+      {inner}
+    </button>
+  ) : (
+    <div className={cls} title={node.cls.description} aria-label={label}>
+      {inner}
     </div>
   );
 }
 
-function Steered({ count }: { count: number }) {
-  return (
-    <span className="figure inline-flex items-center gap-0.5 text-2xs font-semibold text-green-2" title={`${count} steering attached here`}>
-      <SlidersHorizontal className="size-3" aria-hidden />
-      {count}
-    </span>
-  );
-}
-
-function JobButton({
+function JobPill({
   job,
   selected,
   onSelect,
@@ -409,49 +314,48 @@ function JobButton({
   const steering = job.directiveCount + job.agents.reduce((sum, a) => sum + a.directiveCount, 0);
   const label = `${job.job.label}: ${HEALTH_WORD[job.health]}${steering ? `, ${steering} steering attached` : ""}`;
 
+  const pill = cn(
+    "inline-flex h-8 items-center gap-1.5 rounded-full border px-3 text-sm font-bold",
+    isSelected ? "border-navy bg-blue-tint text-ink" : "border-rule-strong bg-surface text-ink",
+    planned && !isSelected && "border-dashed text-ink-3",
+    interactive && !isSelected && "transition-colors duration-150 hover:bg-ground",
+  );
   const inner = (
     <>
       <StateMark state={healthMark(job.health)} />
-      <span className="truncate">{JOB_SHORT[job.job.id]}</span>
+      {JOB_SHORT[job.job.id]}
       {steering > 0 ? (
-        <span className="ml-auto shrink-0">
-          <Steered count={steering} />
+        <span className="figure inline-flex items-center gap-0.5 text-xs text-navy">
+          <SlidersHorizontal className="size-3" aria-hidden />
+          {steering}
         </span>
       ) : null}
     </>
   );
-  const cls = cn(
-    "flex h-7 w-full min-w-0 items-center gap-1.5 rounded-sm border px-1.5 text-left text-sm",
-    planned ? "border-dashed border-rule-strong text-ink-3" : "border-rule text-ink",
-    interactive && "transition-colors duration-150 hover:border-ink-3 hover:bg-ground",
-    isSelected && "border-green-2 bg-green-tint hover:border-green-2 hover:bg-green-tint",
-  );
 
   return (
-    <div className="flex min-w-0 flex-col gap-0.5">
+    <span className="inline-flex items-center gap-1">
       {interactive ? (
-        <button type="button" className={cls} aria-pressed={isSelected} aria-label={label} title={job.job.description} onClick={() => onSelect?.(ref)}>
+        <button type="button" className={pill} aria-pressed={isSelected} aria-label={label} title={job.job.description} onClick={() => onSelect?.(ref)}>
           {inner}
         </button>
       ) : (
-        <div className={cls} title={job.job.description} aria-label={label}>
+        <span className={pill} title={job.job.description} aria-label={label}>
           {inner}
-        </div>
+        </span>
       )}
-      {job.agents.length > 1 ? (
-        <div className="flex flex-wrap gap-0.5 pl-3" role="group" aria-label={`${job.job.label} agents`}>
-          {job.agents.map((a, i) => {
+      {job.agents.length > 1
+        ? job.agents.map((a, i) => {
             const agentRef: SwarmNodeRef = { kind: "agent", agentId: a.agent.id };
             const on = sameNode(selected, agentRef);
             const chip = cn(
-              "figure inline-flex h-5 min-w-5 items-center justify-center gap-1 rounded-sm border px-1 text-2xs font-semibold",
-              on ? "border-green-2 bg-green-tint text-green" : "border-rule text-ink-2",
-              interactive && "hover:border-ink-3",
+              "figure inline-flex size-6 items-center justify-center rounded-full border text-xs font-black",
+              on ? "border-navy bg-blue-tint text-ink" : "border-rule-strong bg-surface text-ink-2",
+              interactive && !on && "hover:bg-ground",
             );
             const title = `${a.agent.name}${a.agent.beat ? `: ${a.agent.beat}` : ""} (${HEALTH_WORD[a.health]})`;
             return interactive ? (
               <button key={a.agent.id} type="button" className={chip} aria-pressed={on} aria-label={title} title={title} onClick={() => onSelect?.(agentRef)}>
-                {a.health === "paused" ? <StateMark state="paused" className="size-2" /> : null}
                 {i + 1}
               </button>
             ) : (
@@ -459,9 +363,8 @@ function JobButton({
                 {i + 1}
               </span>
             );
-          })}
-        </div>
-      ) : null}
-    </div>
+          })
+        : null}
+    </span>
   );
 }

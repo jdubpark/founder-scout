@@ -47,6 +47,7 @@ describe("createProviderRegistry statuses", () => {
           ANTHROPIC_API_KEY: "a",
           OPENAI_API_KEY: "o",
           DEEPSEEK_API_KEY: "d",
+          DEEPSEEK_BASE_URL: "https://deepseek-host.example.test/v1",
           META_API_KEY: "l",
           META_BASE_URL: "https://llama.example.test/v1",
         }).statuses()

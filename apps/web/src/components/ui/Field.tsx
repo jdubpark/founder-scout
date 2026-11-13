@@ -11,7 +11,7 @@ import { cn } from "../../lib/cn";
 
 const CONTROL =
   "w-full rounded-sm border border-rule-strong bg-surface px-2.5 text-base text-ink placeholder:text-ink-3 " +
-  "transition-colors duration-150 hover:border-ink-3 focus-visible:border-green-2 " +
+  "transition-colors duration-150 hover:border-ink-3 focus-visible:border-navy " +
   "disabled:cursor-not-allowed disabled:bg-sunk disabled:text-ink-3 aria-[invalid=true]:border-red";
 
 export interface FieldProps {
@@ -32,7 +32,7 @@ export function Field({ label, hint, error, children, className }: FieldProps) {
   const hasNote = Boolean(error || hint);
   return (
     <div className={cn("flex min-w-0 flex-col gap-1", className)}>
-      <label htmlFor={id} className="text-sm font-semibold text-ink">
+      <label htmlFor={id} className="text-base font-bold text-ink">
         {label}
       </label>
       {children({ id, describedBy: hasNote ? noteId : undefined, invalid: Boolean(error) })}
@@ -128,7 +128,7 @@ export interface SegmentedProps<T extends string> {
 /** A small set of mutually exclusive filters, shown all at once. */
 export function Segmented<T extends string>({ value, onChange, options, label, className }: SegmentedProps<T>) {
   return (
-    <div role="radiogroup" aria-label={label} className={cn("inline-flex flex-wrap gap-px bg-rule-strong p-px rounded-sm", className)}>
+    <div role="radiogroup" aria-label={label} className={cn("inline-flex flex-wrap gap-1", className)}>
       {options.map((opt) => {
         const selected = opt.value === value;
         return (
@@ -139,8 +139,10 @@ export function Segmented<T extends string>({ value, onChange, options, label, c
             aria-checked={selected}
             onClick={() => onChange(opt.value)}
             className={cn(
-              "h-7 px-2.5 text-sm font-medium whitespace-nowrap transition-colors duration-150",
-              selected ? "bg-green-2 text-on-green" : "bg-surface text-ink-2 hover:bg-ground hover:text-ink",
+              "h-8 rounded-full border px-3 text-sm font-bold whitespace-nowrap transition-colors duration-150",
+              selected
+                ? "border-green-2 bg-green-2 text-on-green"
+                : "border-rule-strong bg-surface text-ink-2 hover:bg-sunk hover:text-ink",
             )}
           >
             {opt.label}
