@@ -2,7 +2,6 @@ import { existsSync, readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { ScreenOutputSchema, SearchOutputSchema, type ScreenOutput, type SearchOutput } from "@agentswarm/shared";
 import { ProviderError, type ProviderRequest } from "../contracts";
-import { claudeFetchDenyRules, NEVER_FETCH_HOSTS } from "@agentswarm/shared";
 import {
   ClaudeCliProvider,
   buildClaudeArgs,
@@ -82,18 +81,6 @@ function argValue(args: readonly string[], flag: string): string | undefined {
   return i >= 0 ? args[i + 1] : undefined;
 }
 
-/** Every value after --disallowedTools, up to the next flag. */
-function denyListOf(args: readonly string[]): string[] {
-  const i = args.indexOf("--disallowedTools");
-  if (i < 0) return [];
-  const rules: string[] = [];
-  for (const arg of args.slice(i + 1)) {
-    if (arg.startsWith("--")) break;
-    rules.push(arg);
-  }
-  return rules;
-}
-
 describe("buildClaudeArgs", () => {
   const base = {
     model: "claude-haiku-5-5",
@@ -118,17 +105,7 @@ describe("buildClaudeArgs", () => {
     expect(argValue(args, "--allowedTools")).toBe("WebSearch,WebFetch");
     expect(args).toContain("stream-json");
     expect(args).not.toContain("--add-dir");
-    const denied = denyListOf(args);
-    expect(denied).toEqual(claudeFetchDenyRules());
-    for (const host of NEVER_FETCH_HOSTS) {
-      expect(denied).toContain(`WebFetch(domain:${host})`);
-      expect(denied).toContain(`WebFetch(domain:*.${host})`);
-    }
-    // Web search is not a request to those hosts, so it is not denied.
-    expect(denied.some((rule) => rule.startsWith("WebSearch"))).toBe(false);
-    const at = args.indexOf("--disallowedTools");
-    expect(at).toBeGreaterThan(args.indexOf("--allowedTools"));
-    expect(args.slice(at + 1)).toEqual(claudeFetchDenyRules());
+    expect(args).not.toContain("--disallowedTools");
   });
 
   it("gives search calls WebSearch only, with no page-fetch tool", () => {

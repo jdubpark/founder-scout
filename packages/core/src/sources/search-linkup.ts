@@ -1,4 +1,4 @@
-import { cleanUrl, isOffLimitsHost, NEVER_FETCH_HOSTS, TERMS_BARRED_HOSTS } from "@agentswarm/shared";
+import { cleanUrl } from "@agentswarm/shared";
 import type { SearchEngine, SearchHit } from "../contracts";
 import { createRecordAllowance, type RecordAllowance } from "./pdl";
 import { defaultFetch, type FetchFn } from "./http";
@@ -15,8 +15,6 @@ interface LinkupAllowance {
 }
 
 const allowances = new Map<string, LinkupAllowance>();
-const EXCLUDED_DOMAINS = [...NEVER_FETCH_HOSTS, ...TERMS_BARRED_HOSTS.map(({ host }) => host)];
-
 function allowanceFor(env: NodeJS.ProcessEnv, apiKey: string): LinkupAllowance {
   const existing = allowances.get(apiKey);
   if (existing) return existing;
@@ -31,19 +29,8 @@ function allowanceFor(env: NodeJS.ProcessEnv, apiKey: string): LinkupAllowance {
   return result;
 }
 
-/** Keep off-limits results as safe pointers, while the reader continues to refuse them. */
 function resultUrl(raw: string): string | null {
-  const cleaned = cleanUrl(raw);
-  if (cleaned) return cleaned;
-  try {
-    const url = new URL(raw.trim());
-    if ((url.protocol !== "http:" && url.protocol !== "https:") || url.username || url.password) return null;
-    if (!isOffLimitsHost(url.hostname)) return null;
-    url.hash = "";
-    return url.href.length <= 500 ? url.href : null;
-  } catch {
-    return null;
-  }
+  return cleanUrl(raw);
 }
 
 export function createLinkupSearchEngine(options: SearchOptions = {}): SearchEngine {
@@ -92,7 +79,6 @@ export function createLinkupSearchEngine(options: SearchOptions = {}): SearchEng
               depth: "fast",
               outputType: "searchResults",
               maxResults,
-              excludeDomains: EXCLUDED_DOMAINS,
             }),
             timeoutMs: options.timeoutMs,
             signal: searchOptions?.signal,

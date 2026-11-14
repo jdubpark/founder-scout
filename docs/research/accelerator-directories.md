@@ -1,8 +1,8 @@
 # Accelerator directories a program can list
 
-Under the reading rule (robots.txt for a generic agent, no login, no challenge, no key taken from a page), six programmes can be listed by code today and three of them name founders: Y Combinator (open mirror, then each company page), 500 Global (one JSON file) and a16z speedrun (one page, then each company page). Founders, Inc. and South Park Commons name founders on company pages, and Entrepreneurs First names them on its list page. Berkeley SkyDeck, Alliance and ODF list companies with a cohort but name no founders. Techstars draws its list from a search service with a key the page hands out, so it is not listable under the rule.
+Six programmes can be listed by code with plain requests and no login, no challenge, and no key taken from a page, and three of them name founders: Y Combinator (open mirror, then each company page), 500 Global (one JSON file) and a16z speedrun (one page, then each company page). Founders, Inc. and South Park Commons name founders on company pages, and Entrepreneurs First names them on its list page. Berkeley SkyDeck, Alliance and ODF list companies with a cohort but name no founders. Techstars draws its list from a search service with a key the page hands out, so it is not listable that way.
 
-Read on 2026-11-13. Every figure below was read that day. Terms are recorded and bar nothing here; robots.txt decides.
+Read on 2026-11-13. Every figure below was read that day. The robots.txt verdicts record what each file said. They are not the reader's rules: the partner decided the same day that robots.txt is not obeyed. A site's prose terms do not bar a host.
 
 ## Comparison
 

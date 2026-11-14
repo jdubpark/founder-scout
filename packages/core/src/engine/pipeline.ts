@@ -57,6 +57,7 @@ const SCOUT_JOBS = [
   "scout.github",
   "scout.research",
   "scout.talent",
+  "scout.yc",
 ] as const satisfies readonly ModelJobId[];
 
 const INVESTIGATOR_JOBS = [

@@ -88,6 +88,7 @@ export const JOB_INPUT_POOLS: InputPools = {
   "scout.github": SCOUT,
   "scout.research": SCOUT,
   "scout.talent": SCOUT,
+  "scout.yc": SCOUT,
   // The navigator is shown the notebook and nothing a page said: `lastWave` is counts and
   // labels of a few words that runners wrote.
   "hunt.navigate": { thesis: "objective", brief: "steering", turn: "hunt", trails: "hunt", notes: "hunt", lastWave: "hunt", budget: "steering" },

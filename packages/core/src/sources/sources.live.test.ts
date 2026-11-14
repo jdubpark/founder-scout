@@ -63,4 +63,16 @@ describe.skipIf(!live)("live public sources", () => {
     expect((await adapter!.status()).configured).toBe(false);
     await expect(adapter!.fetch(request({ limit: 5 }))).rejects.toThrow("not configured");
   });
+
+  it("yc returns founder items with their own public links", async () => {
+    const adapter = registry.get("yc");
+    expect(adapter).not.toBeNull();
+    const result = await adapter!.fetch(request({ limit: 5 }));
+    // One company page can carry several founders, so the last page may pass the limit.
+    assertWellFormed(result.items.slice(0, 5), "yc");
+    expect(result.items.some((item) => item.authorUrl?.includes("linkedin.com"))).toBe(true);
+    console.log(
+      `[live] yc: ${result.items.length} items; example: ${JSON.stringify(result.items[0]?.title)}; ${JSON.stringify(result.items[0]?.authorUrl)}`,
+    );
+  }, 60_000);
 });

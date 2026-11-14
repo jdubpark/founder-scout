@@ -232,8 +232,8 @@ export interface SourceRegistry {
 export interface PageRead {
   /**
    * ok          the page was read;
-   * blocked     it was not asked for, or the site said no: a host the system never requests,
-   *             a private address, robots.txt, a login wall, a refusal;
+   * blocked     it was not asked for, or the site said no: a private address,
+   *             a login wall, a refusal;
    * unreachable no answer, an error, or too little text to read;
    * not_text    not a page of text (an image, a download, a document format not read here).
    */
@@ -245,6 +245,10 @@ export interface PageRead {
   title: string;
   text: string;
   links: PageLink[];
+  /** The page's raw HTML, present only when the caller asked for it with the read option `html`; null otherwise. */
+  html?: string | null;
+  /** Set by the browser reader when the text was cut short of the whole page. */
+  truncated?: boolean;
   /** Simulator only: the synthetic founders this page is about. Never placed in a prompt. */
   simFounderIds?: string[];
 }
@@ -253,13 +257,14 @@ export interface PageRead {
  * Reads one public page for the hunt. Implemented in src/sources (live) and src/sim.
  *
  * The live reader is where the rules about addresses are kept, because the address comes from
- * a model or from a page: it never requests a host on the deny list (`isNeverFetchHost`) or a
- * private network address, it connects only to the address it validated, it reads robots.txt
- * and obeys it, it waits between requests to the same host, it never sends a login or a
- * cookie, and it gives up on a page that is too large or is not text.
+ * a model or from a page: it refuses a private network address, it connects only to the
+ * address it validated, it does not read or obey robots.txt, it waits between requests to
+ * the same host, it sends no login and no cookie of its own — on the professional network
+ * only, it may send a logged-in session the partner supplied — and it gives up on a page
+ * that is too large or is not text.
  */
 export interface WebReader {
-  read(url: string, options?: { simDay?: number | null; signal?: AbortSignal }): Promise<PageRead>;
+  read(url: string, options?: { simDay?: number | null; signal?: AbortSignal; html?: boolean }): Promise<PageRead>;
 }
 
 export interface Transcriber {
@@ -779,8 +784,8 @@ export interface Logger {
 
 /**
  * Opens the page an evidence item cites and looks for the item's quoted words there.
- * Implemented in src/sources. It refuses addresses on the fetch deny list (see
- * `DENIED_HOSTS`) and private network addresses, because the address comes from a model.
+ * Implemented in src/sources. It refuses private network addresses, because the
+ * address comes from a model.
  */
 export interface QuoteChecker {
   check(url: string, excerpt: string, signal?: AbortSignal): Promise<{ status: QuoteStatus; detail: string }>;
@@ -836,7 +841,7 @@ export interface PersonRecord {
   name: string;
   headline: string | null;
   location: string | null;
-  /** A pointer a person can open. The system never requests it. */
+  /** A pointer a person can open, and a page the hunt may read anonymously. */
   profileUrl: string | null;
   current: { title: string | null; company: string | null; companyUrl: string | null; startDate: string | null } | null;
   experience: Array<{ title: string | null; company: string | null; startDate: string | null; endDate: string | null }>;

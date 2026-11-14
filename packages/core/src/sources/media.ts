@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { SIM_WEB_HOST } from "@agentswarm/shared";
 import { pinnedFetch } from "./quote-check";
 import type { FetchFn } from "./http";
-import { createWebReader, type WebAddressCheck } from "./web";
+import { createWebReader, DEFAULT_GAP_MS, type WebAddressCheck } from "./web";
 
 const REDIRECTS = new Set([301, 302, 303, 307, 308]);
 const DEFAULT_MAX_MB = 150;
@@ -35,8 +35,8 @@ export function createMediaFetcher(options: MediaFetchOptions = {}) {
   const env = options.env ?? process.env;
   const fetchFn = options.fetch;
   const safety = createWebReader({
-    // The same name the page reader gives. A site's robots.txt may have rules for that name,
-    // and a recording must not be fetched where a page would be refused.
+    // The same name the page reader gives. A recording uses the same address checks and the
+    // same gap between requests to one host. robots.txt is not consulted.
     userAgent: env.HUNT_USER_AGENT,
     fetch: fetchFn,
     resolveHost: options.resolveHost ?? (async (host) => host === SIM_WEB_HOST
@@ -57,13 +57,10 @@ export function createMediaFetcher(options: MediaFetchOptions = {}) {
         const checked = await safety.checkAddress(current);
         if ("kind" in checked) return { refused: addressRefusal(checked) };
 
-        const decision = await safety.robotsDecision(checked.url, fetchOptions.signal);
-        if (!decision.allowed) return { refused: "robots.txt does not allow this recording." };
-
         const url = new URL(checked.url);
         let response: Response;
         try {
-          response = await safety.withHostGap(url.hostname, decision.gapMs, () =>
+          response = await safety.withHostGap(url.hostname, DEFAULT_GAP_MS, () =>
             (fetchFn ?? ((address, init) => pinnedFetch(address, init, checked.addresses)))(checked.url, {
               method: "GET",
               redirect: "manual",

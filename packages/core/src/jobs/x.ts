@@ -1,7 +1,6 @@
 /**
  * The three jobs that read X. Each runs on xAI's API with its X search tool, held to the scope
- * code sets (`xScope`), because X refuses every other reader this system has: its robots.txt
- * bars a generic agent from the site and from its embed address.
+ * code sets (`xScope`). These jobs do not open a page on X.
  *
  * So nothing here is a quote code checked. What a job returns is xAI's model's report of a post.
  * Two things are still decided by code: an address is kept only when xAI's API lists that post

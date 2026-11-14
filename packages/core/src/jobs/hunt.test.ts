@@ -367,7 +367,7 @@ describe("hunt runner simulation", () => {
       progress: "building",
     });
     expect(output.follow[0]?.index).toBe(1);
-    expect(output.follow.some(({ index }) => index === 2)).toBe(false);
+    expect(output.follow.some(({ index }) => index === 2)).toBe(true);
   });
 
   it("reads the real simulated project page without changing checked stage answers", () => {

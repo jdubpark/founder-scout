@@ -413,14 +413,6 @@ describe("hunt service", () => {
     }), 400);
     expect(unconfiguredSearch.message).toContain("No search engine called");
     expect(unconfiguredSearch.fields).toHaveProperty("searches");
-    const deniedPage = await expectServiceError(() => addHuntTrail(h.deps, "Partner", "swm_hunt", {
-      name: "Do not fetch this", pages: ["https://linkedin.com/in/founder"],
-    }), 400);
-    expect(deniedPage.fields).toHaveProperty("pages");
-    const termsBarredPage = await expectServiceError(() => addHuntTrail(h.deps, "Partner", "swm_hunt", {
-      name: "Terms bar this", pages: ["https://substack.com/@founder"],
-    }), 400);
-    expect(termsBarredPage.fields).toHaveProperty("pages");
     const invalidPage = await expectServiceError(() => addHuntTrail(h.deps, "Partner", "swm_hunt", {
       name: "One good start is not enough", pages: ["https://example.com/start", "https://127.0.0.1/private"],
     }), 400);

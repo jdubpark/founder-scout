@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { assertSuccessful, httpGet, parseJson, SourceRateLimitError, type HttpResult } from "./http";
-import { textResponse } from "./test-support";
+import { scriptedFetch, textResponse } from "./test-support";
 
 const NOW = Date.parse("2026-11-13T05:00:00Z");
 
@@ -36,23 +36,13 @@ describe("shared HTTP contracts", () => {
   it("rejects malformed JSON at the shared parsing boundary", () => {
     expect(() => parseJson("Test", "<html>not JSON</html>")).toThrow("Test returned a body that is not valid JSON.");
   });
+});
 
-  it("refuses a never-fetch address before an initial or redirected request", async () => {
-    let called = false;
-    const initialFetch = async () => {
-      called = true;
-      throw new Error("fetch must not be called");
-    };
-    await expect(httpGet(initialFetch, "Test source", "https://www.linkedin.com/profile")).rejects.toThrow(/never-fetch list/);
-    expect(called).toBe(false);
-
-    const requested: string[] = [];
-    const redirectFetch = async (url: string) => {
-      requested.push(url);
-      return new Response(null, { status: 302, headers: { location: "https://www.linkedin.com/in/person" } });
-    };
-    await expect(httpGet(redirectFetch, "Test source", "https://example.test/start")).rejects.toThrow(/never-fetch list/);
-    expect(requested).toEqual(["https://example.test/start"]);
+describe("httpGet", () => {
+  it("sends the agentswarm User-Agent and the caller's headers", async () => {
+    const recorder = scriptedFetch(() => textResponse("ok"));
+    await httpGet(recorder.fetch, "Test", "https://example.test/x", { headers: { Accept: "application/json" } });
+    expect(recorder.headers[0]).toMatchObject({ "User-Agent": "agentswarm/0.1", Accept: "application/json" });
   });
 
   it("identifies itself and keeps caller headers on same-host redirects", async () => {
@@ -73,7 +63,7 @@ describe("shared HTTP contracts", () => {
     expect(sentHeaders[0]?.["user-agent"]).toBe("agentswarm/0.1");
   });
 
-  it("drops caller credentials after a redirect to another host", async () => {
+  it("does not send caller headers after a redirect to another host", async () => {
     const headers: Array<Record<string, string>> = [];
     const fetchFn = async (url: string, init?: RequestInit) => {
       headers.push(Object.fromEntries(new Headers(init?.headers).entries()));
@@ -122,4 +112,14 @@ describe("shared HTTP contracts", () => {
     );
     await expect(slow).rejects.toThrow("Test request timed out after 20 seconds.");
   }, 30_000);
+
+  it("honours a longer timeout an adapter asks for, and says which one", async () => {
+    const fetchFn = (_url: string, init?: RequestInit) =>
+      new Promise<Response>((_resolve, reject) => {
+        init?.signal?.addEventListener("abort", () => reject(new DOMException("timeout", "TimeoutError")));
+      });
+    await expect(httpGet(fetchFn, "Test", "https://example.test/slow.json", { timeoutMs: 80 })).rejects.toThrow(
+      "Test request timed out after 0.08 seconds.",
+    );
+  });
 });

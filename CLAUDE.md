@@ -52,12 +52,22 @@ check it. `packages/core/src/rules.test.ts` enforces that, so add the test with 
   instructions keep the call to its approved agenda, end it on a stop request, and pass a
   15-minute limit to the dialler. Tests: `packages/core/src/engine/index.test.ts`,
   `packages/core/src/service/index.test.ts`, `packages/core/src/sources/dialler-vapi.test.ts`.
-- **Nothing requests the professional network's own site.** No adapter, no fetching, no logged-in
-  automation, for linkedin.com and the other hosts in `packages/shared/src/policy.ts`. A link to one
-  is a pointer for a person to open. Profile data comes from a data vendor under contract, from a
-  partner's own exported contact list, or not at all. Tests: `packages/shared/src/policy.test.ts`,
-  `packages/core/src/sources/http.test.ts`, `packages/core/src/sources/quote-check.test.ts`,
-  `packages/core/src/providers/claude-cli.test.ts`.
+- **The professional network is read anonymously, or through logged-in sessions the partner
+  supplies.** linkedin.com and its related hosts in `packages/shared/src/policy.ts` are read like
+  any public page: requests spaced, a refusal final. robots.txt is not obeyed. Sessions come
+  from `LINKEDIN_COOKIES` (one Cookie header value
+  per line; created or bought accounts supply theirs the same way), pinned in order to an optional
+  proxy (`LINKEDIN_PROXIES`) and user agent (`LINKEDIN_USER_AGENTS`), rotated. Each account
+  keeps a human rhythm, seeded from its cookie so it is stable: a workday with lunch, bursts
+  with breaks, a daily cap and lighter weekends; reads outside it are held back, not sent, and
+  a refusal rests the account until its next workday, three days on a repeat within a week.
+  `HUNT_PROXY_URL` routes every read through one proxy. Nothing in this system logs in by
+  itself, and a cookie is never sent to any other host. When `OCTO_PROFILE_UUIDS` names one
+  Octo Browser profile per account, the network is read through that real Chromium window —
+  one tab, a dwell between pages, scrolling as a reader does — and the fetch path carries no
+  account at all. Tests: `packages/shared/src/policy.test.ts`, `packages/core/src/sources/web.test.ts`,
+  `packages/core/src/sources/quote-check.test.ts`, `packages/core/src/sources/sessions.test.ts`,
+  `packages/core/src/sources/browser-reader.test.ts`, `packages/core/src/sources/octo.test.ts`.
 - **Every founder waits for the partner's Yes / No, for now.** The swarm's own decision is a
   suggestion until a person calls it, whatever the status: the partner asked for this on
   2026-11-13 (`awaitsCall` in `packages/shared/src/feedback.ts` is the one place to narrow it). A
@@ -85,9 +95,9 @@ check it. `packages/core/src/rules.test.ts` enforces that, so add the test with 
 - **A contact list is the uploader's own, and stays out of prompts.** Email addresses in it are
   never read. Tests: `packages/core/src/sources/connections.test.ts`,
   `packages/core/src/service/index.test.ts`.
-- **Vendor records cost money outside the run's spend cap.** The People Data Labs adapter asks only
-  for professional fields and has its own ceiling on records per day. Test:
-  `packages/core/src/sources/pdl.test.ts`.
+- **Vendor records cost money outside the run's spend cap.** The People Data Labs and Bright Data
+  adapters ask only for professional fields, and each has its own ceiling on records per day.
+  Tests: `packages/core/src/sources/pdl.test.ts`, `packages/core/src/sources/brightdata.test.ts`.
 - **Headless agents do not inherit unrelated secrets or user instructions.** Claude and Codex get
   only required environment keys. OpenCode runs a generated tool-free agent in a temporary
   directory with an empty config directory. It is ready only with a saved login, and each call
@@ -181,20 +191,22 @@ check it. `packages/core/src/rules.test.ts` enforces that, so add the test with 
   the reader to report one. The result is the task's control, counted against the pool member,
   and nobody from a planted page is ever kept. Tests: `packages/shared/src/hunt.test.ts`,
   `packages/core/src/engine/hunt.test.ts`, `packages/core/src/jobs/hunt.test.ts`.
-- **The hunt reads public pages within their rules.** robots.txt is obeyed, requests to one host
-  are spaced, there is no login and no cookie, a refusal is final, an address must be a named
-  public host, and the sites in `TERMS_BARRED_HOSTS` are not read even where robots.txt allows.
-  This includes YouTube, Vimeo and Spotify media hosts. Add a site to that list with the sentence
-  that bars it. A robots.txt answered with 401, 403 or 429, or one too large to read in full
-  (512 KiB), means the site is not read; a missing one means no rules. The reader names itself
-  with `HUNT_USER_AGENT`. Tests:
+- **The hunt reads public pages, and it does not obey robots.txt.** Requests to one host are
+  spaced by the reader's own gap, there is no login and no cookie of its own (only the
+  partner-supplied sessions on the professional network), a refusal from the page is final, and
+  an address must be a named public host. A site's prose terms do not bar a host. The reader
+  names itself with `HUNT_USER_AGENT`. The partner decided this on 2026-11-13. Tests:
   `packages/core/src/sources/web.test.ts`, `packages/shared/src/policy.test.ts`,
   `packages/shared/src/hunt.test.ts`.
+- **The YC scout reads company pages through the web reader**, so the same spacing governs it
+  like the hunt; the directory index comes from the open mirror at most once a day, and a page
+  that keeps failing is given up after three tries. Tests:
+  `packages/core/src/sources/yc.test.ts`, `packages/core/src/sources/web.test.ts`.
 - **A recording fetch must be a permitted direct audio or video file.** It goes through the page
-  reader's own checks under the reader's name (`HUNT_USER_AGENT`), and refuses barred or private
-  hosts, player pages, robots.txt refusals, unsafe redirects and files over the size limit. Its
-  length is found before transcribing, or bounded from its size at 6 kbit/s when it cannot be
-  measured, and a recording that does not fit the run's allowance is refused. Tests:
+  reader's own checks under the reader's name (`HUNT_USER_AGENT`), and refuses private hosts,
+  player pages, unsafe redirects and files over the size limit. Its length
+  is found before transcribing, or bounded from its size at 6 kbit/s when it cannot be measured,
+  and a recording that does not fit the run's allowance is refused. Tests:
   `packages/core/src/sources/media.test.ts`, `packages/core/src/engine/index.test.ts`.
 - **A transcript quote must be present in the time-coded stretch.** Code drops unsupported words,
   keeps the recording time in the evidence address, and marks the quote found before fact-checking.
@@ -202,9 +214,9 @@ check it. `packages/core/src/rules.test.ts` enforces that, so add the test with 
 - **Claude search hits come from its search tool result.** Assistant prose cannot add an address,
   and code caps every search engine request at ten results. Tests:
   `packages/core/src/providers/claude-cli.test.ts`, `packages/core/src/engine/hunt.test.ts`.
-- **Linkup search observes its separate per-day ceiling and the no-read list.** A missing key or
-  failed response yields no hits; the ceiling is held in memory and resets with the server.
-  Test: `packages/core/src/sources/search-linkup.test.ts`.
+- **Linkup search observes its separate per-day ceiling.** A missing key or failed response yields
+  no hits; the ceiling is held in memory and resets with the server. Test:
+  `packages/core/src/sources/search-linkup.test.ts`.
 - **Completed calls become redacted evidence only when recording was chosen.** A simulated call's
   evidence is labelled simulated. The completed call item is synced; it is not retried as a new
   call. The Vapi adapter has a fake-client test only and has never placed a real call. Tests:
@@ -214,7 +226,7 @@ check it. `packages/core/src/rules.test.ts` enforces that, so add the test with 
   at most three by priority then id, within the prompt budget; `skills.off` removes an id at its
   steering scope. Skill files must parse, name known jobs or classes and stay within 900 body
   characters. Skills are guidance, not authority: a person's instruction wins, and a note cannot
-  direct scoring, decisions, personal-attribute use or barred-host requests. Tests:
+  direct scoring, decisions or personal-attribute use. Tests:
   `packages/shared/src/skills.test.ts`, `packages/core/src/jobs/index.test.ts`.
 - **Founders rows use matched company facts, not guesses.** Industry and round come from company
   data, the tagline needs an exact company-page quote, and the moat needs cited verified evidence;
@@ -223,8 +235,8 @@ check it. `packages/core/src/rules.test.ts` enforces that, so add the test with 
   `packages/shared/src/hunt.test.ts`.
 - **A page is read once; a search runs again only in a later run or on a later day.** Test:
   `packages/core/src/db/store.test.ts`.
-- **X is searched only through xAI, and what comes back is a model's report.** No page on
-  x.com is requested; its robots.txt refuses a generic reader. A post is kept only when
+- **X is searched only through xAI, and what comes back is a model's report.** The X jobs do
+  not open a page on x.com. A post is kept only when
   xAI's API returned its address, a founder's posts only from the account the call was held to,
   and where xAI's own address names the account, no other account is the author. Only the xAI
   provider runs a job with an X scope. The words, dates and counts are what Grok wrote, so X
@@ -262,12 +274,11 @@ check it. `packages/core/src/rules.test.ts` enforces that, so add the test with 
   assessment cites a removed item is assessed again. A new place that keeps a post's words is
   added to that method. Tests: `packages/core/src/db/store.test.ts`,
   `packages/core/src/engine/x-stage.test.ts`.
-- **Accelerator batches are listed by code, within each directory's robots.txt.** Four public
-  listings, each asked after its robots.txt, with requests to one host spaced by the page
-  reader's gap or the site's crawl delay, and a listing once read is reused, not asked for
-  again. A hit is a company's name and its own site, or for a16z speedrun the programme's page
-  about it; a founder's name in a listing is not used, and Y Combinator's own site is not
-  read. Test: `packages/core/src/sources/accelerators.test.ts`.
+- **Accelerator batches are listed by code.** Four public listings, with requests to one host
+  spaced by the page reader's gap, and a listing once read is reused, not asked for again. A
+  hit is a company's name and its own site, or for a16z speedrun the programme's page about it;
+  a founder's name in a listing is not used. The listing uses Y Combinator's open mirror and
+  does not open ycombinator.com. Test: `packages/core/src/sources/accelerators.test.ts`.
 - **A runner call names no effort, and that means answer fast.** DeepSeek is sent thinking off
   and Meta the lowest reasoning, because both reason by default. DeepSeek has no default
   address. The runner pool can use DeepSeek Flash and Muse Ember through OpenCode or their direct

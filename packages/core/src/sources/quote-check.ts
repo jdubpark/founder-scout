@@ -1,17 +1,23 @@
 import { lookup } from "node:dns/promises";
-import { isIP, type LookupFunction } from "node:net";
-import { request as httpRequest } from "node:http";
+import { connect as netConnect, isIP, type LookupFunction, type Socket } from "node:net";
+import { connect as tlsConnect } from "node:tls";
+import { request as httpRequest, type RequestOptions } from "node:http";
 import { request as httpsRequest } from "node:https";
 import { Readable } from "node:stream";
 import { createBrotliDecompress, createGunzip, createInflate } from "node:zlib";
-import { isNeverFetchHost, quoteForm, quoteInText, type QuoteStatus } from "@agentswarm/shared";
-import type { QuoteChecker } from "../contracts";
+import { isProfessionalNetworkHost, isProfessionalNetworkUrl, quoteForm, quoteInText, type QuoteStatus } from "@agentswarm/shared";
+import type { PageRead, QuoteChecker } from "../contracts";
 import { USER_AGENT, type FetchFn } from "./http";
+import { linkedInSessionPoolFor, type LinkedInAccount } from "./sessions";
 
 const DEFAULT_TIMEOUT_MS = 15_000;
 const DEFAULT_MAX_BYTES = 2_000_000;
+const MAX_PROXY_HEADER_BYTES = 64 * 1024;
 const ACCEPT = "text/html, application/xhtml+xml, text/plain, text/markdown, application/json;q=0.9, */*;q=0.1";
 const REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308]);
+// Statuses that rest an account; the professional network throttles with HTTP 999. The same
+// set the web reader uses, so one refusal rests an account whichever path saw it.
+const REFUSALS = new Set([401, 403, 407, 429, 451, 999]);
 const READABLE_TYPES = new Set([
   "text/html",
   "application/xhtml+xml",
@@ -25,6 +31,17 @@ export interface QuoteCheckOptions {
   resolveHost?: (hostname: string) => Promise<string[]>;
   timeoutMs?: number;
   maxBytes?: number;
+  now?: () => number;
+  sleep?: (milliseconds: number) => Promise<void>;
+  /** Logged-in accounts for the professional network. No other host is sent a cookie or their agent. */
+  accounts?: readonly LinkedInAccount[];
+  /** A proxy every read may tunnel through, unless the professional network account carries its own. */
+  proxyUrl?: string | null;
+  /**
+   * Reads professional-network pages instead of the built-in fetch, when the partner reads
+   * them through a browser. Its rhythm gate, dwell and daily cap apply as for any read.
+   */
+  networkReader?: { read(url: string, options?: { simDay?: number | null; signal?: AbortSignal; maxTextChars?: number }): Promise<PageRead> };
 }
 
 type CheckResult = { status: QuoteStatus; detail: string };
@@ -60,8 +77,13 @@ export function createQuoteChecker(options: QuoteCheckOptions = {}): QuoteChecke
   const fetchFn = options.fetchFn;
   const resolveHost = options.resolveHost ?? (async (hostname: string) =>
     (await lookup(hostname, { all: true })).map((entry) => entry.address));
-  const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+  // An account dwells up to 75 seconds before its fetch on the professional network, so
+  // its checks need more room than a plain page: the timeout starts before the dwell.
+  const timeoutMs = options.timeoutMs ?? (options.accounts && options.accounts.length > 0 ? 120_000 : DEFAULT_TIMEOUT_MS);
   const maxBytes = options.maxBytes ?? DEFAULT_MAX_BYTES;
+  const sleep = options.sleep ?? ((milliseconds: number) => new Promise<void>((resolve) => setTimeout(resolve, milliseconds)));
+  const networkReader = options.networkReader;
+  const accountPool = options.accounts && options.accounts.length > 0 ? linkedInSessionPoolFor(options.accounts, options.now) : null;
 
   return {
     async check(urlText, excerpt, callerSignal) {
@@ -70,10 +92,24 @@ export function createQuoteChecker(options: QuoteCheckOptions = {}): QuoteChecke
       const signal = callerSignal ? AbortSignal.any([callerSignal, timeout]) : timeout;
 
       try {
+        // The professional network is read through the browser the partner supplies when
+        // there is one, with the account's rhythm deciding whether the page is opened now.
+        if (networkReader && isProfessionalNetworkUrl(urlText)) {
+          const page = await networkReader.read(urlText, { signal: callerSignal, maxTextChars: NETWORK_MAX_TEXT_CHARS });
+          if (page.status !== "ok") return unreachable(page.detail);
+          return judgeQuote([page.text], excerpt, { truncated: page.truncated === true });
+        }
         let currentUrl = urlText;
         let redirects = 0;
         let partialStandInDetail: string | null = null;
+        let accountIndex: number | null = null;
+        let dwelled = false;
         let response: Response;
+        // One account for the whole chain, picked when it first reaches the professional
+        // network: a person following a redirect keeps one session. No other host is ever
+        // sent a cookie. When every account rests, the check does not judge the quote and the
+        // host is not asked.
+        let chainAccount: { index: number; account: LinkedInAccount } | null = null;
 
         while (true) {
           const validation = await validateAddress(currentUrl, resolveHost);
@@ -89,15 +125,34 @@ export function createQuoteChecker(options: QuoteCheckOptions = {}): QuoteChecke
             continue;
           }
 
+          const pool = accountPool !== null && isProfessionalNetworkHost(new URL(currentUrl).hostname) ? accountPool : null;
+          if (pool && !chainAccount) {
+            chainAccount = pool.pick();
+            if (!chainAccount) {
+              return unreachable(pool.restingDetail() ?? "Every account asked for a pause.");
+            }
+          }
+          const account = chainAccount && isProfessionalNetworkHost(new URL(currentUrl).hostname) ? chainAccount : null;
+          accountIndex = account ? account.index : null;
+          // One human dwell before the first professional-network fetch of this check.
+          if (account && pool && !dwelled) {
+            await sleep(pool.dwellMs());
+            dwelled = true;
+          }
           const init: RequestInit = {
             method: "GET",
             redirect: "manual",
-            headers: { "User-Agent": USER_AGENT, Accept: ACCEPT },
+            headers: {
+              "User-Agent": account?.account.userAgent ?? USER_AGENT,
+              Accept: ACCEPT,
+              ...(account ? { Cookie: account.account.cookie } : {}),
+            },
             signal,
           };
+          const proxyUrl = account ? account.account.proxyUrl ?? options.proxyUrl : options.proxyUrl;
           response = fetchFn
             ? await fetchFn(currentUrl, init)
-            : await pinnedFetch(currentUrl, init, validation.addresses);
+            : await pinnedFetch(currentUrl, init, validation.addresses, proxyUrl ?? undefined);
 
           if (!REDIRECT_STATUSES.has(response.status)) break;
           if (redirects >= 3) return unreachable("The page redirects too many times.");
@@ -112,6 +167,12 @@ export function createQuoteChecker(options: QuoteCheckOptions = {}): QuoteChecke
           redirects += 1;
         }
 
+        // A page an account opened counts against its day. A network refusal rests the account
+        // until its next workday, so later checks rotate to another one.
+        if (accountIndex !== null) {
+          if (REFUSALS.has(response.status)) accountPool?.cool(accountIndex);
+          else accountPool?.noteRead(accountIndex);
+        }
         throwIfAborted(callerSignal);
         if (response.status !== 200) return unreachable(`The page returned HTTP ${response.status}.`);
 
@@ -121,26 +182,31 @@ export function createQuoteChecker(options: QuoteCheckOptions = {}): QuoteChecke
         const { text: body, truncated } = await readLimitedBody(response, maxBytes);
         throwIfAborted(callerSignal);
         const pageTexts = pageTextsForBody(contentType, body);
-        const readableLength = pageTexts.reduce((total, text) => total + quoteForm(text).length, 0);
-        const match = quoteInText(pageTexts, excerpt);
-
-        if (match.status === "too_short") return unreachable("The quote is too short to check.");
-        if (match.status === "found") return { status: "found", detail: "The quoted text appears on the page." };
-        if (truncated) return unreachable("The page is too long to check in full.");
-        if (partialStandInDetail) return unreachable(partialStandInDetail);
-        if (readableLength < 1_500) {
-          return unreachable("The page has too little readable text to check a quote against.");
-        }
-        return {
-          status: "not_found",
-          detail: `${match.missing} of ${match.fragments} quoted fragments were not found on the page.`,
-        };
+        return judgeQuote(pageTexts, excerpt, { truncated, partialStandInDetail });
       } catch (error) {
         if (callerSignal?.aborted) throw error;
         if (timeout.aborted) return unreachable("The page request timed out.");
         return unreachable("The page could not be reached.");
       }
     },
+  };
+}
+
+/** How much page text a browser read may bring back for a quote to be checked against. */
+const NETWORK_MAX_TEXT_CHARS = 300_000;
+
+/** Judges the quote's fragments against the page's text forms. */
+function judgeQuote(pages: string[], excerpt: string, notes: { truncated?: boolean; partialStandInDetail?: string | null } = {}): CheckResult {
+  const match = quoteInText(pages, excerpt);
+  if (match.status === "too_short") return unreachable("The quote is too short to check.");
+  if (match.status === "found") return { status: "found", detail: "The quoted text appears on the page." };
+  if (notes.truncated) return unreachable("The page is too long to check in full.");
+  if (notes.partialStandInDetail) return unreachable(notes.partialStandInDetail);
+  const readableLength = pages.reduce((total, text) => total + quoteForm(text).length, 0);
+  if (readableLength < 1_500) return unreachable("The page has too little readable text to check a quote against.");
+  return {
+    status: "not_found",
+    detail: `${match.missing} of ${match.fragments} quoted fragments were not found on the page.`,
   };
 }
 
@@ -178,23 +244,32 @@ function collectStringValues(value: unknown): string[] {
 }
 
 /** Makes an HTTP request using only addresses that have already passed validation. */
-export function pinnedFetch(urlText: string, init: RequestInit | undefined, addresses: readonly string[]): Promise<Response> {
+export function pinnedFetch(
+  urlText: string,
+  init: RequestInit | undefined,
+  addresses: readonly string[],
+  proxyUrl?: string | null,
+): Promise<Response> {
   const url = new URL(urlText);
   if (url.protocol !== "http:" && url.protocol !== "https:") return Promise.reject(new Error("Unsupported request protocol."));
   if (addresses.length === 0) return Promise.reject(new Error("No validated addresses were provided."));
 
-  const lookupPinned = createPinnedLookup(addresses);
-  const headers = new Headers(init?.headers);
+  const headers = Object.fromEntries(new Headers(init?.headers).entries());
   const requestOptions = {
     method: init?.method ?? "GET",
-    headers: Object.fromEntries(headers.entries()),
-    lookup: lookupPinned,
+    headers,
     ...(init?.signal ? { signal: init.signal } : {}),
   };
-  const request = url.protocol === "https:" ? httpsRequest : httpRequest;
+  if (!proxyUrl) {
+    return sendRequest(url, { ...requestOptions, lookup: createPinnedLookup(addresses) });
+  }
+  return sendThroughProxy(url, requestOptions, proxyUrl, init?.signal ?? undefined);
+}
 
+function sendRequest(url: URL, options: RequestOptions): Promise<Response> {
+  const request = url.protocol === "https:" ? httpsRequest : httpRequest;
   return new Promise((resolve, reject) => {
-    const outgoing = request(url, requestOptions, (incoming) => {
+    const outgoing = request(url, options, (incoming) => {
       const status = incoming.statusCode ?? 502;
       if (status === 101) {
         incoming.destroy();
@@ -225,6 +300,130 @@ export function pinnedFetch(urlText: string, init: RequestInit | undefined, addr
     });
     outgoing.once("error", reject);
     outgoing.end();
+  });
+}
+
+/**
+ * Opens a CONNECT tunnel to the proxy for the target and issues the request over it. The
+ * request's own address lookup is skipped: the proxy resolves the target. An https target is
+ * wrapped in TLS for its own host name before the request goes out; an http target is plain.
+ */
+async function sendThroughProxy(url: URL, options: RequestOptions, proxyUrl: string, signal?: AbortSignal): Promise<Response> {
+  let proxy: URL;
+  try {
+    proxy = new URL(proxyUrl);
+  } catch {
+    throw new Error("The proxy address is invalid.");
+  }
+  if (proxy.protocol !== "http:") throw new Error("Only HTTP proxies are supported.");
+  if (proxy.pathname !== "/" || proxy.search || proxy.hash) throw new Error("The proxy address must not include a path.");
+
+  const targetHost = url.hostname;
+  const targetPort = url.port ? Number(url.port) : url.protocol === "https:" ? 443 : 80;
+  const tunnel = await openProxyTunnel(proxy, targetHost, targetPort, signal);
+  try {
+    const connection = url.protocol === "https:" ? await secureTunnel(tunnel, targetHost, signal) : tunnel;
+    // No agent is set, so Node uses this already-connected socket directly.
+    return await sendRequest(url, { ...options, createConnection: () => connection });
+  } catch (error) {
+    tunnel.destroy();
+    throw error;
+  }
+}
+
+function openProxyTunnel(proxy: URL, targetHost: string, targetPort: number, signal?: AbortSignal): Promise<Socket> {
+  const tunnel = netConnect({ host: proxy.hostname, port: Number(proxy.port) || 80 });
+  return new Promise((resolve, reject) => {
+    let buffer = Buffer.alloc(0);
+    let settled = false;
+
+    const cleanup = () => {
+      tunnel.off("data", onData);
+      tunnel.off("error", fail);
+      tunnel.off("close", onClose);
+      signal?.removeEventListener("abort", onAbort);
+    };
+    const fail = (error: unknown) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      tunnel.destroy();
+      reject(error instanceof Error ? error : new Error(String(error)));
+    };
+    const onData = (chunk: Buffer) => {
+      buffer = Buffer.concat([buffer, chunk]);
+      const end = buffer.indexOf("\r\n\r\n");
+      if (end === -1) {
+        if (buffer.length > MAX_PROXY_HEADER_BYTES) fail(new Error("The proxy sent an oversized response."));
+        return;
+      }
+      const status = Number(/^HTTP\/\d(?:\.\d)?\s+(\d{3})/u.exec(buffer.subarray(0, end).toString("latin1"))?.[1]);
+      if (!(status >= 200 && status < 300)) {
+        fail(new Error(`The proxy refused the CONNECT tunnel with HTTP ${Number.isFinite(status) ? status : "unknown"}.`));
+        return;
+      }
+      settled = true;
+      cleanup();
+      // Any bytes after the CONNECT response belong to the target and are put back.
+      const rest = buffer.subarray(end + 4);
+      if (rest.length > 0) tunnel.unshift(rest);
+      resolve(tunnel);
+    };
+    const onClose = () => fail(new Error("The proxy closed the connection before accepting the tunnel."));
+    const onAbort = () => fail(signal?.reason instanceof Error ? signal.reason : new Error("The proxy tunnel was aborted."));
+
+    tunnel.on("data", onData);
+    tunnel.once("error", fail);
+    tunnel.once("close", onClose);
+    if (signal) {
+      if (signal.aborted) {
+        onAbort();
+        return;
+      }
+      signal.addEventListener("abort", onAbort, { once: true });
+    }
+
+    const auth = proxy.username || proxy.password
+      ? `Proxy-Authorization: Basic ${Buffer.from(`${decodeURIComponent(proxy.username)}:${decodeURIComponent(proxy.password)}`).toString("base64")}\r\n`
+      : "";
+    tunnel.write(`CONNECT ${targetHost}:${targetPort} HTTP/1.1\r\nHost: ${targetHost}:${targetPort}\r\n${auth}\r\n`);
+  });
+}
+
+function secureTunnel(tunnel: Socket, targetHost: string, signal?: AbortSignal): Promise<Socket> {
+  const servername = isIP(targetHost.replace(/^\[|\]$/gu, "")) === 0 ? targetHost : undefined;
+  const secure = tlsConnect({ socket: tunnel, servername });
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    const cleanup = () => {
+      secure.off("secureConnect", onConnect);
+      secure.off("error", fail);
+      signal?.removeEventListener("abort", onAbort);
+    };
+    const fail = (error: unknown) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      secure.destroy();
+      reject(error instanceof Error ? error : new Error(String(error)));
+    };
+    const onConnect = () => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      resolve(secure);
+    };
+    const onAbort = () => fail(signal?.reason instanceof Error ? signal.reason : new Error("The proxy tunnel was aborted."));
+
+    secure.once("secureConnect", onConnect);
+    secure.once("error", fail);
+    if (signal) {
+      if (signal.aborted) {
+        onAbort();
+        return;
+      }
+      signal.addEventListener("abort", onAbort, { once: true });
+    }
   });
 }
 
@@ -280,7 +479,6 @@ async function validateAddress(
   if (url.port) return { problem: "The address must use the default port for its scheme.", addresses: [] };
 
   const hostname = url.hostname.replace(/^\[|\]$/gu, "");
-  if (isNeverFetchHost(hostname)) return { problem: "This address is never requested.", addresses: [] };
   if (isLocalHostname(hostname)) return { problem: "The address points to a local network host.", addresses: [] };
 
   const ipVersion = isIP(hostname);

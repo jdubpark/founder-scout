@@ -1,9 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
-import { NEVER_FETCH_HOSTS, TERMS_BARRED_HOSTS } from "@agentswarm/shared";
 import { createLinkupSearchEngine, LINKUP_SEARCH_API } from "./search-linkup";
 
 describe("Linkup web search", () => {
-  it("caps results, excludes barred hosts, keeps barred links as pointers, and enforces its daily ceiling", async () => {
+  it("caps results, keeps public links, and enforces its daily ceiling", async () => {
     let requestUrl = "";
     let requestInit: RequestInit | undefined;
     const fetch = vi.fn(async (url: string, init?: RequestInit) => {
@@ -46,7 +45,6 @@ describe("Linkup web search", () => {
       depth: "fast",
       outputType: "searchResults",
       maxResults: 100,
-      excludeDomains: [...NEVER_FETCH_HOSTS, ...TERMS_BARRED_HOSTS.map(({ host }) => host)],
     });
 
     await expect(engine.search("another query", 2)).resolves.toEqual([]);

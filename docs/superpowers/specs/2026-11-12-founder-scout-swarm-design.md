@@ -36,12 +36,11 @@ measurement it improves against.
 - Contacting anyone without a person approving that specific message or call.
 - Scoring pedigree, or recording age, family, health or other personal attributes.
 - Presenting a guess as a fact, an estimate as a measurement, or simulated data as real.
-- Scraping LinkedIn or automating an account on it.
 
 ## 3. Constraints
 
 - No model API keys and no data licences were available. The machine has logged-in Claude Code and Codex command-line tools.
-- LinkedIn offers no general profile API; scraping it has ended badly for others (hiQ's consent judgment in 2022, Proxycurl's shutdown in 2025). See `docs/research/data-sources-and-compliance.md`.
+- LinkedIn offers no general profile API, and scraping it has ended badly for others (hiQ's consent judgment in 2022, Proxycurl's shutdown in 2025; see `docs/research/data-sources-and-compliance.md`). The partner accepted that risk on 2026-11-13: the swarm reads LinkedIn's public pages anonymously, and never logs in.
 - Real outcomes for founders take years, so ground truth is slow and scarce.
 - The reader of the dashboard is not an engineer.
 
@@ -259,7 +258,7 @@ go to the vendor.
 
 Rules the system enforces in code, not in prose:
 
-1. Nothing requests the professional network's own site (linkedin.com and its related hosts, listed in `packages/shared/src/policy.ts`). The shared fetch helper and the quote check refuse those hosts, and research agents run with a deny rule for them that was checked by running it: a rule for the bare host does not cover `www.`, so each host gets a bare rule and a wildcard rule. A link to a profile is kept as a pointer a person can open.
+1. LinkedIn is read anonymously by default, or through logged-in sessions the partner supplies (`LINKEDIN_COOKIES`, one Cookie header value per line; created or bought accounts supply theirs the same way), each pinned in order to its own exclusive IPv4 proxy (`LINKEDIN_PROXIES`; account vendors forbid residential and ISP proxies for logins) and user agent (`LINKEDIN_USER_AGENTS`), with `HUNT_PROXY_URL` routing every read through one proxy. Each account also keeps a human rhythm, seeded from its cookie so it is stable day to day: a workday with a lunch break, bursts of reading with pauses between them, a daily cap of reads and lighter weekends; a read outside the rhythm is held back and the host is not asked, and a network refusal rests the account until its next workday, three days on a repeat within a week. The reader and the quote checker each space their own reads, so an occasional pair of them can land close together — within what a person with two tabs does. The rhythm's numbers are starting points chosen so an account never looks busier than a person, and the server is expected to run in the partner's timezone. When the partner names one Octo Browser profile per account (`OCTO_PROFILE_UUIDS`, aligned to the cookies by index, each profile with its own fingerprint and sticky proxy configured in Octo), the network is read through that real Chromium window instead of plain requests: one tab per account, a dwell between pages, scrolling that moves as a reader does, the account's cookie seeded into the profile, and the fetch path carrying no account at all; the browser reader is unverified against the live service until a run says otherwise. Nothing in this system logs in by itself. The partner decided on 2026-11-13 that robots.txt is not obeyed, on this host or any other, and that a site's prose terms do not bar a host. Reads stay anonymous except for the sessions supplied here. A link to a profile is still kept as a pointer a person can open.
 2. Every evidence item has a source; unsupported, wrong-person and not-yet-checked items are excluded from scoring. A rubric answer that cites no verified evidence is treated as unsettled, and a founder whose evidence has not been fact-checked waits instead of being scored.
 3. Prohibited attributes are named in every people-reading prompt and have no field anywhere. One phrase-based check runs on every text before it is stored: model output, transcripts of model calls, and notes a person pastes in. Evidence and leads that state one are dropped; in other text the sentence is removed. Steering that states one is refused.
 4. Repository checkouts are shallow, size-capped, stripped of agent-instruction files and `.git`, and reviewed with read-only tools. A test plants a hostile hook and proves it does not run.
@@ -274,16 +273,24 @@ duties (EU AI Act Article 50 applies from August 2026), and notice duties to EU 
 The research file lists what was and was not verified; much of the compliance material rests on
 secondary sources and is flagged as such.
 
-### Professional profiles without reading LinkedIn
+### Professional profiles
 
-LinkedIn is where most professional history is written down, and the swarm still never requests
-it. The reasons, from `docs/research/linkedin-rules-and-official-access.md` and
-`docs/research/people-data-vendors.md` (researched 2026-11-13; not legal advice):
+LinkedIn is where most professional history is written down. Until 2026-11-13 the swarm never
+requested it; on that day the partner decided to read its public pages anonymously instead,
+accepting the risks below (`docs/research/linkedin-rules-and-official-access.md` and
+`docs/research/people-data-vendors.md`, researched 2026-11-13; not legal advice):
 
 - Its User Agreement bars scraping and automated access by any means, browser extensions included.
   Logged-in automation and made-up accounts are the facts behind every case it has won: hiQ (2022,
   permanent injunction and $500,000), Proxycurl (shut down in July 2025 and made to delete its data),
-  ProAPIs (consent judgment in 2026). A partner's own account can be restricted for the same conduct.
+  ProAPIs (consent judgment in 2026). A partner's own account can be restricted for the same conduct —
+  which is why the swarm never logs in by itself: anonymous by default, and logged-in reading only
+  through sessions the partner supplies, each keeping a human rhythm so it never looks busier than a
+  person, with a refused one resting until its next workday rather than being worked around.
+  The partner accepted creating and buying dedicated accounts for this on 2026-11-13, with these risks.
+  Live probe on 2026-11-13: LinkedIn answered anonymous requests with HTTP 403 (company page) and 999
+  with a login wall (profile page), browser-like user agent included, so what anonymous reading yields
+  is limited until proven otherwise on a live hunt.
 - No official programme gives a bulk, storable feed of other people's work history. The official
   routes are consent-based and one member at a time, and the Sales Navigator API is closed to new
   partners.
@@ -292,25 +299,39 @@ it. The reasons, from `docs/research/linkedin-rules-and-official-access.md` and
 - France's regulator fined the vendor of a LinkedIn contact-details extension EUR 240,000 in
   December 2024 for collecting restricted details, keeping them too long and telling people late.
 
-So the same information arrives four ways, none of which touches the site:
+So the same information arrives six ways:
 
 | Route | What it gives | Scale | Status |
 |---|---|---|---|
-| A data vendor's API (People Data Labs first) | Search for people who recently became founders; a known founder's work history; a company's team | Hundreds of millions of records, paid per record returned | Adapter built; needs `PDL_API_KEY`; unverified against the live service |
+| LinkedIn's own public pages | What its pages serve an anonymous reader, or a partner-supplied logged-in session that keeps a human rhythm — through a real Octo Browser profile when one is named per account | Per page, within the account's rhythm; a refusal is final | Built; verified 2026-11-13 with one live logged-in session (reader read a profile; the quote check found a phrase there); the Octo browser path verified live 2026-11-13 (a real profile, logged in, read and scrolled) |
+| A data vendor's API (People Data Labs) | Search for people who recently became founders; a known founder's work history; a company's team | Hundreds of millions of records, paid per record returned | Adapter built; needs `PDL_API_KEY`; unverified against the live service |
+| Bright Data's LinkedIn Scraper API | A known profile's about, experience and education; a search by name | Paid per delivered record (5,000 free per month) | Adapter built; needs `BRIGHTDATA_API_KEY`; verified 2026-11-13 with one live profile record (and one dead page) |
 | A partner's own exported contact list | Who the partners know at a company. A contact whose title changes to a founder's between two uploads becomes a lead | Each partner's own connections | Built |
-| Search results | Names, links and snippets a search engine shows | Per query | Research agents may search; the deny rule stops them opening the pages |
+| Search results | Names, links and snippets a search engine shows | Per query | Research agents may search and open what they serve |
 | A person, by hand | A partner sees someone on LinkedIn or Sales Navigator and types the name and link in | Human pace | Built |
+
+The first login of a bought account is the fragile step. LinkedIn treats it as suspicious and
+demands a phone code when the exit country does not match the account's registration country, or
+when the device was used for another account. So the session is minted once, in a fresh antidetect
+profile (Octo Browser) behind an exclusive IPv4 proxy in the account's own country, after a few
+minutes of ordinary logged-out browsing; the resulting `li_at` cookie and the profile's user agent
+go into `LINKEDIN_COOKIES` / `LINKEDIN_USER_AGENTS`, and the account is never logged in again by
+the system. If a code is still asked, it is completed once by a person; an account that ships with
+cookies skips the step entirely.
 
 What the agents add is the work between the records: code turns the thesis into the vendor query,
 the matcher recognises a vendor record as the person already seen on GitHub or Hacker News, and a
 vendor record is a claim like any other, fact-checked before it counts.
 
-People Data Labs is first because its documentation is public, it has a free tier, it can look a
-person up by name and company without a profile link, and it describes its sources as data partners
-and public records. Specter and Harmonic sell the exact "just left to start something" signal, by
-sales contract. The adapter asks the vendor only for professional fields; birth dates, phone numbers
-and personal email addresses are never requested, and the email column of a contact list is never
-read.
+People Data Labs comes first for discovery because its documentation is public, it has a free tier,
+it can look a person up by name and company without a profile link, and it describes its sources as
+data partners and public records. Bright Data comes first for enrichment of a known profile, because
+its LinkedIn Scraper API returns about, experience and education for a profile link, priced per
+delivered record; it is preferred for lookups when both keys are set, while People Data Labs keeps
+the discovery feed. Specter and Harmonic sell the exact "just left to start something" signal, by
+sales contract. Each adapter asks the vendor only for professional fields; birth dates, phone
+numbers and personal email addresses are never requested, and the email column of a contact list is
+never read.
 
 Not built, and needed before this holds data on people in the EU or UK: a recorded legitimate-interest
 test, a notice to each person within a month of first holding their data, and a retention limit
@@ -704,31 +725,19 @@ out. So a hunt runs for days across scheduled runs, survives a restart, costs th
 people, nothing launched. It is a proxy for a low valuation, which no public page states, and
 the page shows it as a label, not as a price.
 
-**Reading the web within its rules** (`packages/core/src/sources/web.ts`). The reader never
-requests a host on the deny list or a private address, connects only to the address it
-validated, reads robots.txt and obeys it (RFC 9309: the group that names the reader, else the
-general one; the longest rule wins; paths are compared with their escapes made the same; no
-answer means no; a file with rules too long or too many to apply means no to the whole site),
-waits between requests to one host and longer when the site asks, sends no login and no cookie,
-and gives up on anything large or not text. A robots.txt is a stranger's text: its patterns
-are matched by hand, because turned into a regular expression one crafted rule can hold a
-server for minutes. It does not log in, does not solve challenges and does not disguise itself: a site that
-says no is a blocked page, counted on its trail.
-
-robots.txt is not the whole contract. Several places where early founders show up allow every
-reader in robots.txt and forbid automated reading in their terms: Devpost, Y Combinator's own
-site, Substack. Reddit and Indie Hackers refuse in robots.txt itself, the second by naming AI
-agents. Product Hunt's API is not for business use, and X is a paid API. The reader does not
-request any of them (`TERMS_BARRED_HOSTS` in `policy.ts`, each with its rule; the sentences are
-quoted in `docs/research/open-web-hunting-grounds.md`). The list also bars YouTube, Vimeo and
-Spotify media hosts. Hacker News is read through its public API. The list is a floor: it will need
-a person to add to it as trails reach new sites.
+**Reading the web** (`packages/core/src/sources/web.ts`). The reader does not obey robots.txt.
+It refuses a private address, connects only to the address it validated, waits between requests
+to one host by its own gap, sends no login and no cookie of its own, and gives up on anything
+large or not text. It does not log in, does not solve challenges and does not disguise itself:
+a site that answers with a refusal is a blocked page, counted on its trail. A site's prose terms
+do not bar a host. The partner decided this on 2026-11-13. The sentences that sites publish about
+automated reading are still quoted in `docs/research/open-web-hunting-grounds.md`. Hacker News is
+read through its public API. Posts on X are read through xAI and, when a token is set, X's API.
 
 The reader names itself `web-reader/1.0` unless `HUNT_USER_AGENT` says otherwise. A reader
 should carry a name and a contact address of its owner, so a site can refuse it by name; that
 name is the owner's to choose, so it is a setting and not a default. Recordings are fetched under
-the same name. A robots.txt answered with 401, 403 or 429, or one too large to read in full
-(512 KiB), means the site is not read; a missing one still means no rules.
+the same name.
 
 **Where the early signal is.** The one place with published timing is GitHub: start-ups raise
 their activity there in the twelve months before a first financing round (Conti, Peukert and
@@ -900,8 +909,8 @@ gaps, retention, and EU or UK notices are described below.
 
 **Recordings.** A person can add a recording on a founder's page by public link or upload. The
 talks analyst can queue up to three recordings per founder in one run. The fetcher accepts direct
-HTTP audio or video files only. It uses the page reader's host, address, robots.txt, redirect and
-`HUNT_USER_AGENT` checks, and refuses players, barred or private hosts, non-media responses and
+HTTP audio or video files only. It uses the page reader's host, address, redirect and
+`HUNT_USER_AGENT` checks, and refuses players, private hosts, non-media responses and
 files over 150 MB by default. Before transcription, `ffprobe` measures length. If that fails, code
 uses a file-size bound at 6 kbit/s. A recording that will not fit the run's remaining allowance is
 refused before transcription. A transcript is made once, detected personal-attribute sentences are
@@ -1010,10 +1019,9 @@ wrote. The one fact that comes from the API and not from the model is which post
 returned. The research, with each sentence of the documentation it rests on, is in
 `docs/research/grok-x-search.md`.
 
-**How code checks a post's words.** X's robots.txt refuses a generic agent. Its embed
-address (`publish.x.com/oembed`), which X documents as open and needing no key, is refused by
-robots.txt on both of its hosts as well. This system obeys robots.txt, so neither is read.
-What code can read is X's own API, with the fund's credentials: one post by its id, for a fee.
+**How code checks a post's words.** The X jobs do not open a page on X, and they do not call
+the embed address (`publish.x.com/oembed`). What code reads is X's own API, with the fund's
+credentials: one post by its id, for a fee.
 With `X_BEARER_TOKEN` set, every post xAI names is read that way and its words, author, date
 and counts are X's. Without it, a post stays a model's report, labelled as one, and the quote
 check does not run on X.
@@ -1029,8 +1037,8 @@ check does not run on X.
    application describes the use, and its terms require stored posts to follow X, which means
    a refresh. Built on 2026-11-13, on top of 1, after the owner supplied the credentials. It
    checks what Grok found; it does not find anything itself.
-3. Reading the embed address despite robots.txt. Not built. That is the owner's decision, as
-   it was for the professional network, and it has not been made.
+3. Reading the embed address. Not built. Posts xAI names are read through X's API when a token
+   is set.
 
 **What code decides.**
 
@@ -1145,19 +1153,15 @@ batches), a16z speedrun (the current cohort), 500 Global (companies first funded
 eighteen months) and Berkeley SkyDeck (two newest batches), ranks them by the words of the
 query and by recency, and takes turns between programmes. A hit is the company's own site, or
 for speedrun the programme's page about the company, which names its founders. The hunt then
-does what it does with any hit: a runner picks, code reads the page within robots.txt, and a
+does what it does with any hit: a runner picks, code reads the page, and a
 person is kept only when the page names them. 500 Global's list names founders; those names
-are not used, because a person enters only from a page a runner read. Y Combinator's own pages
-are on the list of sites this branch does not read, so its founders come from each company's
-own site. Listings are kept for six hours, and before a listing is asked for, the directory's
-robots.txt is read and obeyed under the name the page reader uses, so a directory that later
-refuses is no longer read. Requests to one directory are two seconds apart, as the page
-reader's are, or as far apart as its robots.txt asks; a directory that asks for more time than
-one search has is not listed. A record needs only a name and a site: the newest companies leave
+are not used, because a person enters only from a page a runner read. The listing uses Y
+Combinator's open mirror and does not open ycombinator.com, so a hit from that programme is
+the company's own site. Listings are kept for six hours. Requests to one directory are two
+seconds apart, as the page reader's are. A record needs only a name and a site: the newest companies leave
 other fields blank. What each directory allows, and the ones left out
-and why (Techstars hands its list out behind a key in the page; Antler's robots.txt refuses
-its company pages; Entrepreneurs First loads the rest of its list by a call that was not
-identified), is in `docs/research/accelerator-directories.md`.
+and why (Techstars hands its list out behind a key in the page; Entrepreneurs First loads the rest of its list by a call that was not
+identified), is in `docs/research/accelerator-directories.md`. Antler's company pages were left unread on the day robots.txt was obeyed; that file is not a reason to skip a page.
 
 **What these add to the knowledge of a founder.** A founder found in a batch or on X is
 screened, then investigated by the existing researchers (background, their part in the company,
@@ -1184,7 +1188,7 @@ the posts read; and how Grok writes a link inside a quote, which the matcher all
 has not seen.
 
 The accelerator engine was run against the four live directories on 2026-11-13: ten requests
-(four robots.txt files, six listings), a hundred hits, all four programmes present. That is one day's page shapes; a directory that changes its page stops
+(four robots.txt files and six listings, from the day robots.txt was still fetched), a hundred hits, all four programmes present. The engine no longer fetches robots.txt. That is one day's page shapes; a directory that changes its page stops
 being listed and the other three carry on.
 
 **Decisions the owner made on 2026-11-13.** Asked about the first two below, the owner
@@ -1250,9 +1254,8 @@ holds the credentials.
    what it spent before raising it. `x.enabled` turns off all reading of X but the upkeep of
    posts already on file; `x.media` turns off video and images. When the key is made, switch
    zero data retention on for its team: xAI's terms ask for that where personal data is sent.
-7. **Y Combinator's own company pages are not decided here.** Its robots.txt allows them and
-   its terms forbid scraping. This branch does not read them; the page reader's policy on the
-   branch this lands on decides, and nothing in this section changes it.
+7. **Y Combinator's company pages are read by the YC scout** through the page reader. The
+   accelerator listing uses the open mirror and does not open ycombinator.com.
 
 The description for X's developer account, to be checked against what is then running and
 with the model providers named:

@@ -122,8 +122,8 @@ export function createModelSearchEngine(options: {
 }
 
 /**
- * Search of X through xAI's search tool inside a budgeted hunt job. Code cannot open a post on X
- * (its robots.txt refuses a generic agent), so each hit is held whole for a runner to read.
+ * Search of X through xAI's search tool inside a budgeted hunt job. These jobs do not open a post
+ * on X, so each hit is held whole for a runner to read.
  */
 export function createXSearchEngine(options: {
   status: () => Promise<{ configured: boolean; detail: string }>;

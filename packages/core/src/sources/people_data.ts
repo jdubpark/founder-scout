@@ -1,7 +1,7 @@
 /**
- * Professional-profile data comes from a data vendor under contract or not at
- * all. This system never requests the professional network's own hosts. A
- * profile link may be retained as a lookup key, but is never fetched.
+ * Professional-profile data comes from a data vendor under contract, from a
+ * partner's own exported contact list, or from public pages, including the
+ * professional network's own, read anonymously like any public page.
  *
  * To add a vendor, implement ProfileDataVendor in one file and pass it to
  * createPeopleDataAdapter in index.ts.
@@ -10,10 +10,10 @@
 import type { SourceAdapter, SourceFetchRequest, SourceFetchResult } from "../contracts";
 
 export const NOT_CONFIGURED_DETAIL =
-  "Not configured. Professional-profile data comes from a data vendor under contract or not at all. The system never requests the professional network's own site.";
+  "Not configured. Professional-profile data comes from a data vendor under contract or not at all.";
 
 export const NOT_CONFIGURED_ERROR =
-  "Professional-profile data is not configured. It must come from a data vendor under contract or not at all. The system never requests the professional network's own site.";
+  "Professional-profile data is not configured. It must come from a data vendor under contract or not at all.";
 
 /** What a licensed vendor adapter implements. Same contract as a SourceAdapter, without the id. */
 export interface ProfileDataVendor {

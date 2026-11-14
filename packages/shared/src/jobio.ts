@@ -736,6 +736,7 @@ export interface JobIO {
   "scout.github": { input: ScoutInput; output: ScoutOutput };
   "scout.research": { input: ScoutInput; output: ScoutOutput };
   "scout.talent": { input: ScoutInput; output: ScoutOutput };
+  "scout.yc": { input: ScoutInput; output: ScoutOutput };
   "hunt.navigate": { input: NavigateInput; output: NavigateOutput };
   "hunt.search": { input: SearchInput; output: SearchOutput };
   "hunt.xsearch": { input: XSearchInput; output: SearchOutput };
@@ -771,6 +772,7 @@ export const MODEL_JOB_IDS = [
   "scout.github",
   "scout.research",
   "scout.talent",
+  "scout.yc",
   "hunt.navigate",
   "hunt.search",
   "hunt.xsearch",
@@ -802,6 +804,7 @@ export const JOB_OUTPUT_SCHEMAS = {
   "scout.github": ScoutOutputSchema,
   "scout.research": ScoutOutputSchema,
   "scout.talent": ScoutOutputSchema,
+  "scout.yc": ScoutOutputSchema,
   "hunt.navigate": NavigateOutputSchema,
   "hunt.search": SearchOutputSchema,
   "hunt.xsearch": SearchOutputSchema,

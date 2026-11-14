@@ -1,8 +1,11 @@
 import { brotliCompressSync, gzipSync } from "node:zlib";
-import { createServer } from "node:http";
+import { createServer, type Server } from "node:http";
+import { connect as netConnect } from "node:net";
 import { describe, expect, it } from "vitest";
 import { createPinnedLookup, createQuoteChecker, pinnedFetch } from "./quote-check";
 import type { FetchFn } from "./http";
+import { personaFor, type LinkedInAccount } from "./sessions";
+import type { PageRead } from "../contracts";
 
 const publicResolver = async () => ["93.184.216.34"];
 
@@ -10,8 +13,32 @@ function page(body: string, status = 200, contentType = "text/html"): Response {
   return new Response(body, { status, headers: { "content-type": contentType } });
 }
 
-function checker(fetchFn: FetchFn, options: { resolveHost?: (hostname: string) => Promise<string[]>; maxBytes?: number } = {}) {
-  return createQuoteChecker({ fetchFn, resolveHost: options.resolveHost ?? publicResolver, maxBytes: options.maxBytes });
+/** 2026-11-10 is a Tuesday, 09:00 local. */
+const AT_WORK = new Date(2026, 10, 10, 9, 0).getTime();
+
+/** A cookie whose persona is at work at 09:00 that Tuesday, so account checks are eligible. */
+function networkCookie(label: string): string {
+  for (let index = 0; index < 500; index += 1) {
+    const cookie = `li_at=${label}-${index}`;
+    const persona = personaFor(cookie);
+    if (persona.workdayStartMinute <= 9 * 60 && persona.workdayStartMinute + persona.workdayMinutes > 9 * 60 + 30) return cookie;
+  }
+  throw new Error(`No cookie for ${label} is at work at the test time.`);
+}
+
+function checker(
+  fetchFn: FetchFn,
+  options: { resolveHost?: (hostname: string) => Promise<string[]>; maxBytes?: number; accounts?: readonly LinkedInAccount[]; now?: () => number; networkReader?: { read(url: string, options?: { simDay?: number | null; signal?: AbortSignal; maxTextChars?: number }): Promise<PageRead> } } = {},
+) {
+  return createQuoteChecker({
+    fetchFn,
+    resolveHost: options.resolveHost ?? publicResolver,
+    maxBytes: options.maxBytes,
+    accounts: options.accounts,
+    now: options.now ?? (() => AT_WORK),
+    sleep: async () => undefined,
+    ...(options.networkReader ? { networkReader: options.networkReader } : {}),
+  });
 }
 
 function longText(extra = ""): string {
@@ -27,7 +54,112 @@ describe("createQuoteChecker", () => {
     const normalized = await checker(async () => page("<p>She said <em>“we’re ready”</em> — after a long<br>delay.</p>"))
       .check("https://example.test/story", "She said \"we're ready\" - after a long\ndelay.");
     expect(normalized.status).toBe("found");
+  });
 
+  it("sends a supplied session cookie when checking the professional network", async () => {
+    const quote = "The founder built the first version of the product alone.";
+    const cookie = networkCookie("quote-session");
+    const sent: Array<{ url: string; cookie: string | null }> = [];
+    const result = await checker(async (url, init) => {
+      sent.push({ url, cookie: new Headers(init?.headers).get("cookie") });
+      return page(`<p>${quote}</p>`);
+    }, { accounts: [{ cookie, proxyUrl: null, userAgent: null }] }).check("https://www.linkedin.com/in/founder", quote);
+
+    expect(sent).toEqual([{ url: "https://www.linkedin.com/in/founder", cookie }]);
+    expect(result.status).toBe("found");
+  });
+
+  it("does not judge a quote while every account rests, and asks the host nothing", async () => {
+    const quote = "The founder built the first version of the product alone.";
+    let requested = 0;
+    const beforeWork = new Date(2026, 10, 10, 6, 30).getTime();
+    const result = await checker(async () => {
+      requested += 1;
+      return page(`<p>${quote}</p>`);
+    }, { accounts: [{ cookie: networkCookie("quote-resting"), proxyUrl: null, userAgent: null }], now: () => beforeWork })
+      .check("https://www.linkedin.com/in/founder", quote);
+
+    expect(result.status).toBe("unreachable");
+    expect(result.detail).toMatch(/pause until \d{2}:\d{2}/);
+    expect(requested).toBe(0);
+  });
+
+  it("checks a professional-network quote through the browser reader, without the fetch path", async () => {
+    const quote = "The founder built the first version of the product alone.";
+    const reads: string[] = [];
+    let fetched = 0;
+    const result = await checker(async () => {
+      fetched += 1;
+      return page(`<p>${quote}</p>`);
+    }, {
+      networkReader: {
+        async read(url, options) {
+          reads.push(`${url} ${options?.maxTextChars ?? 0}`);
+          return { status: "ok", detail: "Page read.", url, title: "", text: `Lead-in words. ${quote} More words follow the quote.`, links: [] };
+        },
+      },
+    }).check("https://www.linkedin.com/in/founder", quote);
+
+    expect(result.status).toBe("found");
+    expect(reads).toEqual(["https://www.linkedin.com/in/founder 300000"]);
+    expect(fetched).toBe(0);
+  });
+
+  it("leaves a quote on the browser path unjudged when the account rests", async () => {
+    const quote = "The founder built the first version of the product alone.";
+    const result = await checker(async () => page(`<p>${quote}</p>`), {
+      networkReader: {
+        async read(url) {
+          return { status: "blocked", detail: "The account asked for a pause until 13:47.", url, title: "", text: "", links: [] };
+        },
+      },
+    }).check("https://www.linkedin.com/in/founder", quote);
+
+    expect(result.status).toBe("unreachable");
+    expect(result.detail).toMatch(/pause until \d{2}:\d{2}/);
+  });
+
+  it("leaves a quote on a cut browser page unjudged rather than called wrong", async () => {
+    const quote = "The founder built the first version of the product alone.";
+    const missing = "These words appear nowhere on the cut page at all, not even once.";
+    const excerpt = `${quote} ... ${missing}`;
+    const result = await checker(async () => page(`<p>${quote}</p>`), {
+      networkReader: {
+        async read(url) {
+          return { status: "ok", detail: "Page read.", url, title: "", text: "x".repeat(300_000), links: [], truncated: true };
+        },
+      },
+    }).check("https://www.linkedin.com/in/founder", excerpt);
+
+    expect(result).toMatchObject({ status: "unreachable", detail: "The page is too long to check in full." });
+  });
+
+  it("checks a quote on any other host through the fetch path when a browser reader is supplied", async () => {
+    const quote = "The company launched its first product in March 2024.";
+    let browserReads = 0;
+    const result = await checker(async () => page(`<p>${quote}</p>`), {
+      networkReader: {
+        async read(url) {
+          browserReads += 1;
+          return { status: "ok", detail: "Page read.", url, title: "", text: quote, links: [] };
+        },
+      },
+    }).check("https://example.test/story", quote);
+
+    expect(result.status).toBe("found");
+    expect(browserReads).toBe(0);
+  });
+
+  it("requires every separated fragment to appear", async () => {
+    const quote = "The company launched its first product ... The founders expanded into Europe.";
+    const found = await checker(async () => page("<p>The company launched its first product.</p><p>The founders expanded into Europe.</p>")).check(
+      "https://example.test/story",
+      quote,
+    );
+    expect(found.status).toBe("found");
+  });
+
+  it("requires every separated fragment and rejects a changed word", async () => {
     const fragments = await checker(async () => page("<p>The company launched its first product.</p><p>The founders expanded into Europe.</p>"))
       .check("https://example.test/story", "The company launched its first product ... The founders expanded into Europe.");
     expect(fragments.status).toBe("found");
@@ -108,9 +240,8 @@ describe("createQuoteChecker", () => {
       .check("https://arxiv.org/pdf/2401.01234v2.pdf", arxivQuote)).resolves.toMatchObject({ status: "found" });
   });
 
-  it("blocks denied, local and private addresses before initial or redirected requests", async () => {
+  it("blocks private and non-default-port addresses before fetching them", async () => {
     const blocked = [
-      "https://www.linkedin.com/in/person",
       "http://127.0.0.1/",
       "http://[::1]/",
       "http://10.0.0.5/",
@@ -223,6 +354,59 @@ describe("createQuoteChecker", () => {
     ]);
   });
 
+  it("tunnels an http request through a CONNECT proxy with basic proxy authorization", async (context) => {
+    const target = createServer((_request, response) => {
+      response.writeHead(200, { "content-type": "text/plain" });
+      response.end("served through the tunnel");
+    });
+    const tunnels: Array<{ target: string; authorization: string | null }> = [];
+    const proxy = createServer();
+    proxy.on("connect", (request, clientSocket, head) => {
+      const authorization = request.headers["proxy-authorization"];
+      tunnels.push({
+        target: request.url ?? "",
+        authorization: typeof authorization === "string" ? authorization : null,
+      });
+      const [host, port] = (request.url ?? "").split(":");
+      const upstream = netConnect(Number(port), host, () => {
+        clientSocket.write("HTTP/1.1 200 Connection Established\r\n\r\n");
+        if (head.length > 0) upstream.write(head);
+        clientSocket.pipe(upstream);
+        upstream.pipe(clientSocket);
+      });
+      upstream.on("error", () => clientSocket.destroy());
+      clientSocket.on("error", () => upstream.destroy());
+    });
+    try {
+      await listen(target);
+      await listen(proxy);
+    } catch (error) {
+      await close(target);
+      await close(proxy);
+      if ((error as NodeJS.ErrnoException).code !== "EPERM") throw error;
+      context.skip();
+      return;
+    }
+    try {
+      const proxyAddress = proxy.address();
+      const targetAddress = target.address();
+      if (!proxyAddress || typeof proxyAddress === "string" || !targetAddress || typeof targetAddress === "string") {
+        throw new Error("A local server did not bind to a TCP port.");
+      }
+      const response = await pinnedFetch(
+        `http://127.0.0.1:${targetAddress.port}/x`,
+        undefined,
+        ["127.0.0.1"],
+        `http://user:pass@127.0.0.1:${proxyAddress.port}`,
+      );
+      expect(await response.text()).toBe("served through the tunnel");
+      expect(tunnels).toEqual([{ target: `127.0.0.1:${targetAddress.port}`, authorization: "Basic dXNlcjpwYXNz" }]);
+    } finally {
+      await close(target);
+      await close(proxy);
+    }
+  });
+
   it("decodes gzip and Brotli responses and rejects an unsupported compression", async (context) => {
     const text = "A sentence that only makes sense once the compression is undone. ".repeat(20);
     const server = createServer((request, response) => {
@@ -273,3 +457,15 @@ describe("createQuoteChecker", () => {
     await expect(pending).rejects.toBe(reason);
   });
 });
+
+async function listen(server: Server): Promise<void> {
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", () => resolve());
+  });
+}
+
+async function close(server: Server): Promise<void> {
+  if (!server.listening) return;
+  await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+}

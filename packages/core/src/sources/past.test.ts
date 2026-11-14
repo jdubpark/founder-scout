@@ -167,7 +167,6 @@ describe("past launch collection", () => {
       : response({ id: "empty", children: [{ author: "other", created_at: "2018-02-03T11:00:00.000Z", text: "not the author", children: [] }] });
     expect(await collectLaunchPosts({ from: "2018-01-01", to: "2018-12-31", fetchFn, pauseMs: 0 })).toEqual([]);
   });
-
   it("keeps one dated launch per company and intake", async () => {
     const fetchFn: FetchFn = async (address) => {
       const url = new URL(address);

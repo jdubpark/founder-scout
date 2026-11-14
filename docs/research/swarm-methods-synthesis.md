@@ -95,8 +95,8 @@ The shape follows what this note found to work, and stops where it found things 
 
 Two things the hunt does that none of the five frameworks was found to do: it spends a wave
 across lines of work by what each has yielded, with a head start for a new one and a floor for
-every one; and it treats a site's own rules (robots.txt, and terms that forbid automated
-reading) as part of the address check, before any request.
+every one; and it checks an address before any request (a named public host, never a private
+network). It does not obey robots.txt. A site's prose terms do not bar a host.
 
 What the hunt does not have, and the evals do: a held-out measure. A trail's yield is counted
 on what the fit screener kept, which is another agent's judgment, not an outcome.

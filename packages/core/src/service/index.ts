@@ -3,7 +3,7 @@ import { fileURLToPath } from "node:url";
 import {
   AGENT_CLASSES, BASE_CONFIG, JOBS, MODEL_JOB_IDS, SOURCES, STAGES, awaitsCall, isContributorModel, mayUseContributorModel, runnerPools,
   buildEffectiveSteering, coerceParam, effectiveRoute, getParamDef, isClassId, isCompanyReasonFor, isJobId, redactPhoneNumbers,
-  isNeverFetchUrl, isReasonFor, newId, normalizeCompanyName, normalizeRoundLabel, normalizeScope, overlayConfig, paramsFor, scopeLabel, stageLabel,
+  isProfessionalNetworkUrl, isReasonFor, newId, normalizeCompanyName, normalizeRoundLabel, normalizeScope, overlayConfig, paramsFor, scopeLabel, stageLabel,
   scopeLevel, stableId, suggestSteering, suggestionTextKey, summarizeCalls, swarmIdentity,
   type Agent, type AgentIdentity, type ApiClient, type AddTrailInput, type UpdateTrailInput, type Pools,
   type AddFounderInput, type CallExample, type ClassId, type CoachReport, type CompanyFeedback, type CompanyQuery, type Directive, type DirectiveFilter,
@@ -18,7 +18,7 @@ import type {
 import { ServiceError } from "../contracts";
 import { openStore } from "../db";
 import { createSimDialler, createSimRepoFinder, createSimSources, createSimWorld } from "../sim";
-import { createLiveDialler, createLivePeopleLookup, createLiveXPostReader, createLiveRepoFinder, createLiveSources, createQuoteChecker, createLinkupSearchEngine, createLiveWebAccess, createModelSearchEngine, createXSearchEngine, createSimWebAccess, createLiveTranscriber, createMediaFetcher, mediaMaxBytes, probeMediaDuration, looksLikeFounder, parseConnectionsCsv } from "../sources";
+import { createLiveDialler, createLivePeopleLookup, createLiveXPostReader, createLiveRepoFinder, createLiveSources, createQuoteChecker, createLinkupSearchEngine, createLiveWebAccess, createModelSearchEngine, createXSearchEngine, createSimWebAccess, createLiveTranscriber, createMediaFetcher, mediaMaxBytes, probeMediaDuration, huntProxyFromEnv, linkedinAccountsFromEnv, looksLikeFounder, parseConnectionsCsv } from "../sources";
 import { createProviderRegistry } from "../providers";
 import { createJobRegistry, createExecuteJob, findSensitive, loadSkillLibrary, redactSensitive } from "../jobs";
 import { createRunController } from "../engine";
@@ -846,7 +846,7 @@ export function createSwarmService(deps: ServiceDeps): SwarmService {
           if (["github.com", "gitlab.com", "codeberg.org", "bitbucket.org"].some((site) => host === site || host.endsWith(`.${site}`))) links.github = link;
           else if (host === "x.com" || host.endsWith(".x.com") || host === "twitter.com" || host.endsWith(".twitter.com")) links.x = link;
           else if (host === "scholar.google.com") links.scholar = link;
-          else if (isNeverFetchUrl(link)) links.linkedin = link;
+          else if (isProfessionalNetworkUrl(link)) links.linkedin = link;
           else links.site = link;
         }
         const id = newId("led");
@@ -1305,17 +1305,6 @@ export function createApp(options: AppOptions): App {
   const store = openStore(options.dbPath);
   const world = createSimWorld({ seed: options.simSeed });
   const simSources = createSimSources(world);
-  const liveSources = createLiveSources(env);
-  const media = createMediaFetcher({ env });
-  const recordingService = createRecordingService({
-    store,
-    dataDir: options.dataDir,
-    maxBytes: mediaMaxBytes(env),
-    checkAddress: media.checkAddress,
-    now: options.now,
-  });
-  const simRepos = createSimRepoFinder(world);
-  const liveRepos = createLiveRepoFinder({ env, workDir: join(options.dataDir, "repos") });
   const providers = createProviderRegistry(env);
   const web = {
     sim: createSimWebAccess(world),
@@ -1335,6 +1324,21 @@ export function createApp(options: AppOptions): App {
       ],
     }),
   };
+  // One reader for the hunt and the scouts that read pages (YC), so their reads of one host are spaced together.
+  const liveSources = createLiveSources(env, { webReader: web.live.reader });
+  const media = createMediaFetcher({ env });
+  const recordingService = createRecordingService({
+    store,
+    dataDir: options.dataDir,
+    maxBytes: mediaMaxBytes(env),
+    checkAddress: media.checkAddress,
+    now: options.now,
+  });
+  const simRepos = createSimRepoFinder(world);
+  const liveRepos = createLiveRepoFinder({ env, workDir: join(options.dataDir, "repos") });
+  // In browser mode the professional network is read by one reader everywhere, so its
+  // rhythm covers the hunt and the quote checks together; only the fetch mode carries accounts.
+  const networkReader = web.live.networkReader ?? null;
   let defaultPoolsPromise: Promise<Pools> | null = null;
   const defaultPools = (): Promise<Pools> => {
     defaultPoolsPromise ??= providers.statuses().then((statuses) => {
@@ -1350,7 +1354,10 @@ export function createApp(options: AppOptions): App {
     store,
     jobs,
     executeJob,
-    quotes: createQuoteChecker(),
+    quotes: createQuoteChecker({
+      ...(networkReader ? { networkReader } : { accounts: linkedinAccountsFromEnv(env) }),
+      proxyUrl: huntProxyFromEnv(env),
+    }),
     people: createLivePeopleLookup(env),
     xPosts: createLiveXPostReader(env),
     transcriber: {

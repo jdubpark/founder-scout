@@ -1,8 +1,8 @@
-import { cleanUrl, isOffLimitsHost } from "@agentswarm/shared";
+import { cleanUrl } from "@agentswarm/shared";
 import type { SearchEngine, SearchHit } from "../contracts";
 import { defaultFetch, type FetchFn } from "./http";
 import { asRecord, cleanPlain, normalizeLimit } from "./util";
-import { DEFAULT_GAP_MS, readerIdentity, robotsVerdict } from "./web";
+import { DEFAULT_GAP_MS, readerIdentity } from "./web";
 
 const REQUEST_TIMEOUT_MS = 20_000;
 
@@ -12,8 +12,6 @@ const FIVE_HUNDRED_URL = "https://500.co/api/startups";
 const SKYDECK_URL = "https://skydeck.berkeley.edu/wp-admin/admin-ajax.php";
 const SKYDECK_BODY = "action=company_filtration_query&meta[0][]=main_industry&meta[0][]=all&meta[1][]=classes&meta[1][]=all&meta[2][]=industry&meta[2][]=all&search=";
 const MAX_RESPONSE_BYTES = 6 * 1024 * 1024;
-const MAX_ROBOTS_BYTES = 512 * 1024;
-const ROBOTS_TTL_MS = 60 * 60 * 1000;
 const CACHE_TTL_MS = 6 * 60 * 60 * 1000;
 const FIVE_HUNDRED_WINDOW_MS = 540 * 24 * 60 * 60 * 1000;
 const SEARCH_LIMIT = 100;
@@ -62,10 +60,8 @@ const SEASON_ORDER: Record<string, number> = { winter: 0, spring: 1, summer: 2, 
 
 /**
  * Public accelerator directories. Listings are cached in this engine instance for six hours, so
- * a directory is asked at most a few times a day. Each directory's robots.txt is read first and
- * obeyed, under the name the page reader uses, and requests to one host are spaced by the page
- * reader's gap or the site's crawl delay, whichever is longer. A directory that asks for more
- * time between requests than one search has is not listed.
+ * a directory is asked at most a few times a day. robots.txt is not read. Requests to one host
+ * are spaced by the page reader's own gap.
  */
 export function createAcceleratorEngine(options: AcceleratorSearchOptions = {}): SearchEngine {
   const send = options.fetch ?? defaultFetch;
@@ -74,7 +70,6 @@ export function createAcceleratorEngine(options: AcceleratorSearchOptions = {}):
   const timeoutMs = normalizedTimeout(options.timeoutMs);
   const sleep = options.sleep ?? ((milliseconds: number) => new Promise<void>((resolve) => setTimeout(resolve, milliseconds)));
   const cache = new Map<Programme, CacheEntry>();
-  const robots = new Map<string, { expiresAt: number; body: string }>();
   const lastRequestAt = new Map<string, number>();
 
   /** Holds a request back until the host's gap has passed since the last one to it. */
@@ -85,39 +80,11 @@ export function createAcceleratorEngine(options: AcceleratorSearchOptions = {}):
     lastRequestAt.set(origin, now());
   }
 
-  /** A site's robots.txt; empty when it has none. A site that cannot give one is not read. */
-  async function robotsBody(origin: string, signal: AbortSignal): Promise<string> {
-    const cached = robots.get(origin);
-    if (cached && now() < cached.expiresAt) return cached.body;
-    // Spaced like any request to the host, so a failed read that is tried again waits too.
-    await spaced(origin, DEFAULT_GAP_MS, signal);
-    const response = await send(`${origin}/robots.txt`, {
-      method: "GET",
-      headers: { "User-Agent": identity.userAgent, Accept: "text/plain" },
-      signal,
-      redirect: "error",
-      credentials: "omit",
-    });
-    let body = "";
-    if (response.status >= 400 && response.status < 500) {
-      await response.body?.cancel().catch(() => undefined);
-    } else if (!response.ok || !response.body) {
-      await response.body?.cancel().catch(() => undefined);
-      throw new Error("robots.txt could not be read");
-    } else {
-      body = await limitedText(response.body, signal, MAX_ROBOTS_BYTES);
-    }
-    robots.set(origin, { expiresAt: now() + ROBOTS_TTL_MS, body });
-    return body;
-  }
-
-  /** Every request a listing makes goes through here: robots.txt first, then the wait, then the request, named. */
+  /** Every request a listing makes goes through here: the wait, then the request, named. */
   const fetchFn: FetchFn = async (url, init) => {
     const signal = init?.signal ?? AbortSignal.timeout(timeoutMs);
     const origin = new URL(url).origin;
-    const verdict = robotsVerdict(await robotsBody(origin, signal), identity.productToken, url);
-    if (!verdict.allowed) throw new Error("robots.txt does not allow it");
-    await spaced(origin, verdict.gapMs, signal);
+    await spaced(origin, DEFAULT_GAP_MS, signal);
     return send(url, { ...init, signal, headers: { ...toHeaderRecord(init?.headers), "User-Agent": identity.userAgent } });
   };
 
@@ -240,7 +207,7 @@ function sourceUrl(raw: string, expectedHost: string): string | null {
   if (!cleaned) return null;
   try {
     const parsed = new URL(cleaned);
-    if (parsed.protocol !== "https:" || parsed.hostname.toLowerCase() !== expectedHost || parsed.port || isOffLimitsHost(parsed.hostname)) return null;
+    if (parsed.protocol !== "https:" || parsed.hostname.toLowerCase() !== expectedHost || parsed.port) return null;
     return cleaned;
   } catch {
     return null;
@@ -248,13 +215,7 @@ function sourceUrl(raw: string, expectedHost: string): string | null {
 }
 
 function hitUrl(raw: string): string | null {
-  const cleaned = cleanUrl(raw);
-  if (!cleaned) return null;
-  try {
-    return isOffLimitsHost(new URL(cleaned).hostname) ? null : cleaned;
-  } catch {
-    return null;
-  }
+  return cleanUrl(raw);
 }
 
 async function readBody(fetchFn: FetchFn, url: string, init: RequestInit, signal: AbortSignal): Promise<string> {

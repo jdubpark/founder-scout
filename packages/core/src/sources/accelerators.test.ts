@@ -118,14 +118,8 @@ describe("accelerator search engine", () => {
     expect(hits.some((hit) => hit.title.includes("Siteless YC"))).toBe(false);
     expect(JSON.stringify(hits)).not.toContain("FounderName");
     expect(calls.some(({ url }) => url.includes("ycombinator.com"))).toBe(false);
-    // Four robots.txt files, then six listing requests.
-    expect(calls.map(({ url }) => url).filter((url) => url.endsWith("/robots.txt")).sort()).toEqual([
-      "https://500.co/robots.txt",
-      "https://skydeck.berkeley.edu/robots.txt",
-      "https://speedrun.a16z.com/robots.txt",
-      "https://yc-oss.github.io/robots.txt",
-    ]);
-    expect(calls).toHaveLength(10);
+    expect(calls.some(({ url }) => url.endsWith("/robots.txt"))).toBe(false);
+    expect(calls).toHaveLength(6);
     for (const call of calls) {
       const headers = new Headers(call.init?.headers);
       expect(headers.get("user-agent")).toBe("fund-reader/1.0 (+https://example.com/reader)");
@@ -140,10 +134,10 @@ describe("accelerator search engine", () => {
     expect(skydeck?.init?.body).toBe("action=company_filtration_query&meta[0][]=main_industry&meta[0][]=all&meta[1][]=classes&meta[1][]=all&meta[2][]=industry&meta[2][]=all&search=");
 
     await expect(engine.search("developer", 20)).resolves.toEqual(hits);
-    expect(calls).toHaveLength(10);
+    expect(calls).toHaveLength(6);
   });
 
-  it("does not request a listing its robots.txt refuses, waits as long as a directory asks, and names every programme when all fail", async () => {
+  it("requests a listing a robots.txt would refuse, spaces a host by its own gap, and names every programme when all fail", async () => {
     const requested: string[] = [];
     const waits: number[] = [];
     const partial = createAcceleratorEngine({
@@ -151,9 +145,7 @@ describe("accelerator search engine", () => {
       sleep: async (milliseconds) => { waits.push(milliseconds); },
       fetch: async (url) => {
         requested.push(url);
-        if (url === "https://500.co/robots.txt") return new Response("User-agent: *\nDisallow: /api/\n");
-        if (url === "https://skydeck.berkeley.edu/robots.txt") return new Response("User-agent: *\nCrawl-delay: 7\nAllow: /wp-admin/admin-ajax.php\n");
-        if (url.endsWith("/robots.txt")) return noRobots();
+        if (url === "https://500.co/api/startups") return Response.json({ res: [] });
         if (url === "https://yc-oss.github.io/api/meta.json") {
           return Response.json({ batches: [{ name: "Fall 2026", count: 5, api: "https://yc-oss.github.io/api/batches/fall-2026.json" }] });
         }
@@ -168,11 +160,10 @@ describe("accelerator search engine", () => {
     await expect(partial.search("early", 10)).resolves.toMatchObject([
       { title: "Partial YC (Y Combinator, Fall 2026)", url: "https://partialyc.com/" },
     ]);
-    expect(requested).toContain("https://500.co/robots.txt");
-    expect(requested).not.toContain("https://500.co/api/startups");
-    // One wait before each request that follows another to the same host: the reader's two
-    // seconds (speedrun once, the mirror twice), and the seven seconds SkyDeck asked for.
-    expect([...waits].sort((a, b) => a - b)).toEqual([2_000, 2_000, 2_000, 7_000]);
+    expect(requested).toContain("https://500.co/api/startups");
+    expect(requested.some((url) => url.endsWith("/robots.txt"))).toBe(false);
+    // The mirror's second file is the only request that follows another to the same host.
+    expect(waits).toEqual([2_000]);
 
     const retryWaits: number[] = [];
     const unavailable = createAcceleratorEngine({
@@ -234,7 +225,7 @@ describe("accelerator search engine", () => {
     const retry = engine.search("founders", 5);
     expect(started).toBe(4);
     await expect(retry).resolves.toEqual([]);
-    expect(started).toBe(12);
+    expect(started).toBe(8);
     expect(overlappedHost).toBe(false);
   });
 });

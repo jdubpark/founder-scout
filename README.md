@@ -126,13 +126,13 @@ calls. A person must choose this tier; it is never a default, and the thesis and
 to the vendor. DeepSeek has no default API endpoint; approve the host before sending named-person
 data. Measurements and terms are in `docs/research/rapid-runner-models.md`.
 
-**What it reads.** Public pages only. The reader obeys robots.txt, waits between requests to one
-site, reads at most three of its pages in a wave, sends no login and no cookie, and treats a refusal
-as final. A robots.txt answered with 401, 403 or 429, or one too large to read in full (512 KiB),
-means the site is not read; a missing one means no rules. A site that asks for a pause is left
-alone for the rest of the run. It never requests LinkedIn, nor sites whose terms forbid automated
-reading even where robots.txt allows it. The list also bars YouTube, Vimeo and Spotify media
-hosts; every site's rule is in `TERMS_BARRED_HOSTS` in `packages/shared/src/policy.ts`. Set
+**What it reads.** Public pages only. The reader does not obey robots.txt. It waits between
+requests to one site, reads at most three of its pages in a wave, sends no login and no cookie of
+its own, and treats a refusal from the page as final. A site that asks for a pause is left alone
+for the rest of the run. LinkedIn is read the same way, or through logged-in sessions you supply:
+one Cookie header value per line in `LINKEDIN_COOKIES`, optional `LINKEDIN_PROXIES` and
+`LINKEDIN_USER_AGENTS`, and `HUNT_PROXY_URL` for every other read. A cookie is sent only to that
+network. Each account keeps a human rhythm, and a read outside it is held back. Set
 `HUNT_USER_AGENT` to a name and a contact address of your own before a live hunt, so a site can
 tell who is reading and say no by name. Recording links go through the same reader checks.
 
@@ -149,11 +149,10 @@ Set `XAI_API_KEY` and three things switch on for live runs:
   planted false claim. A post counts as supported only when xAI's API lists it among what
   that call fetched.
 
-xAI's API returns the model's answer and the addresses its search found, not the posts. X's
-robots.txt refuses a generic reader, at its site and at its embed address, so no page on X is
-opened. A post's words and its counts are therefore a model's report, labelled as such, and an
-address is kept only when xAI's API lists it. Every post fetched is billed ($5 a thousand,
-plus tokens); `x.enabled` and `x.media` turn it off.
+xAI's API returns the model's answer and the addresses its search found, not the posts. The X
+jobs do not open a page on X. A post's words and its counts are therefore a model's report,
+labelled as such, until X's own API is set, and an address is kept only when xAI's API lists it.
+Every post fetched is billed ($5 a thousand, plus tokens); `x.enabled` and `x.media` turn it off.
 
 Set `X_BEARER_TOKEN` as well, a token for X's own API, and code reads each post xAI named, by
 its id, and checks it:
@@ -175,22 +174,26 @@ use-case description to submit on the developer account, which only its holder c
 
 With no key at all, the hunt has one more engine: **accelerators**. Code lists the newest
 batches of Y Combinator (through an open mirror), a16z speedrun, 500 Global and Berkeley
-SkyDeck, after reading each directory's robots.txt, and the hunt reads each company's page
-for its founders.
+SkyDeck, and the hunt reads each company's page for its founders.
 
 None of the xAI path has run against the live service: no key was on the machine that built it.
 X's own API was read live on 2026-11-13, and the accelerator engine was run against the four
 live directories the same day.
 
-## Professional profiles, without reading LinkedIn
+## Professional profiles
 
-Nothing here requests linkedin.com, logged in or not; the design explains why
-(section 9). The same information comes in three ways:
+Profile data arrives three ways, and LinkedIn's own public pages may be read anonymously or through
+your supplied sessions:
 
 - **A data vendor.** Put a People Data Labs key in `.env` as `PDL_API_KEY`. The talent-move scout
   then searches for people who recently became founders, and company research can list a company's
   team. Each record costs a vendor credit; `PDL_RECORDS_PER_DAY` (default 50) is the ceiling. The
   adapter has not been run against the live service: no key was available.
+- **Bright Data's LinkedIn Scraper API.** Put a `BRIGHTDATA_API_KEY` in `.env` to enrich a known
+  profile with its about, experience and education, or to search by name. It is preferred for
+  lookups when set; People Data Labs stays the discovery feed. Billed per delivered record (5,000
+  free per month) with its own daily ceiling, `BRIGHTDATA_RECORDS_PER_DAY`. Verified against the
+  live service on 2026-11-13 with one profile record delivered.
 - **Your own connections.** Export your connections from your own account settings and upload the
   file under Settings, Your network. The dashboard then shows who you know at each company, and a
   contact whose title changes to a founder's between two uploads becomes a lead. Email addresses in
@@ -201,8 +204,8 @@ Nothing here requests linkedin.com, logged in or not; the design explains why
 
 On a founder's page, a person can add a recording by public link or upload. The talks analyst can
 queue up to three recordings per founder in a run. Fetches accept direct audio or video files and
-use the page reader's address, robots.txt, redirect and `HUNT_USER_AGENT` checks. Embedded players,
-barred or private hosts, non-media responses and files over `MEDIA_MAX_MB` (150 MB by default) are
+use the page reader's address, redirect and `HUNT_USER_AGENT` checks. Embedded players,
+private hosts, non-media responses and files over `MEDIA_MAX_MB` (150 MB by default) are
 refused. Before transcription, `ffprobe` measures the length; if that fails, code uses a file-size
 bound at 6 kbit/s. A recording that does not fit the remaining run allowance is refused. A saved
 transcript is not repeated. `TRANSCRIBE_COMMAND` takes precedence and must contain `{file}`; it runs
@@ -383,8 +386,7 @@ Verified by running it:
   code found their names and quoted words on the page; all 4 planted pages were ignored by the
   runner; the fit screen kept 3 of the 4;
 - the page reader against real sites: Wikipedia, GitHub and Hugging Face read; a Hacker News
-  post read through its API; Devpost, Reddit, LinkedIn and a cloud-metadata address refused
-  without a request;
+  post read through its API; a cloud-metadata address refused without a request;
 - pools of agents on a running server in simulation: tasks split between two models by share,
   each member's supported items, planted claims and failures counted, share moved by code;
 - the Assumptions page on the real eval's judgments, and the Improve page on its rounds.
@@ -451,9 +453,8 @@ Not run: a live baseline of the hunt eval (real models reading the simulated web
 budget of at least 16 dollars), the past-founders eval with the analysts' own model as judge (tens
 of dollars), and autopilot in Apply mode over several days.
 
-Checked by running it on 2026-11-13: the rule that stops research agents opening linkedin.com
-(a rule for the bare host does not cover `www.`, so both forms are passed); headless Claude and
-Codex still sign in after unrelated keys are removed from their environment; and the quote check,
+Checked by running it on 2026-11-13: headless Claude and Codex still sign in after unrelated
+keys are removed from their environment; and the quote check,
 which found none of the first live run's nine excerpts on the pages they cited under the old
 "quote or paraphrase" prompt, and seven of eight under the exact-quote prompt (one was too short
 to check). One founder, so this shows the direction, not a rate. The quote check was run again
@@ -524,7 +525,8 @@ Known limits:
 
 ## Rules the code enforces
 
-Nothing is sent or dialled without a person approving that item. Nothing requests LinkedIn.
+Nothing is sent or dialled without a person approving that item. LinkedIn is read anonymously or
+through logged-in sessions the partner supplies; nothing in this system logs in by itself.
 Professional, public information only. Every claim has a source, and code checks that a quote is on
 the page it cites before a model is asked about it. Every fact-check carries one planted false claim;
 a checker that accepts it has that call's verdicts thrown away. A spend cap per run, a ceiling on

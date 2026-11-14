@@ -1,32 +1,29 @@
 import { lookup } from "node:dns/promises";
 import { isIP } from "node:net";
-import { cleanUrl, hostOf, isNeverFetchHost, isOffLimitsHost, termsBar } from "@agentswarm/shared";
+import { cleanUrl, hostOf, isProfessionalNetworkHost } from "@agentswarm/shared";
 import type { PageLink } from "@agentswarm/shared";
 import type { PageRead, WebReader } from "../contracts";
 import { createPinnedLookup, isRestrictedIp, pinnedFetch, readableAddress } from "./quote-check";
 import { defaultFetch, type FetchFn } from "./http";
+import { linkedInSessionPoolFor, type LinkedInAccount } from "./sessions";
 import { cleanPlain, decodeEntities, htmlToText } from "./util";
 
 const DEFAULT_USER_AGENT = "web-reader/1.0";
-/** The least time between two requests to one host when its robots.txt asks for none. */
+/** The least time between two requests to one host. robots.txt is not read and not obeyed. */
 export const DEFAULT_GAP_MS = 2_000;
-const MAX_GAP_MS = 60_000;
 const MAX_PAGE_BYTES = 1_500_000;
-const MAX_ROBOTS_BYTES = 512 * 1024;
 const MAX_REDIRECTS = 5;
-const ROBOTS_TTL_MS = 60 * 60 * 1000;
 const REDIRECTS = new Set([301, 302, 303, 307, 308]);
-const REFUSALS = new Set([401, 403, 407, 429, 451]);
+// The professional network throttles with HTTP 999.
+const REFUSALS = new Set([401, 403, 407, 429, 451, 999]);
 
 export type WebAddressCheck =
   | { url: string; addresses: string[] }
   | { kind: "blocked" | "unreachable"; detail: string };
 
 export interface WebSafetyReader {
-  /** Apply the same named-public-host, deny-list, DNS and restricted-address checks as page reads. */
+  /** Apply the same named-public-host, DNS and restricted-address checks as page reads. */
   checkAddress(raw: string): Promise<WebAddressCheck>;
-  /** Apply the cached RFC 9309 policy and return the request spacing it requires. */
-  robotsDecision(url: string, signal?: AbortSignal): Promise<{ allowed: boolean; detail: string; gapMs: number }>;
   /** Serialize requests to one host using the page reader's timing state. */
   withHostGap<T>(hostname: string, gapMs: number, run: () => Promise<T>): Promise<T>;
 }
@@ -40,18 +37,10 @@ export interface WebReaderOptions {
   timeoutMs?: number;
   /** Allows a resolver supplied by a test to route a named host to loopback. */
   allowLoopbackForTests?: boolean;
-}
-
-interface RobotsRule {
-  allow: boolean;
-  path: string;
-}
-
-interface RobotsPolicy {
-  allowed: boolean;
-  blockedDetail: string;
-  rules: RobotsRule[];
-  crawlDelayMs: number;
+  /** Logged-in accounts for the professional network. No other host is sent a cookie or their agent. */
+  accounts?: readonly LinkedInAccount[];
+  /** A proxy every read may tunnel through, unless the professional network account carries its own. */
+  proxyUrl?: string | null;
 }
 
 interface ReadResponse {
@@ -61,39 +50,30 @@ interface ReadResponse {
   body?: string;
   truncated?: boolean;
   finalUrl?: string;
+  /** The pool account used on the final request, when one was, so a refusal can cool it. */
+  sessionIndex?: number;
 }
 
 interface HostTail {
   tail: Promise<void>;
 }
 
-/** How a reader names itself to a site, and the name a robots.txt group is matched against. */
+/** How a reader names itself to a site. */
 export function readerIdentity(userAgent?: string): { userAgent: string; productToken: string } {
   const name = userAgent?.trim() || DEFAULT_USER_AGENT;
   return { userAgent: name, productToken: (name.split(/[\s/]/u)[0] || DEFAULT_USER_AGENT.split("/")[0]!).toLowerCase() };
 }
 
-/**
- * What a robots.txt body says to this reader about one address: whether it may be opened, and
- * the least time between two requests to that host (the reader's own gap, or the site's crawl
- * delay when that is longer). For a listing that code reads outside the page reader, so that it
- * is held to the same rules by the same parser. An empty body is a site with no robots.txt.
- */
-export function robotsVerdict(body: string, productToken: string, url: string): { allowed: boolean; gapMs: number } {
-  const policy = parseRobots(body, productToken);
-  return { allowed: policy.allowed && robotsAllows(policy, url), gapMs: Math.max(DEFAULT_GAP_MS, policy.crawlDelayMs) };
-}
-
 export function createWebReader(options: WebReaderOptions = {}): WebReader & WebSafetyReader {
-  const { userAgent, productToken } = readerIdentity(options.userAgent);
+  const { userAgent } = readerIdentity(options.userAgent);
   const resolveHost = options.resolveHost ?? (async (hostname: string) => (await lookup(hostname, { all: true })).map((entry) => entry.address));
   const fetchFn = options.fetch;
   const now = options.now ?? Date.now;
   const sleep = options.sleep ?? ((milliseconds: number) => new Promise<void>((resolve) => setTimeout(resolve, milliseconds)));
   const timeoutMs = options.timeoutMs ?? 15_000;
-  const robots = new Map<string, { expiresAt: number; promise: Promise<RobotsPolicy> }>();
   const hostTails = new Map<string, HostTail>();
   const hostStartedAt = new Map<string, number>();
+  const accountPool = options.accounts && options.accounts.length > 0 ? linkedInSessionPoolFor(options.accounts, options.now) : null;
 
   async function checkAddress(raw: string): Promise<WebAddressCheck> {
     let parsed: URL;
@@ -109,9 +89,6 @@ export function createWebReader(options: WebReaderOptions = {}): WebReader & Web
       return { kind: "blocked", detail: "This address must not include a user name or password." };
     }
     const hostname = parsed.hostname.replace(/^\[|\]$/gu, "").toLowerCase().replace(/\.$/u, "");
-    if (isNeverFetchHost(hostname)) return { kind: "blocked", detail: "This address is never requested." };
-    const barred = termsBar(hostname);
-    if (isOffLimitsHost(hostname)) return { kind: "blocked", detail: `${barred?.host ?? hostname} does not allow automated reading.` };
     const cleaned = cleanUrl(raw);
     if (!cleaned) return { kind: "blocked", detail: "This address is not a readable public web address." };
 
@@ -157,7 +134,6 @@ export function createWebReader(options: WebReaderOptions = {}): WebReader & Web
 
   async function fetchText(
     rawUrl: string,
-    followRobots: boolean,
     maxBytes: number,
     callerSignal?: AbortSignal,
     allowJson = false,
@@ -165,6 +141,9 @@ export function createWebReader(options: WebReaderOptions = {}): WebReader & Web
     let current = rawUrl;
     let redirects = 0;
     const visited = new Set<string>();
+    // One account for the whole chain, picked when it first reaches the professional network: a
+    // person following a redirect keeps one session.
+    let chainAccount: { index: number; account: LinkedInAccount } | null = null;
     while (true) {
       const checked = await validate(current);
       if ("kind" in checked) return checked;
@@ -172,23 +151,33 @@ export function createWebReader(options: WebReaderOptions = {}): WebReader & Web
       if (visited.has(current)) return { kind: "unreachable", detail: "The address redirected in a loop." };
       visited.add(current);
 
-      let crawlDelayMs = DEFAULT_GAP_MS;
-      if (followRobots) {
-        const decision = await robotsDecision(current, callerSignal);
-        if (!decision.allowed) return { kind: "blocked", detail: decision.detail };
-        crawlDelayMs = decision.gapMs;
-      }
-
       const host = hostOf(current);
       if (!host) return { kind: "blocked", detail: "This address is not a readable public web address." };
+      // A resting account defers the read, and no host other than the network's own is ever sent a cookie.
+      const pool = accountPool !== null && isProfessionalNetworkHost(host) ? accountPool : null;
+      if (pool && !chainAccount) {
+        chainAccount = pool.pick();
+        if (!chainAccount) {
+          return { kind: "blocked", detail: pool.restingDetail() ?? "Every account asked for a pause." };
+        }
+      }
+      const account = chainAccount && isProfessionalNetworkHost(host) ? chainAccount : null;
+
+      const proxyUrl = account ? account.account.proxyUrl ?? options.proxyUrl : options.proxyUrl;
       try {
-        const outcome = await withHost(host, crawlDelayMs, async () => {
+        // A professional-network read waits out a human dwell first, on top of the reader's own gap.
+        const gapMs = account && pool ? Math.max(DEFAULT_GAP_MS, pool.dwellMs()) : DEFAULT_GAP_MS;
+        const outcome = await withHost(host, gapMs, async () => {
           const timeout = AbortSignal.timeout(timeoutMs);
           const signal = callerSignal ? AbortSignal.any([timeout, callerSignal]) : timeout;
-          const request = fetchFn ?? ((url, init) => pinnedFetch(url, init, checked.addresses));
+          const request = fetchFn ?? ((url, init) => pinnedFetch(url, init, checked.addresses, proxyUrl ?? undefined));
           const response = await request(current, {
             method: "GET",
-            headers: { "User-Agent": userAgent, Accept: "text/html, text/plain;q=0.9" },
+            headers: {
+              "User-Agent": account?.account.userAgent ?? userAgent,
+              Accept: "text/html, text/plain;q=0.9",
+              ...(account ? { Cookie: account.account.cookie } : {}),
+            },
             redirect: "manual",
             signal,
           });
@@ -222,97 +211,38 @@ export function createWebReader(options: WebReaderOptions = {}): WebReader & Web
           redirects += 1;
           continue;
         }
-        return { kind: "response", detail: "", response: outcome.response, body: outcome.body, truncated: outcome.truncated, finalUrl: current };
+        return { kind: "response", detail: "", response: outcome.response, body: outcome.body, truncated: outcome.truncated, finalUrl: current, ...(account ? { sessionIndex: account.index } : {}) };
       } catch (error) {
         return { kind: "unreachable", detail: timeoutDetail(error) };
       }
     }
   }
 
-  async function robotsPolicy(rawUrl: string, callerSignal?: AbortSignal): Promise<RobotsPolicy> {
-    const url = new URL(rawUrl);
-    const origin = url.origin;
-    const cached = robots.get(origin);
-    if (cached && cached.expiresAt > now()) return cached.promise;
-    const promise = loadRobots(origin, callerSignal);
-    robots.set(origin, { expiresAt: now() + ROBOTS_TTL_MS, promise });
-    return promise;
-  }
-
-  async function loadRobots(origin: string, callerSignal?: AbortSignal): Promise<RobotsPolicy> {
-    const result = await fetchText(`${origin}/robots.txt`, false, MAX_ROBOTS_BYTES, callerSignal);
-    if (result.kind !== "response" || !result.response) {
-      return { allowed: false, blockedDetail: "robots.txt does not allow it.", rules: [], crawlDelayMs: 0 };
-    }
-    const status = result.response.status;
-    // A site that answers its robots.txt with "not allowed" or "slow down" has not said yes.
-    // RFC 9309 lets a reader take any 4xx as "no rules". That is right for a missing file and
-    // too generous for a refusal, so those three are read as a no.
-    if (status === 401 || status === 403 || status === 429) {
-      return {
-        allowed: false,
-        blockedDetail: (status === 429 ? retryAfterDetail(result.response, now()) : null) ?? "This site refused its robots.txt, so nothing on it is read.",
-        rules: [],
-        crawlDelayMs: 0,
-      };
-    }
-    if (status >= 400 && status < 500) {
-      return { allowed: true, blockedDetail: "robots.txt does not allow it.", rules: [], crawlDelayMs: 0 };
-    }
-    if (status >= 500 || status < 200 || status >= 300) {
-      return {
-        allowed: false,
-        blockedDetail: (status === 503 ? retryAfterDetail(result.response, now()) : null) ?? "robots.txt does not allow it.",
-        rules: [],
-        crawlDelayMs: 0,
-      };
-    }
-    // Rules past the size limit were not read, and one of them may be the rule that says no.
-    if (result.truncated) {
-      return { allowed: false, blockedDetail: "This site's robots.txt is too large to read in full, so nothing on it is read.", rules: [], crawlDelayMs: 0 };
-    }
-    return parseRobots(result.body ?? "", productToken);
-  }
-
-  async function robotsDecision(rawUrl: string, callerSignal?: AbortSignal): Promise<{ allowed: boolean; detail: string; gapMs: number }> {
-    const policy = await robotsPolicy(rawUrl, callerSignal);
-    const allowed = policy.allowed && robotsAllows(policy, rawUrl);
-    return {
-      allowed,
-      detail: allowed ? "" : policy.blockedDetail,
-      gapMs: Math.max(DEFAULT_GAP_MS, policy.crawlDelayMs),
-    };
-  }
-
   return {
     checkAddress,
-    robotsDecision,
     withHostGap: withHost,
     async read(rawUrl, readOptions): Promise<PageRead> {
       const input = cleanUrl(rawUrl);
       const baseUrl = input ?? rawUrl;
       if (!input) {
-        let parsed: URL | null = null;
-        try { parsed = new URL(rawUrl); } catch { /* invalid address */ }
-        const hostname = parsed?.hostname ?? "";
-        const barred = termsBar(hostname);
-        const detail = isNeverFetchHost(hostname)
-          ? "This address is never requested."
-          : isOffLimitsHost(hostname)
-            ? `${barred?.host ?? hostname} does not allow automated reading.`
-            : "This address is not a readable public web address.";
-        return pageResult("blocked", detail, baseUrl);
+        return pageResult("blocked", "This address is not a readable public web address.", baseUrl);
       }
       if (readOptions?.signal?.aborted) return pageResult("unreachable", "The page request was cancelled.", baseUrl);
 
       const standIn = readableAddress(input);
       const requestUrl = standIn?.url ?? input;
       const isHnStandIn = standIn?.url.includes("hn.algolia.com/api/v1/items/") ?? false;
-      const result = await fetchText(requestUrl, true, MAX_PAGE_BYTES, readOptions?.signal, isHnStandIn);
+      const result = await fetchText(requestUrl, MAX_PAGE_BYTES, readOptions?.signal, isHnStandIn);
       if (result.kind !== "response") return pageResult(result.kind, result.detail, baseUrl);
       if (!result.response) return pageResult("unreachable", "The page could not be reached.", baseUrl);
 
       const status = result.response.status;
+      // A page an account opened counts against its day. A network refusal rests the account
+      // until its next workday, so later reads rotate to another one.
+      if (result.sessionIndex !== undefined) {
+        if (REFUSALS.has(status)) accountPool?.cool(result.sessionIndex);
+        else accountPool?.noteRead(result.sessionIndex);
+      }
       if ((status === 429 || status === 503) && result.response.headers.has("retry-after")) {
         return pageResult("blocked", retryAfterDetail(result.response, now()) ?? `The site answered HTTP ${status}.`, baseUrl);
       }
@@ -325,6 +255,9 @@ export function createWebReader(options: WebReaderOptions = {}): WebReader & Web
       if (!isReadableContentType(contentType)) return pageResult("not_text", "The site answered with a non-text content type.", baseUrl);
 
       const finalUrl = standIn ? baseUrl : result.finalUrl ?? baseUrl;
+      // The professional network serves its login wall here, usually via redirect. The page
+      // served on it is the wall, not the page asked for.
+      if (finalUrl.includes("/authwall")) return pageResult("blocked", "The page is behind a login wall.", baseUrl);
       const body = result.body ?? "";
       const html = isHtml(contentType);
       const safeHtml = html ? stripUnsafeBlocks(body) : "";
@@ -337,6 +270,7 @@ export function createWebReader(options: WebReaderOptions = {}): WebReader & Web
         title: html ? extractTitle(safeHtml) : "",
         text,
         links: html ? extractLinks(safeHtml, finalUrl, input) : [],
+        html: readOptions?.html === true ? body : null,
       };
     },
   };
@@ -395,91 +329,6 @@ async function readLimitedBody(response: Response, maxBytes: number): Promise<{ 
   return { body: new TextDecoder().decode(bytes), truncated };
 }
 
-function parseRobots(body: string, productToken: string): RobotsPolicy {
-  const groups: Array<{ agents: string[]; rules: RobotsRule[]; delays: number[]; overflow: boolean }> = [];
-  let group: { agents: string[]; rules: RobotsRule[]; delays: number[]; overflow: boolean } | null = null;
-  let hasDirective = false;
-  // A line ends in CR LF, LF, or CR alone. Missing the last form would let a file hide a rule.
-  for (const rawLine of body.split(/\r\n|\n|\r/u)) {
-    const line = rawLine.split("#", 1)[0]?.trim() ?? "";
-    if (!line) continue;
-    const colon = line.indexOf(":");
-    if (colon < 0) continue;
-    const key = line.slice(0, colon).trim().toLowerCase();
-    const value = line.slice(colon + 1).trim();
-    if (key === "sitemap") continue;
-    if (key === "user-agent") {
-      if (!group || hasDirective) {
-        group = { agents: [], rules: [], delays: [], overflow: false };
-        groups.push(group);
-        hasDirective = false;
-      }
-      if (value) group.agents.push(value.toLowerCase());
-      continue;
-    }
-    if (!group) continue;
-    hasDirective = true;
-    if ((key === "allow" || key === "disallow") && value.startsWith("/")) {
-      // A file is someone else's text: a rule longer than any real path, or more rules than
-      // any real site has, is not worked on. It is not ignored either: a rule that was left out
-      // might have been a refusal, so a group that has one refuses everything (below).
-      if (value.length <= MAX_RULE_LENGTH && group.rules.length < MAX_RULES_PER_GROUP) {
-        group.rules.push({ allow: key === "allow", path: comparablePath(value) });
-      } else {
-        group.overflow = true;
-      }
-    } else if (key === "crawl-delay") {
-      const delay = Number(value);
-      if (Number.isFinite(delay) && delay >= 0) group.delays.push(Math.min(MAX_GAP_MS, delay * 1000));
-    }
-  }
-
-  const matching = groups.filter((candidate) => candidate.agents.some((agent) => agent !== "*" && productToken.includes(agent)));
-  const selected = matching.length > 0 ? matching : groups.filter((candidate) => candidate.agents.includes("*"));
-  const rules = selected.flatMap((selectedGroup) => selectedGroup.rules);
-  const crawlDelayMs = Math.min(MAX_GAP_MS, Math.max(0, ...selected.flatMap((selectedGroup) => selectedGroup.delays)));
-  if (selected.some((selectedGroup) => selectedGroup.overflow)) {
-    return { allowed: false, blockedDetail: "This site's robots.txt has rules too long or too many to apply, so nothing on it is read.", rules: [], crawlDelayMs };
-  }
-  return { allowed: true, blockedDetail: "robots.txt does not allow it.", rules, crawlDelayMs };
-}
-
-const MAX_RULE_LENGTH = 2_000;
-const MAX_RULES_PER_GROUP = 5_000;
-const UNRESERVED = /^[A-Za-z0-9\-._~]$/u;
-
-/**
- * A path in the one form RFC 9309 compares in, for a rule and for an address alike: an
- * escaped letter, digit, hyphen, dot, underscore or tilde is unescaped, every other escape is
- * kept with its hex in capitals, and anything outside ASCII is escaped. Without it
- * "/%70rivate" would walk past "Disallow: /private".
- */
-function comparablePath(path: string): string {
-  return path
-    .replace(/%([0-9a-fA-F]{2})/gu, (_match, hex: string) => {
-      const character = String.fromCharCode(Number.parseInt(hex, 16));
-      return UNRESERVED.test(character) ? character : `%${hex.toUpperCase()}`;
-    })
-    .replace(/[^\x00-\x7F]/gu, (character) =>
-      [...new TextEncoder().encode(character)].map((byte) => `%${byte.toString(16).padStart(2, "0").toUpperCase()}`).join(""),
-    );
-}
-
-function robotsAllows(policy: RobotsPolicy, urlText: string): boolean {
-  let url: URL;
-  try { url = new URL(urlText); } catch { return false; }
-  if (url.pathname.toLowerCase() === "/robots.txt") return true;
-  const target = comparablePath(`${url.pathname}${url.search}`);
-  const matching = policy.rules
-    .filter((rule) => robotsPatternMatches(rule.path, target))
-    .sort((a, b) => ruleSpecificity(b.path) - ruleSpecificity(a.path) || Number(b.allow) - Number(a.allow));
-  return matching[0]?.allow ?? true;
-}
-
-function ruleSpecificity(path: string): number {
-  return path.replace(/[\*$]/gu, "").replace(/%[\da-f]{2}/giu, "x").length;
-}
-
 function retryAfterDetail(response: Response, nowMs: number): string | null {
   const header = response.headers.get("retry-after");
   if (!header) return null;
@@ -491,39 +340,13 @@ function retryAfterDetail(response: Response, nowMs: number): string | null {
   return `The site asked for a pause of ${waitSeconds} seconds.`;
 }
 
-/**
- * Whether a robots.txt rule matches a path: "*" stands for any run of characters and a final
- * "$" for the end. Matched by hand, taking each piece between stars at the first place it
- * fits. A rule is text from a stranger, and turning its stars into a regular expression lets
- * a rule such as "/*a*a*a ... b" hold the whole server for minutes on one path.
- */
-function robotsPatternMatches(pattern: string, target: string): boolean {
-  const anchored = pattern.endsWith("$");
-  const pieces = (anchored ? pattern.slice(0, -1) : pattern).split("*");
-  const first = pieces[0] as string;
-  if (!target.startsWith(first)) return false;
-  if (pieces.length === 1) return anchored ? target.length === first.length : true;
-  let position = first.length;
-  for (let index = 1; index < pieces.length; index += 1) {
-    const piece = pieces[index] as string;
-    if (index === pieces.length - 1 && anchored) {
-      // The last piece must be the end of the path, and must not reach back over what is matched.
-      return target.length - piece.length >= position && target.endsWith(piece);
-    }
-    const found = target.indexOf(piece, position);
-    if (found === -1) return false;
-    position = found + piece.length;
-  }
-  return true;
-}
-
-function stripUnsafeBlocks(html: string): string {
+export function stripUnsafeBlocks(html: string): string {
   return html
     .replace(/<!--[\s\S]*?-->/gu, " ")
     .replace(/<(script|style|noscript|template|svg)\b[^>]*>[\s\S]*?(?:<\/\1\s*>|$)/giu, " ");
 }
 
-function extractTitle(html: string): string {
+export function extractTitle(html: string): string {
   const match = /<title\b[^>]*>([\s\S]*?)<\/title\s*>/iu.exec(html);
   return cleanPlain(decodeEntities((match?.[1] ?? "").replace(/<[^>]*>/gu, " ")), 200);
 }
@@ -539,7 +362,7 @@ const MIN_CONTENT_LINKS = 5;
  * taken first: the menu, masthead, footer and sidebars are left out unless the content has
  * almost no links of its own.
  */
-function extractLinks(html: string, baseUrl: string, inputUrl: string): PageLink[] {
+export function extractLinks(html: string, baseUrl: string, inputUrl: string): PageLink[] {
   const content = linksIn(html.replace(CHROME, " "), baseUrl, inputUrl);
   return content.length >= MIN_CONTENT_LINKS ? content : linksIn(html, baseUrl, inputUrl);
 }

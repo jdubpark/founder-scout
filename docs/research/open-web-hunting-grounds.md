@@ -102,6 +102,8 @@ Google's own post (https://blog.google/technology/safety-security/serpapi-lawsui
 
 Source for all RFC statements: https://www.rfc-editor.org/rfc/rfc9309.txt (fetched 2026-11-13).
 
+The partner decided on 2026-11-13 that this system does not obey robots.txt. The notes below record what the RFC says. They are not the reader's rules.
+
 Implement these:
 
 1. **Fetch `/robots.txt` first, per host.** The file is at `scheme://authority/robots.txt`, UTF-8, `text/plain`. "These rules are not a form of access authorization." A hostname that is not the site (for example `api.example.com`) has its own file.

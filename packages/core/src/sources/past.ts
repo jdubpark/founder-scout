@@ -496,7 +496,8 @@ export interface DirectoryEntry {
 
 const SEASON_LETTER: Record<string, string> = { winter: "W", summer: "S", fall: "F", spring: "X" };
 
-function batchTag(batch: unknown): string | null {
+/** The intake as a launch title writes it, for example "W26"; null when the batch does not parse. */
+export function batchTag(batch: unknown): string | null {
   if (typeof batch !== "string") return null;
   const match = /^(Winter|Summer|Fall|Spring)\s+\d{2}(\d{2})$/i.exec(batch.trim());
   if (!match) return null;

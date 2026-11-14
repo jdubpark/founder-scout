@@ -1,7 +1,7 @@
 /**
- * Addresses on X. Nothing in this system requests them: X's robots.txt refuses a generic agent,
- * and so does its embed address. They are read here only as text, to tell which post or account
- * an item points at and whether xAI's API returned that post itself.
+ * Addresses on X, read here only as text, to tell which post or account an item points at and
+ * whether xAI's API returned that post itself. Posts are read through that API, not by opening
+ * the page.
  */
 
 const X_HOSTS = new Set(["x.com", "twitter.com", "mobile.twitter.com", "mobile.x.com"]);

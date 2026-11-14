@@ -1,6 +1,6 @@
 # Grok X search for the hunt
 
-Use the `x_search` tool on `POST https://api.x.ai/v1/responses` with `grok-4.7` to read a known founder's account and `grok-4.3` for discovery sweeps. It can be combined with a JSON-schema response format. It does not return post records: the Responses API returns only the model's text, a list of cited URLs, and token and fetch counts, so every post field the adapter keeps (text, date, counts) is whatever the model wrote into its answer. Each quote has to be checked by something other than Grok. Two checks are closed: X's oEmbed endpoint is barred by robots.txt on both hosts, and x.ai's own legal pages could not be read from this machine. The official X API reads one post for $0.005.
+Use the `x_search` tool on `POST https://api.x.ai/v1/responses` with `grok-4.7` to read a known founder's account and `grok-4.3` for discovery sweeps. It can be combined with a JSON-schema response format. It does not return post records: the Responses API returns only the model's text, a list of cited URLs, and token and fetch counts, so every post field the adapter keeps (text, date, counts) is whatever the model wrote into its answer. Each quote has to be checked by something other than Grok. Two checks are closed: the oEmbed endpoint was not called (the embed address is not a built path; posts are read through the X API), and x.ai's own legal pages could not be read from this machine. The official X API reads one post for $0.005.
 
 Read on 2026-11-13. Every quoted sentence was copied from a saved copy of the page named. No account was created, no key was used, no paid API was called. The one live call this note was asked to make (oEmbed) was not made, for the reason in section 6.
 
@@ -208,7 +208,7 @@ User-agent: *
 Disallow: /oembed
 ```
 
-The generic user agent is disallowed on `/oembed` on both hosts. The repo's rule is that robots.txt is obeyed everywhere except the one recorded exception for the professional network, so the live oEmbed calls were not made. X's documentation invites programmatic use and its robots.txt forbids it; the two disagree, and the choice to read it despite robots.txt belongs to the partner, as it did for the professional network. I did not make it for them.
+The generic user agent is disallowed on `/oembed` on both hosts. On the day this note was written the repo obeyed robots.txt except for the professional network, so the live oEmbed calls were not made. The partner later decided that robots.txt is not obeyed. The embed address is still not a built path; posts are read through X's API.
 
 What the endpoint returns, from X's own docs example (not a live response; the post is 2014, from the `@Interior` account), trimmed:
 
@@ -244,7 +244,7 @@ The most constraining sentence for the hunt is the 24-hour deletion rule: a stor
 
 ## What this means for the adapter
 
-- Treat Grok's answer as a lead, never as evidence. Ask for a JSON list of `{url, date, quote}`; keep an item only if the quote is found on the post. The post can be read only through the X API ($0.005) or oEmbed (barred by robots.txt); a page fetch of x.com needs a login or JavaScript and was not tried.
+- Treat Grok's answer as a lead, never as evidence. Ask for a JSON list of `{url, date, quote}`; keep an item only if the quote is found on the post. The post is read through the X API ($0.005). oEmbed is not a built path. A page fetch of x.com was not tried; it needs a login or JavaScript.
 - Counts and follower numbers in Grok's text are the model's words. Take them from `GET /2/users` `public_metrics` ($0.010) or leave them out.
 - Read `x_posts_fetched`, `x_users_fetched`, `x_search_calls` and `cost_in_usd_ticks` on every response and count them against the run's spend cap. Set `max_turns`, a handle list and a date window on every call; they are the only cost controls the tool has.
 - Decide on ZDR and the personal-data sentence in the Enterprise Terms before founder names go into prompts.
@@ -261,7 +261,7 @@ The most constraining sentence for the hunt is the 24-hour deletion rule: a stor
 - The default value of `max_turns`.
 - Whether `x_search` is available under ZDR.
 - xAI's live legal pages (403 challenge). Quotes come from Internet Archive copies, one of which the page labels "previous version". The Data Processing Addendum, the Privacy Policy, the Consumer Terms and the "Startup Terms" were not read. "Personal Data" is not defined in the saved Enterprise Terms text.
-- Live oEmbed behaviour: accepted URL hosts, whether the `html` holds the full text of a long post, any real rate limit. Not called because robots.txt disallows `/oembed`.
+- Live oEmbed behaviour: accepted URL hosts, whether the `html` holds the full text of a long post, any real rate limit. Not called. The embed address is not a built path; posts are read through the X API.
 - Whether the Developer Agreement's 24-hour deletion rule or its restrictions reach data obtained through Grok.
 - The current X API price of a single user read with `public_metrics`: the page gives $0.010 per User resource; the Developer Console rate card was not read ("Current rates are always available in the Developer Console").
 

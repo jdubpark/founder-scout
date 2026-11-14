@@ -3,7 +3,6 @@ import {
   COMPANY_DIMENSION_IDS,
   EVIDENCE_KINDS,
   EVIDENCE_FACETS,
-  NEVER_FETCH_HOSTS,
   stableId,
 } from "@agentswarm/shared";
 import type {
@@ -54,7 +53,7 @@ export function companySystemRules(id: CompanyJobId): string {
     "Every evidence item needs a facet, source address, and excerpt copied word for word from that page. Do not paraphrase or tidy excerpts. Quote at least one full sentence, because a few words cannot be checked. To skip words between passages, put \" ... \" between them. Code discards an excerpt whose words are not on the cited page.",
     "Use public professional information about the company and its team only. Do not repeat evidence already supplied as known.",
     "Fill the profile with the company site, a one-line description in plain words, sector, stage, and links when found.",
-    "Never open pages on these never-fetch hosts: " + NEVER_FETCH_HOSTS.join(", ") + ". A link to one may be recorded as a pointer, but do not request or fetch it.",
+    "Read linkedin.com anonymously like any public page, and never log in to it or any other site.",
     "Use the requested depth to scale search effort: quick is a small set of strong sources, standard is a balanced search, and deep follows primary sources and checks independent reporting.",
     "In notes, state what you looked for and did not find.",
   ];
