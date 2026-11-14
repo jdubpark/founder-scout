@@ -3,7 +3,13 @@ import type { CompanyRow, FounderRow } from "@agentswarm/shared";
 import { cn } from "../lib/cn";
 import { score100 } from "../lib/format";
 import { Avatar, EmptyState } from "./ui/layout";
+import { Chip } from "./ui/marks";
 import { YesNo } from "./YesNo";
+
+/** The company's own tagline in quotation marks when one was read on its site, else what it does. */
+function companyLine(row: FounderRow): string | null {
+  return row.tagline ? `"${row.tagline}"` : row.companyOneLiner ?? null;
+}
 
 /**
  * The surfaced founders as a list, each with its score and the partner's Yes or No right on
@@ -47,9 +53,17 @@ export function SurfacedAnnouncement({
               <Avatar name={row.name} />
               <Link to={`/founders/${row.id}`} className="group min-w-0 flex-1 no-underline">
                 <span className="block truncate text-base font-black text-ink group-hover:underline">{row.name}</span>
-                <span className="block truncate text-sm text-ink-2">
-                  {[row.companyName, row.headline].filter(Boolean).join(" · ")}
-                </span>
+                {/* The same company line as the Founders table: name, industry, round, then its own tagline. */}
+                {row.companyName ? (
+                  <span className="flex min-w-0 items-center gap-2 text-sm text-ink-2">
+                    <span className="shrink-0 font-bold">{row.companyName}</span>
+                    {row.sector ? <Chip title="Industry" className="shrink-0 whitespace-nowrap">{row.sector}</Chip> : null}
+                    {row.stage ? <Chip title="Round" className="shrink-0 whitespace-nowrap">{row.stage}</Chip> : null}
+                    {companyLine(row) ? <span className="min-w-0 truncate" title={companyLine(row) ?? undefined}>{companyLine(row)}</span> : null}
+                  </span>
+                ) : row.headline ? (
+                  <span className="block truncate text-sm text-ink-2">{row.headline}</span>
+                ) : null}
               </Link>
               <span
                 className="figure w-9 shrink-0 text-right text-lg font-black text-ink"
