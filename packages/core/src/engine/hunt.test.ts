@@ -903,4 +903,15 @@ describe("hunt engine stage", () => {
     expect(tasks.filter((task) => task.jobId === "hunt.navigate")).toHaveLength(1);
     expect(tasks.filter((task) => task.jobId === "hunt.look").length).toBeGreaterThan(0);
   });
+
+  it.each([
+    { name: "lets the hunt spend most of a hunt-only run's cap", scope: "hunt" as const, steered: true },
+    { name: "keeps most of a full run's cap for the stages after the hunt", scope: undefined, steered: false },
+  ])("$name", async ({ scope, steered }) => {
+    // Three cents: a quarter of it is less than the cent a navigator turn needs, nine tenths is not.
+    const { store, controller } = harness({ "hunt.turns": 1, "hunt.wave_size": 2 });
+    const started = await controller.start({ swarmId: SWARM_ID, trigger: "manual", ...(scope ? { scope } : {}), brain: "sim", sources: "sim", budgetUsd: 0.03 });
+    const run = await controller.wait(started.id);
+    expect(store.listTasks({ runId: run.id }).some((task) => task.jobId === "hunt.navigate" && task.status === "succeeded")).toBe(steered);
+  });
 });
