@@ -743,7 +743,7 @@ describe("createSwarmService", () => {
     const scout = store.listAgents(swarm.id).find((agent) => agent.jobId === "scout.github")!;
     const founder = founderRecord(swarm.id); store.insertFounder(founder);
     store.insertFeedback({ id: newId("fbk"), founderId: founder.id, author: "Partner", verdict: "yes", reasonTags: ["builder"], note: null, createdAt: stamp });
-    expect((await api.getEffectiveSteering({ swarmId: swarm.id, agentId: scout.id })).callsBlock).toBe("");
+    expect((await api.getEffectiveSteering({ swarmId: swarm.id, agentId: scout.id })).callsBlock).toContain("YES: Vector Works");
     const analyst = await api.getEffectiveSteering({ swarmId: swarm.id, classId: "analyst" });
     expect(analyst.callsBlock).toContain("examples, not rules");
     expect(analyst.callsBlock).toContain("Vector Works: a vector index for robot logs");
@@ -762,7 +762,7 @@ describe("createSwarmService", () => {
     expect(store.getFounder(founder.id)?.status).toBe("surfaced");
     expect(Date.parse(store.listFeedback(founder.id)[1]?.createdAt ?? "")).toBeGreaterThan(Date.parse(store.listFeedback(founder.id)[0]?.createdAt ?? ""));
     const scout = store.listAgents(swarm.id).find((agent) => agent.jobId === "scout.github")!;
-    expect((await api.getEffectiveSteering({ swarmId: swarm.id, agentId: scout.id })).callsBlock).toBe("");
+    expect((await api.getEffectiveSteering({ swarmId: swarm.id, agentId: scout.id })).callsBlock).toContain("YES: Vector Works");
     expect(store.recentAudit(1)[0]?.actor).toBe("Decision Maker");
   });
 
