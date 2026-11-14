@@ -1,0 +1,8 @@
+company,seen,summary,outcome,url,sector,stage,founders,decision
+Example Robotics Co,2021-04,"Built warehouse robots and completed 12 paid pilots.",yes,https://example-robotics.invalid,Robotics,Pre-seed,"Ada Example; Lin Sample",invested
+Example Cloud Tools,2020-11,"A developer tool served 8,000 teams at the time.",miss,https://example-cloud.invalid,Software,Seed,"Casey Fiction",invested
+Example Garden Works,2019-06,"A passed-on company had recurring orders from local growers.",win,https://example-garden.invalid,Agriculture,Pre-seed,"Morgan Placeholder",passed
+Example Paper Systems,2018-02,"A passed-on workflow product had three design partners.",no,https://example-paper.invalid,Software,Pre-seed,"Jamie Invented",passed
+Example Quiet Labs,2022-03,"The team was still testing a prototype with two customers.",,,https://example-quiet.invalid,Healthcare,Seed,"Taylor Notreal",
+Example Multiline Works,2019-02,"The team shipped an offline demo, with two signed pilots.
+The note said it was ""ready for a wider trial"", and the trial began that month.",1,https://example-multiline.invalid,Industrial,Pre-seed,"Riley Fabricated",invested

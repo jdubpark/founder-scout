@@ -24,6 +24,7 @@ export {
   sanitizeCheckout,
   SourceRateLimitError,
   collectLaunchPosts,
+  importDealsCsv,
   fetchUnicornNames,
   fetchYcDirectory,
   firstLaunchEach,

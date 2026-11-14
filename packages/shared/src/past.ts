@@ -57,6 +57,8 @@ export interface PastCase {
    * match an outcome label to the right company when two share a name. Hidden from every model.
    */
   batch?: string;
+  /** The fund's decision at the time. Kept for later analysis and never included in judge input. */
+  decision?: "invested" | "passed";
   subject: PastSubject;
   evidence: PastEvidence[];
   /** 1 when the company later met the success bar, 0 when it did not. Hidden from every model. */

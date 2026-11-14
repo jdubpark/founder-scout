@@ -9,6 +9,7 @@ import {
   fetchUnicornNames,
   fetchYcDirectory,
   firstLaunchEach,
+  importDealsCsv,
   labelPastCases,
   parseLabelsCsv,
   readPastCases,
@@ -49,6 +50,7 @@ const CLI_HELP = [
   "  swarm mcp [--url http://127.0.0.1:4317] [--swarm <id>]",
   "  swarm eval rounds [--flow <id>] [--rounds <n>] [--budget <usd>]",
   "  swarm past collect --from <date> --to <date> [--yc] [--min-team <n>] [--unicorns] [--labels <file.csv>] [--controls <n>]",
+  "  swarm past import --file <deals.csv> [--bar <text>]",
   "  swarm past show",
 ].join("\n");
 
@@ -633,7 +635,18 @@ export async function runCliCommand(
         await pastShowCommand(datasetsDir, write);
         return 0;
       }
-      if (subcommand !== "collect") throw new Error("Usage: swarm past <collect|show>.");
+      if (subcommand === "import") {
+        const { values } = parseArgs({ args: argv.slice(2), options: { file: { type: "string" }, bar: { type: "string" } }, strict: true });
+        if (!values.file) throw new Error("past import requires --file <deals.csv>.");
+        const existing = await readPastCases(datasetsDir);
+        const result = importDealsCsv(await readFile(values.file, "utf8"), { existing, bar: values.bar, redact: redactSensitive });
+        await writePastCases(datasetsDir, result.cases);
+        write(`Imported: ${result.imported}; updated: ${result.updated}; left out for no outcome: ${result.leftOutNoOutcome}; refused: ${result.refused.length}`);
+        for (const row of result.refused) write(`Refused line ${row.line}: ${row.reason}`);
+        await pastShowCommand(datasetsDir, write);
+        return 0;
+      }
+      if (subcommand !== "collect") throw new Error("Usage: swarm past <collect|import|show>.");
       const { values } = parseArgs({
         args: argv.slice(2),
         options: {

@@ -61,6 +61,7 @@ export {
   type LabelSources,
   type OutcomeLabel,
 } from "./past";
+export { importDealsCsv, type DealImportResult } from "./deals";
 
 /** Records a day from the vendor when PDL_RECORDS_PER_DAY is not set. Each record costs a credit. */
 export const DEFAULT_PDL_RECORDS_PER_DAY = 50;
