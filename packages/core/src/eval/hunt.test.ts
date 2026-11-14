@@ -14,22 +14,48 @@ afterEach(async () => {
   await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
 });
 
+/** What one simulated world's trial reports: strong early founders found, weak ones found, runner calls. */
+interface Shape { strong: number; weak: number; calls: number }
+const BASE: Shape = { strong: 1, weak: 0, calls: 10 };
+/** The worlds from seed 929 up are held back from tuning. */
+const heldOut = (seed: number): boolean => seed >= 929;
+
 describe("hunt-yield evaluation boundary", () => {
-  it("keeps a found-yield gain even when the separate fit screener keeps nobody", async () => {
+  it.each([
+    {
+      name: "keeps a gain on every held-out world, though it used twice the calls and the fit screener kept nobody",
+      tuned: (): Shape => ({ strong: 4, weak: 0, calls: 20 }),
+      status: "champion",
+    },
+    {
+      name: "reverts a gain that shows only on the worlds it was tuned on",
+      tuned: (seed: number): Shape => (heldOut(seed) ? BASE : { strong: 2, weak: 0, calls: 10 }),
+      status: "reverted",
+    },
+    {
+      name: "reverts a gain that one held-out world accounts for",
+      tuned: (seed: number): Shape => (seed === 929 ? { strong: 3, weak: 0, calls: 10 } : BASE),
+      status: "reverted",
+    },
+    {
+      name: "reverts a gain that brings weak founders with it",
+      tuned: (): Shape => ({ strong: 2, weak: 1, calls: 10 }),
+      status: "reverted",
+    },
+  ])("$name", async ({ tuned, status }) => {
     const root = await mkdtemp(path.join(tmpdir(), "agentswarm-hunt-yield-"));
     roots.push(root);
     const jobs = createJobRegistry();
-    const trial = async ({ config }: HuntTrialInput) => {
-      const count = Number(config.params["hunt.max_depth"]) >= 3 ? 2 : 1;
+    const trial = async ({ seed, config }: HuntTrialInput) => {
+      const shape = Number(config.params["hunt.max_depth"]) >= 3 ? tuned(seed) : BASE;
       return {
-        found: Array.from({ length: count }, (_, index) => ({
-          simFounderId: `founder-${index}`,
-          quality: 0.8,
-          stage: index === 0 ? "seed" : "pre-seed",
-        })),
+        found: [
+          ...Array.from({ length: shape.strong }, (_, index) => ({ simFounderId: `strong-${index}`, quality: 0.8, stage: "pre-seed" })),
+          ...Array.from({ length: shape.weak }, (_, index) => ({ simFounderId: `weak-${index}`, quality: 0.2, stage: "pre-seed" })),
+        ],
         kept: [],
-        runnerCalls: 10,
-        pages: count,
+        runnerCalls: shape.calls,
+        pages: shape.strong + shape.weak,
         searches: 0,
         plantedRead: 1,
         plantedFailed: 0,
@@ -53,9 +79,9 @@ describe("hunt-yield evaluation boundary", () => {
     });
 
     const result = await service.runRounds("hunt-yield", { rounds: 1, brain: "sim" });
-    expect(result.variants[1]?.status).toBe("champion");
-    expect(result.variants[0]?.test.strong_early_per_100_calls).toBe(10);
-    expect(result.variants[1]?.test.strong_early_per_100_calls).toBe(20);
-    expect(result.variants[1]?.test.kept_people).toBe(0);
+    expect(result.variants[0]?.test.strong_early_found).toBe(1);
+    expect(result.goal.target).toBe("strong_early_found");
+    expect(result.variants[1]?.status).toBe(status);
+    expect(result.goal.hold).not.toContain("calls");
   });
 });
