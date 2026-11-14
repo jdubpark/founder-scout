@@ -2,24 +2,27 @@
 <meta name="claude:viewport-fit-sides" content="cover">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Lato:wght@400;700;900&display=swap">
 <style>
-  /* Layout: one line of teams as the page's centre, then four small panels.
-     Light only, by design. Purple steers, green is a team and "yes", yellow is you, red is the lock. */
+  /* Purple steers, green is a team and "yes", yellow is you, red is the lock. */
   :root {
-    color-scheme: light;
-    --bg: #ffffff;
-    --sunk: #f4f4f5;
-    --rule: #e4e4e7;
-    --rule-strong: #c6c6cb;
-    --ink: #1d1c1d;
-    --ink-2: #454245;
-    --ink-3: #6b696b;
-    --purple: #45164a;
-    --green: #007a5a;
-    --green-tint: #e5f4ee;
-    --yellow: #f2b824;
-    --yellow-tint: #fff5d9;
-    --red: #c81e4e;
-    --blue: #1264a3;
+    color-scheme: light dark;
+    --bg: light-dark(#ffffff, #191719);
+    --sunk: light-dark(#f4f4f5, #29272a);
+    --rule: light-dark(#e4e4e7, #3d3a3e);
+    --rule-strong: light-dark(#c6c6cb, #777278);
+    --ink: light-dark(#1d1c1d, #f3f0f3);
+    --ink-2: light-dark(#454245, #d0cbd1);
+    --ink-3: light-dark(#6b696b, #aaa4ac);
+    --purple: light-dark(#45164a, #c98ad5);
+    --green: light-dark(#007a5a, #70d9b6);
+    --green-tint: light-dark(#e5f4ee, #203b33);
+    --green-pale: light-dark(#bfe3d6, #30584b);
+    --yellow: light-dark(#f2b824, #f6cf5e);
+    --yellow-tint: light-dark(#fff5d9, #443a21);
+    --yellow-ink: light-dark(#8a5a00, #ffd983);
+    --red: light-dark(#c81e4e, #ff87aa);
+    --red-tint: light-dark(#fdecf1, #492834);
+    --blue: light-dark(#1264a3, #83c4ff);
+    --on-accent: light-dark(#ffffff, #191719);
     --sans: "Lato", "Helvetica Neue", Helvetica, Arial, sans-serif;
   }
   body { background: var(--bg); color: var(--ink); font-family: var(--sans); font-size: 15px; line-height: 1.45; -webkit-font-smoothing: antialiased; }
@@ -35,7 +38,7 @@
   section { min-width: 0; }
   .scroll { overflow-x: auto; min-width: 0; }
   .scroll svg { display: block; min-width: 900px; width: 100%; height: auto; }
-  .grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 44px 48px; }
+  .grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 300px), 1fr)); gap: 44px 48px; }
 
   /* Diagram parts */
   .tile { fill: var(--green-tint); }
@@ -43,7 +46,7 @@
   .tile-you { fill: var(--yellow-tint); stroke: var(--yellow); stroke-width: 1.5; }
   .ic { stroke: var(--green); stroke-width: 1.75; fill: none; stroke-linecap: round; stroke-linejoin: round; }
   .ic-grey { stroke: var(--ink-2); stroke-width: 1.75; fill: none; stroke-linecap: round; stroke-linejoin: round; }
-  .ic-white { stroke: #fff; stroke-width: 1.75; fill: none; stroke-linecap: round; stroke-linejoin: round; }
+  .ic-white { stroke: var(--on-accent); stroke-width: 1.75; fill: none; stroke-linecap: round; stroke-linejoin: round; }
   .name { fill: var(--ink); font-family: var(--sans); font-weight: 700; font-size: 13.5px; }
   .verb { fill: var(--ink-3); font-family: var(--sans); font-size: 12.5px; }
   .flow { stroke: var(--rule-strong); stroke-width: 1.75; fill: none; }
@@ -52,20 +55,20 @@
 
   .pills { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; }
   .pill { display: inline-flex; align-items: center; height: 28px; padding: 0 9px; border-radius: 999px; border: 1px solid var(--rule-strong); font-weight: 700; font-size: 13px; background: var(--bg); white-space: nowrap; }
-  .pill.on { background: var(--purple); border-color: var(--purple); color: #fff; }
+  .pill.on { background: var(--purple); border-color: var(--purple); color: var(--on-accent); }
   .chev { color: var(--rule-strong); font-weight: 900; }
   .msg { margin-top: 14px; display: flex; gap: 10px; align-items: flex-start; padding: 12px; border: 1px solid var(--rule); border-radius: 12px; }
-  .avatar { flex: none; width: 34px; height: 34px; border-radius: 8px; background: var(--yellow-tint); color: #8a5a00; display: flex; align-items: center; justify-content: center; font-weight: 900; }
+  .avatar { flex: none; width: 34px; height: 34px; border-radius: 8px; background: var(--yellow-tint); color: var(--yellow-ink); display: flex; align-items: center; justify-content: center; font-weight: 900; }
   .msg b { font-weight: 900; }
   .msg .to { margin-left: 8px; }
 
   .yn { display: flex; gap: 8px; margin-bottom: 14px; }
   .btn { display: inline-flex; align-items: center; gap: 6px; height: 38px; padding: 0 16px; border-radius: 6px; font-weight: 900; border: 1px solid var(--rule-strong); }
-  .btn.yes { background: var(--green); border-color: var(--green); color: #fff; }
+  .btn.yes { background: var(--green); border-color: var(--green); color: var(--on-accent); }
   .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(128px, 1fr)); gap: 10px; list-style: none; }
   .cards li { display: flex; flex-direction: column; gap: 8px; padding: 12px; border: 1px solid var(--rule); border-radius: 12px; font-weight: 700; font-size: 14px; }
   .cards .sq { width: 34px; height: 34px; border-radius: 8px; background: var(--green-tint); display: flex; align-items: center; justify-content: center; }
-  .cards .sq.red { background: #fdecf1; }
+  .cards .sq.red { background: var(--red-tint); }
   .cards .sq.red svg { stroke: var(--red); }
 
   table { width: 100%; border-collapse: collapse; }
@@ -74,9 +77,11 @@
   tr:last-child td { border-bottom: 0; }
   .chip { display: inline-flex; align-items: center; height: 24px; padding: 0 10px; border-radius: 999px; background: var(--sunk); font-weight: 700; font-size: 13px; }
   .chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 12px; }
-  .better { display: grid; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); gap: 36px 56px; }
+  .better { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 340px), 1fr)); gap: 36px 56px; }
   .fig h3 { margin: 0 0 12px; font-weight: 700; font-size: 15px; }
   .fig svg { display: block; width: 100%; max-width: 520px; height: auto; }
+  .caption { margin-top: 10px; max-width: 78ch; color: var(--ink-2); font-size: 14px; }
+  .fig figcaption { margin-top: 10px; max-width: 78ch; color: var(--ink-2); font-size: 14px; }
   .box { fill: var(--bg); stroke: var(--rule-strong); stroke-width: 1.25; }
   .box-green { fill: var(--green-tint); }
   .box-you { fill: var(--yellow-tint); stroke: var(--yellow); stroke-width: 1.25; }
@@ -122,17 +127,17 @@
   <section>
     <h2>How it works</h2>
     <div class="scroll">
-      <svg viewBox="0 0 1040 286" role="img" aria-label="Sources feed seven teams of AI agents in order: Scouts find, Matchers merge, Screeners filter, Investigators research the people, Researchers size up their companies, Fact-checkers verify, Analysts score. The ranked founders and companies reach you. You say yes or no. After you approve, Outreach drafts are sent. You can steer every team, and the swarm learns from your yes and no.">
+      <svg viewBox="0 0 1040 286" role="img" aria-label="Sources feed seven teams of AI agents in order: Scouts find, Matchers merge, Screeners filter, Investigators research the people, Researchers size up their companies, Fact-checkers verify, Analysts score. The ranked founders and companies reach you. You say yes or no. After you approve, outreach is drafted. You can steer every team, and the swarm learns from your yes and no.">
         <defs>
-          <marker id="m" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0 10 5 0 10z" fill="#c6c6cb"/></marker>
-          <marker id="mp" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0 0 10 5 0 10z" fill="#45164a"/></marker>
-          <marker id="my" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0 10 5 0 10z" fill="#f2b824"/></marker>
+          <marker id="m" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0 10 5 0 10z" fill="var(--rule-strong)"/></marker>
+          <marker id="mp" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0 0 10 5 0 10z" fill="var(--purple)"/></marker>
+          <marker id="my" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0 10 5 0 10z" fill="var(--yellow)"/></marker>
         </defs>
 
         <!-- You steer every team -->
-        <rect x="134" y="20" width="670" height="38" rx="19" fill="#45164a"/>
+        <rect x="134" y="20" width="670" height="38" rx="19" fill="var(--purple)"/>
         <use href="#i-sliders" x="427" y="28" width="22" height="22" class="ic-white"/>
-        <text x="459" y="44" fill="#fff" font-family="Lato, Helvetica, Arial, sans-serif" font-weight="900" font-size="14.5">You steer</text>
+        <text x="459" y="44" fill="var(--on-accent)" font-family="Lato, Helvetica, Arial, sans-serif" font-weight="900" font-size="14.5">You steer</text>
         <g class="steer" marker-end="url(#mp)">
           <path d="M162 58V112"/> <path d="M264 58V112"/> <path d="M367 58V112"/> <path d="M469 58V112"/> <path d="M571 58V112"/> <path d="M673 58V112"/> <path d="M776 58V112"/>
         </g>
@@ -170,15 +175,16 @@
         <text x="878" y="198" text-anchor="middle" class="name">You</text><text x="878" y="215" text-anchor="middle" class="verb">Yes / No</text>
 
         <rect x="952" y="118" width="56" height="56" rx="14" class="tile-grey"/><use href="#i-chat" x="968" y="134" width="24" height="24" class="ic-grey"/>
-        <circle cx="1004" cy="122" r="11" fill="#c81e4e"/><use href="#i-lock" x="997" y="115" width="14" height="14" class="ic-white"/>
+        <circle cx="1004" cy="122" r="11" fill="var(--red)"/><use href="#i-lock" x="997" y="115" width="14" height="14" class="ic-white"/>
         <text x="980" y="198" text-anchor="middle" class="name">Outreach</text><text x="980" y="215" text-anchor="middle" class="verb">you approve</text>
 
         <!-- The swarm learns from your calls -->
         <path d="M878 224V258H162V228" class="back" marker-end="url(#my)"/>
-        <rect x="430" y="246" width="180" height="24" rx="12" fill="#fff5d9"/>
-        <text x="520" y="263" text-anchor="middle" fill="#8a5a00" font-family="Lato, Helvetica, Arial, sans-serif" font-weight="900" font-size="13">learns from your Yes / No</text>
+        <rect x="430" y="246" width="180" height="24" rx="12" fill="var(--yellow-tint)"/>
+        <text x="520" y="263" text-anchor="middle" fill="var(--yellow-ink)" font-family="Lato, Helvetica, Arial, sans-serif" font-weight="900" font-size="13">learns from your Yes / No</text>
       </svg>
     </div>
+    <p class="caption">Each team has one step. You make the yes or no call before outreach is drafted, and your choices guide later runs.</p>
   </section>
 
   <div class="grid2">
@@ -209,84 +215,104 @@
         <li><span class="sq"><svg width="20" height="20" class="ic"><use href="#i-bulb"/></svg></span>Suggests steering</li>
         <li><span class="sq"><svg width="20" height="20" class="ic"><use href="#i-chart"/></svg></span>Scores the swarm</li>
       </ul>
+      <p class="caption">The Founders page shows each founder's company, industry, round, the company's own tagline, and its cited moat.</p>
     </section>
 
     <section>
       <h2>Models</h2>
       <table>
-        <tr><td>Navigator</td><td><span class="chip">Claude Opus 5.5</span> <span class="chip">or Codex</span></td></tr>
-        <tr><td>Runners</td><td><span class="chip">DeepSeek Flash</span> <span class="chip">Meta Muse Ember</span></td></tr>
-        <tr><td>Scouts, Screeners</td><td><span class="chip">Claude Haiku 5.5</span></td></tr>
+        <tr><td>Navigator</td><td><span class="chip">Claude</span> <span class="chip">or Codex</span></td></tr>
+        <tr><td>Scouts, fit screen, runners</td><td><span class="chip">DeepSeek Flash</span> <span class="chip">Meta Muse Ember</span></td></tr>
         <tr><td>Investigators, Researchers</td><td><span class="chip">Claude Sonnet 5.5</span></td></tr>
         <tr><td>Code review</td><td><span class="chip">Codex, GPT-6 Astra</span></td></tr>
         <tr><td>Fact-checkers</td><td><span class="chip">GPT-6.1 Sol</span></td></tr>
         <tr><td>Analysts</td><td><span class="chip">Claude Opus 5.5</span></td></tr>
         <tr><td>Second opinions</td><td><span class="chip">DeepSeek V4 Pro</span> <span class="chip">Meta Muse</span></td></tr>
       </table>
+      <p class="caption">The small, fast models share work on scouts, the fit screen, and runners. Code shifts shares using measured results for jobs with checked output; the fit screen's split stays fixed. A model that trains on its input gets public pages only, never founder files or partner notes.</p>
+      <p class="caption">Each agent gets a short, reviewed playbook for its task, such as reading a repository, a launch post, or a funding line. Code picks the playbook.</p>
     </section>
 
   </div>
 
   <section>
     <h2>The hunt</h2>
+    <p class="caption">The hunt can search across the web and read public pages where site rules allow it. The fixed scouts still read their three feeds.</p>
     <div class="scroll">
-      <svg viewBox="0 0 1040 250" role="img" aria-label="A navigator decides where on the open web to look and keeps a notebook between days. It sends out many small, fast runners. Each runner reads one public page and reports the people starting something, in the page's own words. Code checks every person against the page, and leaves out companies that are too far along, before the person joins the teams above. You can open, pin or close a trail and write in the notebook.">
-        <rect class="tile-you" x="20" y="14" width="168" height="62" rx="12"/>
-        <use href="#i-user" class="ic-grey" x="34" y="31" width="28" height="28"/>
-        <text class="name" x="74" y="42">You</text>
-        <text class="verb" x="74" y="60">trails and notes</text>
-        <path class="steer" d="M104 76V108" marker-end="url(#mp)"/>
+      <svg viewBox="0 0 1120 286" role="img" aria-label="You steer one navigator seat. Either the built-in navigator or your connected Claude Code or Codex session can hold it. The seat sees counts and short labels, never pages, and code checks its requests. It can use site searches and whole-web search. Runners read public pages, code checks their claims, and accepted people join the teams above.">
+        <rect class="tile-you" x="18" y="12" width="190" height="46" rx="12"/>
+        <use href="#i-user" class="ic-grey" x="30" y="21" width="28" height="28"/>
+        <text class="name" x="68" y="31">You</text>
+        <text class="verb" x="68" y="48">trails and notes</text>
+        <path class="steer" d="M112 58V82" marker-end="url(#mp)"/>
 
-        <rect class="tile" x="20" y="110" width="168" height="62" rx="12"/>
-        <use href="#i-compass" class="ic" x="34" y="127" width="28" height="28"/>
-        <text class="name" x="74" y="138">Navigator</text>
-        <text class="verb" x="74" y="156">where to look</text>
+        <rect class="tile" x="18" y="86" width="190" height="80" rx="12"/>
+        <use href="#i-compass" class="ic" x="30" y="94" width="24" height="24"/>
+        <text class="name" x="62" y="108">Navigator seat</text>
+        <rect class="box" x="24" y="122" width="78" height="30" rx="8"/>
+        <rect class="box" x="124" y="122" width="78" height="30" rx="8"/>
+        <text class="verb" x="63" y="142" text-anchor="middle">Built-in</text>
+        <text class="verb" x="113" y="142" text-anchor="middle">or</text>
+        <text class="verb" x="163" y="142" text-anchor="middle">Fund agent</text>
 
-        <rect class="tile-grey" x="20" y="186" width="168" height="50" rx="12"/>
-        <use href="#i-book" class="ic-grey" x="36" y="199" width="24" height="24"/>
-        <text class="name" x="74" y="208">Notebook</text>
-        <text class="verb" x="74" y="225">kept between days</text>
-        <path class="flow" d="M104 172V184"/>
+        <rect class="tile-grey" x="18" y="186" width="190" height="48" rx="12"/>
+        <use href="#i-book" class="ic-grey" x="30" y="198" width="24" height="24"/>
+        <text class="name" x="66" y="207">Notebook</text>
+        <text class="verb" x="66" y="224">kept between days</text>
+        <path class="flow" d="M112 166V184"/>
 
-        <path class="flow" d="M188 141H252" marker-end="url(#m)"/>
+        <path class="flow" d="M208 126H226"/>
+        <path class="flow" d="M226 103V171"/>
+        <path class="flow" d="M226 103H242" marker-end="url(#m)"/>
+        <path class="flow" d="M226 171H242" marker-end="url(#m)"/>
 
-        <g>
-          <rect class="tile" x="256" y="74" width="168" height="38" rx="10"/>
-          <use href="#i-page" class="ic" x="268" y="82" width="22" height="22"/>
-          <text class="name" x="300" y="98">Runner</text>
-          <rect class="tile" x="256" y="122" width="168" height="38" rx="10"/>
-          <use href="#i-page" class="ic" x="268" y="130" width="22" height="22"/>
-          <text class="name" x="300" y="146">Runner</text>
-          <rect class="tile" x="256" y="170" width="168" height="38" rx="10"/>
-          <use href="#i-search" class="ic" x="268" y="178" width="22" height="22"/>
-          <text class="name" x="300" y="194">Runner</text>
-          <text class="verb" x="256" y="228">one page each, then gone</text>
-        </g>
+        <rect class="tile-grey" x="246" y="78" width="150" height="50" rx="10"/>
+        <text class="name" x="321" y="98" text-anchor="middle">Site searches</text>
+        <text class="verb" x="321" y="116" text-anchor="middle">three feeds</text>
+        <rect class="tile-grey" x="246" y="146" width="150" height="50" rx="10"/>
+        <text class="name" x="321" y="166" text-anchor="middle">Web search</text>
+        <text class="verb" x="321" y="184" text-anchor="middle">across the whole web</text>
 
-        <path class="flow" d="M424 93H488" marker-end="url(#m)"/>
-        <path class="flow" d="M424 141H488" marker-end="url(#m)"/>
-        <path class="flow" d="M424 189H488" marker-end="url(#m)"/>
+        <path class="flow" d="M396 103H420" marker-end="url(#m)"/>
+        <path class="flow" d="M396 171H408V136H420" marker-end="url(#m)"/>
+        <rect class="tile-grey" x="424" y="102" width="160" height="68" rx="12"/>
+        <use href="#i-link" class="ic-grey" x="436" y="122" width="28" height="28"/>
+        <text class="name" x="474" y="129">Public pages</text>
+        <text class="verb" x="474" y="148">site rules apply</text>
 
-        <rect class="tile-grey" x="492" y="110" width="168" height="62" rx="12"/>
-        <use href="#i-link" class="ic-grey" x="506" y="127" width="28" height="28"/>
-        <text class="name" x="546" y="138">Public pages</text>
-        <text class="verb" x="546" y="156">site rules kept</text>
+        <path class="flow" d="M584 136H604"/>
+        <path class="flow" d="M604 94V190"/>
+        <path class="flow" d="M604 94H620" marker-end="url(#m)"/>
+        <path class="flow" d="M604 142H620" marker-end="url(#m)"/>
+        <path class="flow" d="M604 190H620" marker-end="url(#m)"/>
+        <rect class="tile" x="624" y="76" width="150" height="38" rx="10"/>
+        <use href="#i-page" class="ic" x="636" y="84" width="22" height="22"/>
+        <text class="name" x="668" y="100">Runner</text>
+        <rect class="tile" x="624" y="124" width="150" height="38" rx="10"/>
+        <use href="#i-page" class="ic" x="636" y="132" width="22" height="22"/>
+        <text class="name" x="668" y="148">Runner</text>
+        <rect class="tile" x="624" y="172" width="150" height="38" rx="10"/>
+        <use href="#i-page" class="ic" x="636" y="180" width="22" height="22"/>
+        <text class="name" x="668" y="196">Runner</text>
+        <text class="verb" x="624" y="230">one page each, then gone</text>
 
-        <path class="flow" d="M660 141H724" marker-end="url(#m)"/>
+        <path class="flow" d="M774 95H790V136H810" marker-end="url(#m)"/>
+        <path class="flow" d="M774 143H810" marker-end="url(#m)"/>
+        <path class="flow" d="M774 191H790V136H810" marker-end="url(#m)"/>
+        <rect class="tile" x="814" y="102" width="154" height="68" rx="12"/>
+        <use href="#i-shield" class="ic" x="826" y="122" width="28" height="28"/>
+        <text class="name" x="864" y="129">Checked</text>
+        <text class="verb" x="864" y="148">by code</text>
+        <path class="flow" d="M968 136H994" marker-end="url(#m)"/>
+        <rect class="tile" x="998" y="102" width="108" height="68" rx="12"/>
+        <use href="#i-merge" class="ic" x="1038" y="112" width="28" height="28"/>
+        <text class="verb" x="1052" y="154" text-anchor="middle">Teams above</text>
 
-        <rect class="tile" x="728" y="110" width="168" height="62" rx="12"/>
-        <use href="#i-shield" class="ic" x="742" y="127" width="28" height="28"/>
-        <text class="name" x="782" y="138">Checked</text>
-        <text class="verb" x="782" y="156">against the page</text>
-
-        <path class="flow" d="M896 141H946" marker-end="url(#m)"/>
-
-        <rect class="tile" x="950" y="110" width="70" height="62" rx="12"/>
-        <use href="#i-merge" class="ic" x="971" y="127" width="28" height="28"/>
-        <text class="verb" x="950" y="192">joins the</text>
-        <text class="verb" x="950" y="208">teams above</text>
+        <path class="steer" d="M892 170V252H216V164H208" marker-end="url(#mp)"/>
+        <text class="verb" x="520" y="246" text-anchor="middle">Counts + labels</text>
       </svg>
     </div>
+    <p class="caption">The built-in navigator or the fund's long-running Claude Code or Codex session can hold this one seat. It sees counts and short labels, never a page. Its requests pass the same code checks. Site searches include GitHub, Hacker News, and Hugging Face; web search reaches beyond those sources. You can open, pin, pause, or close trails and add notebook notes.</p>
     <div class="chips">
       <span class="chip">Named on the page</span>
       <span class="chip">In the page's own words</span>
@@ -297,12 +323,72 @@
   </section>
 
   <section>
+    <h2>Recordings and calls</h2>
+    <div class="grid2">
+      <figure class="fig">
+        <h3>Quotes from a recording</h3>
+        <svg viewBox="0 0 380 96" role="img" aria-label="An audio or video talk is transcribed first. An agent may quote only exact words found in the transcript.">
+          <rect x="4" y="20" width="112" height="52" rx="10" class="box-you"/>
+          <rect x="134" y="20" width="112" height="52" rx="10" class="box-green"/>
+          <rect x="264" y="20" width="112" height="52" rx="10" class="box"/>
+          <text x="60" y="42" text-anchor="middle" class="lbl">Audio / video</text>
+          <text x="60" y="59" text-anchor="middle" class="sub">talk or interview</text>
+          <text x="190" y="50" text-anchor="middle" class="lbl">Transcript</text>
+          <text x="320" y="42" text-anchor="middle" class="lbl">Exact quote</text>
+          <text x="320" y="59" text-anchor="middle" class="sub">words in transcript</text>
+          <path d="M116 46H130" class="flow" marker-end="url(#m)"/>
+          <path d="M246 46H260" class="flow" marker-end="url(#m)"/>
+        </svg>
+        <figcaption>A talk or interview that exists only as audio or video is transcribed first. An agent may quote only words that appear in that transcript.</figcaption>
+      </figure>
+
+      <figure class="fig">
+        <h3>Calls stay off</h3>
+        <svg viewBox="0 0 380 96" role="img" aria-label="A call needs partner approval, the person's recorded consent to an AI call, and an AI disclosure in its first sentence. The calling service stays off until it is connected and a lawyer has reviewed it.">
+          <rect x="4" y="20" width="82" height="52" rx="10" class="box-you"/>
+          <rect x="102" y="20" width="92" height="52" rx="10" class="box"/>
+          <rect x="210" y="20" width="82" height="52" rx="10" class="box-green"/>
+          <rect x="308" y="20" width="68" height="52" rx="10" class="tile-grey"/>
+          <text x="45" y="42" text-anchor="middle" class="lbl">Partner yes</text>
+          <text x="45" y="59" text-anchor="middle" class="sub">one click</text>
+          <text x="148" y="42" text-anchor="middle" class="lbl">Consent</text>
+          <text x="148" y="59" text-anchor="middle" class="sub">on record</text>
+          <text x="251" y="42" text-anchor="middle" class="lbl">AI disclosed</text>
+          <text x="251" y="59" text-anchor="middle" class="sub">first sentence</text>
+          <use href="#i-lock" x="332" y="24" width="20" height="20" class="ic-grey"/>
+          <text x="342" y="63" text-anchor="middle" class="sub">Call off</text>
+          <path d="M86 46H98" class="flow" marker-end="url(#m)"/>
+          <path d="M194 46H206" class="flow" marker-end="url(#m)"/>
+          <path d="M292 46H304" class="flow" marker-end="url(#m)"/>
+        </svg>
+        <figcaption>The call needs one partner's approval click and the person's prior agreement to an AI call on record. The first sentence says this is an AI call. Live calls stay off until a calling service is connected and a lawyer reviews the rules.</figcaption>
+      </figure>
+    </div>
+  </section>
+
+  <section>
     <h2>How it gets better</h2>
     <div class="better">
       <figure class="fig">
+        <h3>Three scoreboards</h3>
+        <svg viewBox="0 0 380 96" role="img" aria-label="The swarm uses three scoreboards: simulated founders with known quality, real past companies, and hunt yield on a simulated web.">
+          <rect x="4" y="8" width="118" height="58" rx="10" class="box-green"/>
+          <rect x="130" y="8" width="118" height="58" rx="10" class="box"/>
+          <rect x="256" y="8" width="120" height="58" rx="10" class="box-green"/>
+          <text x="63" y="32" text-anchor="middle" class="lbl">Sim founders</text>
+          <text x="63" y="50" text-anchor="middle" class="sub">known quality</text>
+          <text x="189" y="32" text-anchor="middle" class="lbl">Past companies</text>
+          <text x="189" y="50" text-anchor="middle" class="sub">real outcomes</text>
+          <text x="316" y="32" text-anchor="middle" class="lbl">Hunt yield</text>
+          <text x="316" y="50" text-anchor="middle" class="sub">simulated web</text>
+        </svg>
+        <figcaption>Simulated founder and hunt-yield results say nothing about real founders. Hunt yield tunes how the hunt spends its reading.</figcaption>
+      </figure>
+
+      <figure class="fig">
         <h3>Tests itself on past companies</h3>
         <svg viewBox="0 0 380 96" role="img" aria-label="The swarm tests itself on companies from the past. It learns on the earliest launches, chooses changes on launches held back from tuning, and reports its score on the latest launches, which choose nothing.">
-          <defs><marker id="mt" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0 10 5 0 10z" fill="#c6c6cb"/></marker></defs>
+          <defs><marker id="mt" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0 10 5 0 10z" fill="var(--rule-strong)"/></marker></defs>
           <rect x="4" y="6" width="118" height="52" rx="10" class="box-green"/>
           <rect x="130" y="6" width="118" height="52" rx="10" class="box-green"/>
           <rect x="256" y="6" width="120" height="52" rx="10" class="box-you"/>
@@ -312,6 +398,7 @@
           <path d="M4 78H372" class="flow" marker-end="url(#mt)"/>
           <text x="372" y="93" text-anchor="end" class="sub">time</text>
         </svg>
+        <figcaption>Real past companies check how the scorecard ranks outcomes. The latest launches are held back from tuning.</figcaption>
         <div class="chips"><span class="chip">Names and years removed</span><span class="chip">Checked against shuffled outcomes</span><span class="chip">Shown as an upper bound</span></div>
       </figure>
 
@@ -325,6 +412,7 @@
           <rect x="4" y="56" width="140" height="36" rx="8" class="tile-grey"/><use href="#i-lock" x="14" y="65" width="18" height="18" class="ic-grey"/><text x="40" y="79" class="lbl">Hidden answers</text>
           <text x="156" y="79" class="sub">no agent sees them</text>
         </svg>
+        <figcaption>Founder and company files stay in separate rooms. Only short records cross between them.</figcaption>
         <div class="chips"><span class="chip">Each agent sees only its own rooms</span><span class="chip">Only short records cross</span></div>
       </figure>
 
@@ -334,6 +422,7 @@
           <text x="4" y="30" class="lbl">Model A</text><rect x="72" y="19" width="256" height="14" rx="7" class="track"/><rect x="72" y="19" width="154" height="14" rx="7" class="bar"/><text x="338" y="31" class="lbl">60%</text>
           <text x="4" y="70" class="lbl">Model B</text><rect x="72" y="59" width="256" height="14" rx="7" class="track"/><rect x="72" y="59" width="102" height="14" rx="7" class="bar"/><text x="338" y="71" class="lbl">40%</text>
         </svg>
+        <figcaption>Example only. Code shifts shares when results are measured and checked; fit-screen shares stay fixed.</figcaption>
         <div class="chips"><span class="chip">Code shares out the work</span><span class="chip">More goes to work that passed the checks</span><span class="chip">Benched if it fails them</span></div>
       </figure>
 
@@ -341,12 +430,13 @@
         <h3>Checks its own assumptions</h3>
         <svg viewBox="0 0 380 96" role="img" aria-label="Every assumption is a statement that could be false. Each is tested twice, on past companies and on your own calls, and shown as a range against the line that chance would give.">
           <text x="4" y="30" class="lbl">Past companies</text>
-          <rect x="120" y="22" width="220" height="6" rx="3" class="track"/><rect x="246" y="19" width="62" height="12" rx="6" fill="#bfe3d6"/><circle cx="278" cy="25" r="6" class="bar"/>
+          <rect x="120" y="22" width="220" height="6" rx="3" class="track"/><rect x="246" y="19" width="62" height="12" rx="6" fill="var(--green-pale)"/><circle cx="278" cy="25" r="6" class="bar"/>
           <text x="4" y="70" class="lbl">Your calls</text>
-          <rect x="120" y="62" width="220" height="6" rx="3" class="track"/><rect x="196" y="59" width="84" height="12" rx="6" fill="#bfe3d6"/><circle cx="236" cy="65" r="6" class="bar"/>
-          <path d="M230 10V80" stroke="#c6c6cb" stroke-width="1.5" stroke-dasharray="3 3"/>
+          <rect x="120" y="62" width="220" height="6" rx="3" class="track"/><rect x="196" y="59" width="84" height="12" rx="6" fill="var(--green-pale)"/><circle cx="236" cy="65" r="6" class="bar"/>
+          <path d="M230 10V80" stroke="var(--rule-strong)" stroke-width="1.5" stroke-dasharray="3 3"/>
           <text x="230" y="93" text-anchor="middle" class="sub">chance</text>
         </svg>
+        <figcaption>Each assumption is checked against past companies and partner calls. Code decides whether evidence supports it.</figcaption>
         <div class="chips"><span class="chip"><span class="dot" style="background:var(--green)"></span>Supported</span><span class="chip"><span class="dot" style="background:var(--red)"></span>Against</span><span class="chip"><span class="dot" style="background:var(--yellow)"></span>Open</span><span class="chip">Code decides, never a model</span></div>
       </figure>
     </div>
@@ -355,12 +445,13 @@
   <section>
     <h2>Safeguards</h2>
     <ul class="cards">
-      <li><span class="sq red"><svg width="20" height="20" class="ic"><use href="#i-lock"/></svg></span>You approve every contact</li>
+      <li><span class="sq red"><svg width="20" height="20" class="ic"><use href="#i-lock"/></svg></span>You approve every contact. Calls need consent on record and one person's click.</li>
       <li><span class="sq"><svg width="20" height="20" class="ic"><use href="#i-link"/></svg></span>Every claim has a source</li>
       <li><span class="sq"><svg width="20" height="20" class="ic"><use href="#i-quote"/></svg></span>Quotes checked at the source</li>
       <li><span class="sq"><svg width="20" height="20" class="ic"><use href="#i-shield"/></svg></span>A second AI checks, and is tested</li>
-      <li><span class="sq"><svg width="20" height="20" class="ic"><use href="#i-db"/></svg></span>Never reads LinkedIn. Public pages, by each site's rules</li>
+      <li><span class="sq"><svg width="20" height="20" class="ic"><use href="#i-db"/></svg></span>Never reads LinkedIn or a site whose terms bar automated reading, including YouTube, Vimeo, and Spotify</li>
       <li><span class="sq"><svg width="20" height="20" class="ic"><use href="#i-user"/></svg></span>No personal attributes</li>
+      <li><span class="sq"><svg width="20" height="20" class="ic"><use href="#i-lock"/></svg></span>A model that trains on input gets public pages only, never founder files or partner notes</li>
       <li><span class="sq"><svg width="20" height="20" class="ic"><use href="#i-stop"/></svg></span>Spend cap and stop switch</li>
     </ul>
   </section>
