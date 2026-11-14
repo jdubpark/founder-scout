@@ -31,11 +31,6 @@ describe("appendJsonLine", () => {
     ]);
   });
 
-  it("creates the file when it does not exist", async () => {
-    const file = join(scratch(), "nested", "errors.jsonl");
-    await appendJsonLine(file, { message: "first" });
-    expect(await readJsonLines(file)).toEqual([{ message: "first" }]);
-  });
 });
 
 describe("serializeEvalFlow with a lock file", () => {

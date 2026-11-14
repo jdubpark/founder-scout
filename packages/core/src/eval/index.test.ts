@@ -7,7 +7,7 @@ import type { ExecuteJob, EvalDeps, JobContext, SimFounder, Store } from "../con
 import { createExecuteJob, createJobRegistry } from "../jobs";
 import { createProviderRegistry } from "../providers";
 import { createSimWorld } from "../sim";
-import { readJsonLines, writeAtomicFile } from "./persistence";
+import { writeAtomicFile } from "./persistence";
 import {
   candidateChanges,
   createEvalService,
@@ -63,14 +63,6 @@ describe("assess-ranking persistence", () => {
     })).rejects.toThrow("simulated interrupted write");
     expect(await readFile(statePath, "utf8")).toBe(original);
     expect((await readdir(root)).filter((name) => name.endsWith(".tmp"))).toEqual([]);
-  });
-
-  it("loads complete JSONL rows and ignores a truncated final row", async () => {
-    const root = await mkdtemp(path.join(tmpdir(), "agentswarm-eval-jsonl-"));
-    roots.push(root);
-    const resultsPath = path.join(root, "results.jsonl");
-    await writeFile(resultsPath, "{\"prompt_id\":\"cohort_01\"}\n{\"prompt_id\":\"cohort_02\"", "utf8");
-    expect(await readJsonLines<{ prompt_id: string }>(resultsPath)).toEqual([{ prompt_id: "cohort_01" }]);
   });
 
   it("keeps equal ranking quality when a held metric improves beyond noise, but rejects any target drop", () => {
@@ -169,9 +161,6 @@ describe("assess-ranking persistence", () => {
 
   it("stores a stable stratified split and recomputes the headline from result rows", async () => {
     const { root, service } = await newFlow({ cohortCount: 8, cohortSize: 8, repetitions: 2 });
-    const before = await service.listFlows();
-    expect(before).toHaveLength(3);
-    expect(before[0]?.baseline).toBeNull();
     const result = await service.runRounds("assess-ranking", { rounds: 0 });
     const flowDir = path.join(root, "assess-ranking");
     const state = JSON.parse(await readFile(path.join(flowDir, "_state.json"), "utf8")) as {
@@ -228,7 +217,11 @@ describe("assess-ranking persistence", () => {
     const resultsFile = path.join(initial.root, "assess-ranking", "baseline", "results.jsonl");
     const completeRows = await rows(resultsFile);
     const partialRows = completeRows.slice(0, completeRows.length / 2);
-    await writeFile(resultsFile, partialRows.map((row) => JSON.stringify(row)).join("\n") + "\n", "utf8");
+    await writeFile(
+      resultsFile,
+      partialRows.map((row) => JSON.stringify(row)).join("\n") + "\n{\"prompt_id\":\"unfinished\",\"score\":",
+      "utf8",
+    );
 
     let calls = 0;
     const jobs = createJobRegistry();

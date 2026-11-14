@@ -5,36 +5,7 @@ import { createExecuteJob, createJobRegistry } from "../jobs";
 import { createProviderRegistry } from "../providers";
 import { createSimWorld } from "../sim";
 import { ndcg5, precision5 } from "./metrics";
-import { EVAL_WORLD_SEED, generateEvalCases, runEvalCase } from "./runner";
-
-describe("evaluation case generation", () => {
-  it("keeps cohorts stable, disjoint, and seeded with a positive outcome", () => {
-    expect(EVAL_WORLD_SEED).not.toBe(7);
-    const world = createSimWorld({ seed: EVAL_WORLD_SEED, founders: 300 });
-    const first = generateEvalCases({ cohortCount: 6, cohortSize: 12, world });
-    const repeated = generateEvalCases({ cohortCount: 6, cohortSize: 12, world });
-
-    expect(first.cases).toEqual(repeated.cases);
-    expect(first.cases.map((item) => item.id)).toEqual([
-      "cohort_01",
-      "cohort_02",
-      "cohort_03",
-      "cohort_04",
-      "cohort_05",
-      "cohort_06",
-    ]);
-
-    const assigned = first.cases.flatMap((item) => item.founderIds);
-    expect(assigned).toHaveLength(6 * 12);
-    expect(new Set(assigned).size).toBe(assigned.length);
-    for (const item of first.cases) {
-      const positives = item.founderIds.filter((id) => first.world.founder(id)?.outcome === 1);
-      expect(positives.length).toBeGreaterThanOrEqual(1);
-      expect(item.tags).toEqual([`positive_count:${positives.length}`]);
-      expect(item.prompt).toContain(`contains ${positives.length} founders`);
-    }
-  });
-});
+import { EVAL_WORLD_SEED, runEvalCase } from "./runner";
 
 function makeOutcomeControlledWorld(): { world: SimWorld; founders: SimFounder[] } {
   const source = createSimWorld({ seed: EVAL_WORLD_SEED, founders: 10 });

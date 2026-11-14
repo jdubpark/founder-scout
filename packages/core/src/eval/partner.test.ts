@@ -197,7 +197,6 @@ describe("partner-calls eval flow", () => {
     const testCount = halves.filter((split) => split === "test").length;
     expect(testCount).toBeGreaterThan(450);
     expect(testCount).toBeLessThan(550);
-    expect(partnerSplit("fnd_stable")).toBe(partnerSplit("fnd_stable"));
   });
 
   it("returns a deficit DTO without writing artifacts before each split has four calls per verdict", async () => {

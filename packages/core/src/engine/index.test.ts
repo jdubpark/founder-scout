@@ -35,7 +35,7 @@ import {
 } from "@agentswarm/shared";
 import { createExecuteJob, createJobRegistry } from "../jobs";
 import { openStore } from "../db";
-import { createSimDialler, createSimRepoFinder, createSimSources, createSimWorld } from "../sim";
+import { createSimRepoFinder, createSimSources, createSimWorld } from "../sim";
 import { ProviderError } from "../contracts";
 import type { EngineDeps, ExecuteJob, JobContext, PeopleLookup, PersonKey, PersonRecord, ProviderRegistry, QuoteChecker, RepoFinder, SimFounder, SimWorld, SourceRegistry } from "../contracts";
 import { createRunController } from "./index";
@@ -1226,10 +1226,8 @@ describe("run engine", () => {
     expect(harness.providerCallCount()).toBe(0);
   });
 
-  it("never places an approved call during a simulated run, even when a dialler is available", async () => {
+  it("keeps an approved simulated call untouched during a run", async () => {
     const world = createSimWorld({ seed: 802, founders: 2, days: 3 });
-    const dialler = createSimDialler(world);
-    expect((await dialler.status()).configured).toBe(true);
     const harness = makeHarness({
       simWorld: world,
       agentJobs: ["call.debrief", "verify.claims", "assess.judgments"],

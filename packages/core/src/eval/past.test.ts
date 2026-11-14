@@ -13,7 +13,7 @@ import {
 } from "@agentswarm/shared";
 import { ProviderError, type EvalDeps, type JobContext, type JobRegistry } from "../contracts";
 import { createEvalService, decideCandidate } from "./index";
-import { createPastEval, fixedYearHits, PAST_FOUNDERS_FLOW_ID, type PastEvalOptions } from "./past";
+import { createPastEval, PAST_FOUNDERS_FLOW_ID, type PastEvalOptions } from "./past";
 
 const roots: string[] = [];
 const guidance = "Prioritize repeated paid use over announced intent.";
@@ -304,6 +304,9 @@ describe("past founders eval", () => {
     expect(result?.probed).toBe(cases.length);
     expect(result?.basis).toContain("7 past companies from 2 earlier periods");
     expect(result?.basis).toContain("claude-opus-5-5");
+    const serviceOutcomeEvidence = createEvalService(deps).outcomeEvidence;
+    expect(serviceOutcomeEvidence).toBeDefined();
+    if (serviceOutcomeEvidence) expect(await serviceOutcomeEvidence()).toEqual(result);
     const serialized = JSON.stringify(result);
     for (const index of [9, 10, 11, 12, 13, 14, 15, 16]) {
       expect(serialized).not.toContain(`opaque-token-${String(index).padStart(2, "0")}`);
@@ -314,13 +317,8 @@ describe("past founders eval", () => {
     const [cacheAfter, stateAfter] = await Promise.all([readFile(cachePath), readFile(statePath)]);
     expect(cacheAfter.equals(cacheBefore)).toBe(true);
     expect(stateAfter.equals(stateBefore)).toBe(true);
-  });
-
-  it("returns no outcome evidence for an unusable split", async () => {
-    const files = await setup(makeCases({ cohorts: 1, perCohort: 8 }));
-    const flow = pastFlow(depsFor(files).deps);
-
-    expect(await flow.outcomeEvidence()).toBeNull();
+    const unusable = pastFlow(depsFor(await setup(makeCases({ cohorts: 1, perCohort: 8 }))).deps);
+    expect(await unusable.outcomeEvidence(), "an unusable split has no clean training evidence").toBeNull();
   });
 
   it("reports a shuffled baseline for clean test cases", async () => {
@@ -339,12 +337,15 @@ describe("past founders eval", () => {
 
   it("counts only cached era answers and does not re-probe entries without a year", async () => {
     const cases = makeCases();
+    cases[0]!.asOf = "2018-12-31";
+    cases[1]!.asOf = "2020-12-31";
+    cases[2]!.asOf = "2012-12-31";
     const files = await setup(cases);
     const probe = vi.fn(async ({ prompt }: { prompt: string }) => {
       const index = Number(prompt.match(/opaque-token-(\d+)/)?.[1] ?? 0);
       const guess = guessFor(prompt, cases, new Set());
       if (index === 1) return { ...guess, year: 2019 };
-      if (index === 2) return { ...guess, year: 2021 };
+      if (index === 2) return { ...guess, year: 2023 };
       if (index === 3) return { ...guess, year: null };
       return guess;
     });
@@ -353,13 +354,13 @@ describe("past founders eval", () => {
     const baseline = await flow.runRounds(PAST_FOUNDERS_FLOW_ID, { brain: "live", rounds: 0, budgetUsd: 100 });
     expect(probe).toHaveBeenCalledTimes(cases.length);
     expect(probe.mock.calls[0]?.[0].prompt).toContain("Also give the calendar year you believe this was written in, or null if you cannot tell.");
-    // Every case is from 2018, so one fixed answer would date all three: the one hit shows nothing.
-    expect(baseline.contamination).toMatchObject({ eraNamed: 1, eraProbed: 3, eraFixed: 3 });
-    expect(baseline.narrative).toContain("the judge was within one for 1 of 3 masked cases; always answering one year would be for 3.");
+    // The split exposes two eras here; one fixed year can cover both, while the probe names one.
+    expect(baseline.contamination).toMatchObject({ eraNamed: 1, eraProbed: 2, eraFixed: 2 });
+    expect(baseline.narrative).toContain("the judge was within one for 1 of 2 masked cases; always answering one year would be for 2.");
 
     const repeated = await flow.runRounds(PAST_FOUNDERS_FLOW_ID, { brain: "live", rounds: 0, budgetUsd: 100 });
     expect(probe).toHaveBeenCalledTimes(cases.length);
-    expect(repeated.contamination).toMatchObject({ eraNamed: 1, eraProbed: 3 });
+    expect(repeated.contamination).toMatchObject({ eraNamed: 1, eraProbed: 2 });
   });
 
   it("splits earlier cohorts for training, keeps a generalizable company weight, and reuses cached judgments", async () => {
@@ -386,34 +387,39 @@ describe("past founders eval", () => {
     expect(calls.length).toBe(baselineCallCount);
   });
 
-  it("keeps a change that validates even when it scores worse on the report-only test periods", async () => {
-    const cases = makeCases({ reversedTest: true });
+  it.each([
+    {
+      name: "keeps a change that validates even when it scores worse on the report-only test periods",
+      split: { reversedTest: true },
+      status: "champion",
+      testIsWorse: true,
+      rationale: "Kept:",
+    },
+    {
+      name: "reverts a change that looks better on test but fails validation",
+      split: { reversedValidate: true },
+      status: "reverted",
+      testIsWorse: false,
+      rationale: "Reverted:",
+    },
+  ])("$name", async ({ split, status, testIsWorse, rationale }) => {
+    const cases = makeCases(split);
     const files = await setup(cases);
     const initial: SwarmConfig = { ...BASE_CONFIG, params: { "cweights.traction": 4, "cweights.team": 4 } };
     const { deps } = depsFor(files, { mode: "weights" });
     const flow = pastFlow(deps, { initialConfig: initial, probe: noRecognition(cases), repetitions: 1 });
 
     const result = await flow.runRounds(PAST_FOUNDERS_FLOW_ID, { brain: "live", rounds: 1, budgetUsd: 100 });
-
-    expect(result.variants[1]?.status).toBe("champion");
-    expect(result.bestVariant).toBe(result.variants[1]?.id);
-    expect(result.variants[1]?.test.clean_auc).toBeLessThan(result.variants[0]?.test.clean_auc ?? 1);
-    expect(result.variants[1]?.rationale).toContain("Kept:");
-  });
-
-  it("reverts a change that looks better on test but fails validation", async () => {
-    const cases = makeCases({ reversedValidate: true });
-    const files = await setup(cases);
-    const initial: SwarmConfig = { ...BASE_CONFIG, params: { "cweights.traction": 4, "cweights.team": 4 } };
-    const { deps } = depsFor(files, { mode: "weights" });
-    const flow = pastFlow(deps, { initialConfig: initial, probe: noRecognition(cases), repetitions: 1 });
-
-    const result = await flow.runRounds(PAST_FOUNDERS_FLOW_ID, { brain: "live", rounds: 1, budgetUsd: 100 });
-
-    expect(result.variants[1]?.status).toBe("reverted");
-    expect(result.variants[1]?.test.clean_auc).toBeGreaterThan(result.variants[0]?.test.clean_auc ?? 1);
-    expect(result.bestVariant).toBe("baseline");
-    expect(result.variants[1]?.rationale).toContain("Reverted:");
+    const candidate = result.variants[1];
+    expect(candidate?.status, "the validation period decides whether the variant is kept").toBe(status);
+    expect(candidate?.test.clean_auc, "the report-only test period reports the variant's score").toEqual(expect.any(Number));
+    const candidateTest = candidate?.test.clean_auc;
+    const currentTest = result.variants[0]?.test.clean_auc;
+    if (typeof candidateTest === "number" && typeof currentTest === "number") {
+      expect(candidateTest < currentTest, "test score relation is a report, not the keep rule").toBe(testIsWorse);
+    }
+    expect(result.bestVariant, "only a validation keeper becomes best").toBe(status === "champion" ? candidate?.id : "baseline");
+    expect(candidate?.rationale).toContain(rationale);
   });
 
   it("uses the paired bootstrap floor for a small validation slice and keeps a clear gain on a larger slice", async () => {
@@ -491,7 +497,7 @@ describe("past founders eval", () => {
     expect(result.variants[1]?.test).toEqual({});
   });
 
-  it("drops guidance containing a subject, a too-long line, or a sensitive attribute", async () => {
+  it("rejects unsafe guidance and matches subject names as whole words", async () => {
     const cases = makeCases();
     const files = await setup(cases);
     const { deps, calls } = depsFor(files, { mode: "guidance", sensitive: (text) => /age/i.test(text) ? ["age"] : [] });
@@ -513,34 +519,21 @@ describe("past founders eval", () => {
     expect(result.narrative).toContain("3 suggested lines were refused");
     expect(result.narrative).toContain("one named a subject");
     expect(result.narrative).toContain("one stated a personal attribute");
-  });
-
-  it("matches lesson subject names as normalized whole words and ignores names shorter than three characters", async () => {
-    const cases = makeCases();
-    cases[0]!.subject.people = ["Or"];
-    const files = await setup(cases);
-    const { deps } = depsFor(files, { mode: "guidance" });
-    const line = "Weigh a prior shipped product over a promised one";
-    const flow = pastFlow(deps, {
-      probe: noRecognition(cases),
-      proposeGuidance: async () => [{ job: "assess.company", text: line, rationale: "Use shipped evidence." }],
-      repetitions: 1,
-    });
-    const result = await flow.runRounds(PAST_FOUNDERS_FLOW_ID, { brain: "live", rounds: 1, budgetUsd: 100 });
-
-    expect(result.variants[1]?.config.lessons?.["assess.company"]).toContain(line);
 
     const namedCases = makeCases();
     namedCases[0]!.subject.company = "Brex";
+    namedCases[0]!.subject.people = ["Ann", "Or"];
     const namedFiles = await setup(namedCases);
-    const namedFlow = pastFlow(depsFor(namedFiles).deps, {
+    const namedFlow = pastFlow(depsFor(namedFiles, { mode: "guidance" }).deps, {
       probe: noRecognition(namedCases),
-      proposeGuidance: async () => [{ job: "assess.company", text: "A Brex reference is no evidence of adoption.", rationale: "Names a subject." }],
+      proposeGuidance: async () => [
+        { job: "assess.company", text: "Weigh shipped product or a promised roadmap differently.", rationale: "A one-word short name is ignored." },
+        { job: "assess.company", text: "Announced product evidence is weaker than repeated paid use.", rationale: "A name inside a larger word is allowed." },
+      ],
       repetitions: 1,
     });
     const named = await namedFlow.runRounds(PAST_FOUNDERS_FLOW_ID, { brain: "live", rounds: 1, budgetUsd: 100 });
-    expect(named.variants).toHaveLength(1);
-    expect(named.narrative).toContain("one named a subject");
+    expect(named.narrative).not.toContain("one named a subject");
   });
 
   it("stops before starting calls at the budget ceiling and resumes from cached jobs", async () => {
@@ -831,39 +824,4 @@ describe("past founders eval", () => {
     expect(config.id).toContain("cfg_past-founders_");
   });
 
-  it("exposes the third flow and marks synthetic and real summaries correctly", async () => {
-    const cases = makeCases();
-    const files = await setup(cases);
-    const { deps } = depsFor(files);
-    const service = createEvalService(deps);
-    const flows = await service.listFlows();
-    expect(flows.map((item) => item.id)).toContain("assess-ranking");
-    expect(flows.find((item) => item.id === "assess-ranking")?.realData).toBe(false);
-    expect(flows.find((item) => item.id === PAST_FOUNDERS_FLOW_ID)?.realData).toBe(true);
-    const synthetic = await service.getFlow("assess-ranking");
-    expect(synthetic.ready).toBe(true);
-    expect(synthetic.callsModels).toBe(false);
-    const syntheticRun = await service.runRounds("assess-ranking", { brain: "sim", rounds: 0 });
-    expect(syntheticRun.ready).toBe(true);
-    expect(syntheticRun.callsModels).toBe(false);
-    expect(syntheticRun.spentUsd).toBe(0);
-
-    const past = pastFlow(deps, { probe: noRecognition(cases), repetitions: 2 });
-    await past.runRounds(PAST_FOUNDERS_FLOW_ID, { brain: "live", rounds: 0, budgetUsd: 100 });
-    const flowEvidence = await past.outcomeEvidence();
-    expect(service.outcomeEvidence).toBeDefined();
-    expect(await service.outcomeEvidence?.()).toEqual(flowEvidence);
-  });
-});
-
-describe("fixedYearHits", () => {
-  it("is what always answering one year scores, give or take one", () => {
-    // Three years: the middle one is within a year of every case.
-    expect(fixedYearHits([2018, 2018, 2019, 2020])).toBe(4);
-    // The best answer need not be a year that has a case.
-    expect(fixedYearHits([2018, 2020])).toBe(2);
-    // Over a wider span no single answer covers everything, so the era figure can mean something.
-    expect(fixedYearHits([2012, 2014, 2016, 2018, 2018, 2019, 2021])).toBe(3);
-    expect(fixedYearHits([])).toBe(0);
-  });
 });

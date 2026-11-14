@@ -509,16 +509,16 @@ describe("hunt engine stage", () => {
       wrapExecuteJob: (delegate) => wrapJob(delegate, { navigate: () => {
         during?.();
         return {
-          open: [], extend: [{ trailId: "trl_paused", searches: [], pages: [`https://${SIM_WEB_HOST}/g/decent/1`] }],
-          close: [{ trailId: "trl_pinned", why: "Nothing here." }, { trailId: "trl_paused", why: "Nothing here either." }],
-          focus: [{ trailId: "trl_paused", weight: 5 }, { trailId: "trl_pinned", weight: 1 }],
+          open: [], extend: [{ trailId: "trl_paused", searches: [], pages: [`https://${SIM_WEB_HOST}/g/decent/1`] }, { trailId: "trl_closed", searches: [], pages: [`https://${SIM_WEB_HOST}/g/decent/2`] }],
+          close: [{ trailId: "trl_pinned", why: "Nothing here." }, { trailId: "trl_paused", why: "Nothing here either." }, { trailId: "trl_closed", why: "Reopen this trail." }],
+          focus: [{ trailId: "trl_paused", weight: 5 }, { trailId: "trl_pinned", weight: 1 }, { trailId: "trl_closed", weight: 5 }],
           notes: [], done: false,
         };
       } }),
     });
     const at = NOW.toISOString();
     made.store.saveHunt({ id: "hnt_person", swarmId: SWARM_ID, turn: 0, looks: 0, createdAt: at, updatedAt: at });
-    for (const id of ["trl_pinned", "trl_paused"]) {
+    for (const id of ["trl_pinned", "trl_paused", "trl_closed"]) {
       made.store.saveTrail({
         id, huntId: "hnt_person", swarmId: SWARM_ID, name: id, intent: "People starting something.", status: "open", openedBy: "code", weight: 3, pinned: false,
         stats: { searches: 0, pages: 0, leads: 0, kept: 0, dropped: 0, tooLate: 0, blocked: 0, costUsd: 0 }, openedAt: at, closedAt: null, closedWhy: null,
@@ -527,6 +527,7 @@ describe("hunt engine stage", () => {
     during = () => {
       made.store.saveTrail({ ...made.store.getTrail("trl_pinned")!, pinned: true });
       made.store.saveTrail({ ...made.store.getTrail("trl_paused")!, status: "paused" });
+      made.store.saveTrail({ ...made.store.getTrail("trl_closed")!, status: "closed", closedAt: NOW.toISOString(), closedWhy: "Closed by a person." });
     };
     const started = await made.controller.start({ swarmId: SWARM_ID, trigger: "manual", brain: "sim", sources: "sim", budgetUsd: 40 });
     await made.controller.wait(started.id);
@@ -536,6 +537,8 @@ describe("hunt engine stage", () => {
     // The pause holds: it was not closed, not reopened by the attention request, and nothing was queued on it.
     expect(made.store.getTrail("trl_paused")).toMatchObject({ status: "paused", weight: 3, closedAt: null, closedWhy: null });
     expect(made.store.listFrontier("hnt_person", { trailId: "trl_paused" })).toEqual([]);
+    expect(made.store.getTrail("trl_closed")).toMatchObject({ status: "closed", weight: 3, closedWhy: "Closed by a person." });
+    expect(made.store.listFrontier("hnt_person", { trailId: "trl_closed" })).toEqual([]);
   });
 
   it("keeps a company's address only when the page has it", async () => {
@@ -723,7 +726,7 @@ describe("hunt engine stage", () => {
   });
 
   it("gives every call an allowance, and the allowances in flight never exceed what is left of the share", async () => {
-    const cap = 40 * 0.25;
+    const cap = 20 * 0.25;
     let spent = 0;
     let inFlight = 0;
     let worst = Number.NEGATIVE_INFINITY;
@@ -763,7 +766,7 @@ describe("hunt engine stage", () => {
       id: `frn_allow_${index}`, huntId: "hnt_allow", trailId: "trl_one", kind: "page" as const, target, engine: null,
       label: "Starting page", priority: 1 as const, depth: 0, from: "person" as const, state: "queued" as const, addedAt: at,
     })));
-    const started = await made.controller.start({ swarmId: SWARM_ID, trigger: "manual", brain: "sim", sources: "sim", budgetUsd: 40 });
+    const started = await made.controller.start({ swarmId: SWARM_ID, trigger: "manual", brain: "sim", sources: "sim", budgetUsd: 20 });
     await made.controller.wait(started.id);
 
     expect(allowances.length).toBeGreaterThan(10);

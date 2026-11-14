@@ -385,7 +385,7 @@ describe("company pipeline stages", () => {
   });
 
   it("merges exact company identities and ignores shared hosting as a domain", async () => {
-    const world = createSimWorld({ seed: 13, founders: 5, days: 1 });
+    const world = createSimWorld({ seed: 13, founders: 6, days: 1 });
     const source = world.founders();
     const fixtures = [
       makeFounder(source[0]!, "fnd_same_site_a", { name: "A", company: { name: "Acme", url: "https://www.acme.example", oneLiner: null, stage: null } }),
@@ -400,8 +400,15 @@ describe("company pipeline stages", () => {
       makeFounder(source[2]!, "fnd_builder_b", { name: "I", company: { name: "Beta Tools", url: "https://builder.example/beta", oneLiner: null, stage: null } }),
       makeFounder(source[3]!, "fnd_atlas_a", { name: "J", company: { name: "Atlas", url: "https://atlas-one.example", oneLiner: null, stage: null } }),
       makeFounder(source[4]!, "fnd_atlas_b", { name: "K", company: { name: "Atlas", url: "https://atlas-two.example", oneLiner: null, stage: null } }),
+      makeFounder(source[0]!, "fnd_front_acme", { name: "L", company: { name: "Acme", url: "https://acme.example", oneLiner: null, stage: null } }),
+      makeFounder(source[1]!, "fnd_front_acme_labs", { name: "M", company: { name: "Acme Labs", url: "https://acme.example/", oneLiner: null, stage: null } }),
+      makeFounder(source[2]!, "fnd_path_alpha", { name: "N", company: { name: "Gamma Tools", url: "https://builder.example/gamma", oneLiner: null, stage: null } }),
+      makeFounder(source[3]!, "fnd_path_beta", { name: "O", company: { name: "Delta Tools", url: "https://builder.example/delta", oneLiner: null, stage: null } }),
+      makeFounder(source[4]!, "fnd_other_atlas_a", { name: "P", company: { name: "Orion", url: "https://orion-one.example", oneLiner: null, stage: null } }),
+      makeFounder(source[5]!, "fnd_other_atlas_b", { name: "Q", company: { name: "Orion", url: "https://orion-two.example", oneLiner: null, stage: null } }),
     ];
-    const h = harness({ world, founders: fixtures.map((founder) => ({ ...founder, status: "surfaced", simId: null })) });
+    const simulated = world.founders().slice(0, 6).map((sim, index) => makeFounder(sim, `fnd_sim_identity_${index}`, { status: "surfaced" }));
+    const h = harness({ world, founders: [...fixtures.map((founder) => ({ ...founder, status: "surfaced" as const, simId: null })), ...simulated] });
     await run(h);
     const records = h.store.listCompanies({ swarmId: SWARM_ID });
     const id = (founderId: string) => h.store.getFounder(founderId)?.companyId;
@@ -414,37 +421,13 @@ describe("company pipeline stages", () => {
     // company's evidence under another.
     expect(id("fnd_builder_a")).not.toBe(id("fnd_builder_b"));
     expect(id("fnd_atlas_a")).not.toBe(id("fnd_atlas_b"));
-  });
-
-  it("merges different names only when both links are the same site's front page", async () => {
-    const world = createSimWorld({ seed: 18, founders: 6, days: 1 });
-    const source = world.founders();
-    const fixtures = [
-      makeFounder(source[0]!, "fnd_front_acme", { name: "A", company: { name: "Acme", url: "https://acme.example", oneLiner: null, stage: null } }),
-      makeFounder(source[1]!, "fnd_front_acme_labs", { name: "B", company: { name: "Acme Labs", url: "https://acme.example/", oneLiner: null, stage: null } }),
-      makeFounder(source[2]!, "fnd_path_alpha", { name: "C", company: { name: "Alpha Tools", url: "https://builder.example/alpha", oneLiner: null, stage: null } }),
-      makeFounder(source[3]!, "fnd_path_beta", { name: "D", company: { name: "Beta Tools", url: "https://builder.example/beta", oneLiner: null, stage: null } }),
-      makeFounder(source[4]!, "fnd_other_atlas_a", { name: "E", company: { name: "Atlas", url: "https://atlas-one.example", oneLiner: null, stage: null } }),
-      makeFounder(source[5]!, "fnd_other_atlas_b", { name: "F", company: { name: "Atlas", url: "https://atlas-two.example", oneLiner: null, stage: null } }),
-    ].map((founder) => ({ ...founder, status: "surfaced" as const, simId: null }));
-    const h = harness({ world, founders: fixtures });
-    await run(h);
-    const companyId = (founderId: string) => h.store.getFounder(founderId)?.companyId;
-    expect(companyId("fnd_front_acme")).toBe(companyId("fnd_front_acme_labs"));
-    expect(companyId("fnd_path_alpha")).not.toBe(companyId("fnd_path_beta"));
-    expect(companyId("fnd_other_atlas_a")).not.toBe(companyId("fnd_other_atlas_b"));
-  });
-
-  it("gives every simulated company its own record, although their sites share one host", async () => {
-    const world = createSimWorld({ seed: 911, founders: 6, days: 1 });
-    const h = harness({ world, founders: world.founders().slice(0, 6).map((sim, index) => makeFounder(sim, `fnd_own_${index}`)) });
-    await run(h);
-    const founders = h.store.listFounders({ swarmId: SWARM_ID });
-    const names = new Set(founders.map((founder) => founder.company.name));
-    expect(new Set(founders.map((founder) => founder.companyId)).size).toBe(names.size);
-    for (const founder of founders) {
-      expect(h.store.getCompany(founder.companyId!)?.name).toBe(founder.company.name);
-    }
+    expect(id("fnd_front_acme")).toBe(id("fnd_front_acme_labs"));
+    expect(id("fnd_path_alpha")).not.toBe(id("fnd_path_beta"));
+    expect(id("fnd_other_atlas_a")).not.toBe(id("fnd_other_atlas_b"));
+    const storedSimulated = simulated.map((founder) => h.store.getFounder(founder.id)!);
+    const simulatedNames = new Set(storedSimulated.map((founder) => founder.company.name));
+    expect(new Set(storedSimulated.map((founder) => founder.companyId)).size).toBe(simulatedNames.size);
+    for (const founder of storedSimulated) expect(h.store.getCompany(founder.companyId!)?.name).toBe(founder.company.name);
   });
 
   it("obeys company.max_companies, including zero", async () => {
@@ -549,11 +532,27 @@ describe("company pipeline stages", () => {
     expect((await run(failedLookup, "live")).status).toBe("succeeded");
   });
 
-  it("recomputes the deal from a newer founder score without creating an assess.company task", async () => {
-    const world = createSimWorld({ seed: 120, founders: 1, days: 1 });
-    const founder = makeFounder(world.founders()[0]!, "fnd_recompute", { status: "surfaced", companyId: "cmp_recompute" });
-    const company = makeCompany("cmp_recompute", founder.company.name!, { status: "surfaced", lastResearchedAt: baseTime.toISOString() });
-    const prior = makeCompanyAssessment(company.id, "cas_recompute_old", "2026-11-11T00:00:00.000Z", {
+  it("recomputes stored company deals when a founder score or lead changes", async () => {
+    const world = createSimWorld({ seed: 120, founders: 3, days: 1 });
+    const [soloSim, leadSim, teammateSim] = world.founders();
+    const solo = makeFounder(soloSim!, "fnd_recompute", {
+      status: "surfaced",
+      companyId: "cmp_recompute",
+      company: { name: "Recompute Co", url: null, oneLiner: null, stage: null },
+    });
+    const a = makeFounder(leadSim!, "fnd_lead_change_0", {
+      status: "surfaced",
+      company: { name: "Lead Change Co", url: null, oneLiner: null, stage: null },
+      companyId: "cmp_lead_change",
+    });
+    const b = makeFounder(teammateSim!, "fnd_lead_change_1", {
+      status: "surfaced",
+      company: { name: "Lead Change Co", url: null, oneLiner: null, stage: null },
+      companyId: "cmp_lead_change",
+    });
+    const soloCompany = makeCompany("cmp_recompute", "Recompute Co", { status: "surfaced", lastResearchedAt: baseTime.toISOString() });
+    const teamCompany = makeCompany("cmp_lead_change", "Lead Change Co", { status: "surfaced", lastResearchedAt: baseTime.toISOString() });
+    const soloPrior = makeCompanyAssessment(soloCompany.id, "cas_recompute_old", "2026-11-11T00:00:00.000Z", {
       company: 0.7,
       companyCoverage: 0.5,
       companyPotential: 0.75,
@@ -562,23 +561,45 @@ describe("company pipeline stages", () => {
       breakdown: [],
       brief: { summary: "Saved brief.", moat: null, strengths: [], risks: [], openQuestions: ["Saved question."] },
     });
+    const teamPrior = makeCompanyAssessment(teamCompany.id, "cas_before_lead_change", "2026-11-12T15:00:00.000Z", {
+      leadFounderId: a.id,
+      team: 0.9,
+      company: 0.7,
+      companyCoverage: 0.5,
+      companyPotential: 0.75,
+      deal: 0.82,
+      decision: "surface",
+    });
     const h = harness({
       jobs: ["assess.company"],
-      founders: [founder],
+      founders: [solo, a, b],
       world,
       configParams: { "screen.min_fit": 0 },
       now: () => new Date("2026-11-13T18:00:00.000Z"),
     });
-    h.store.insertCompany(company);
-    h.store.insertCompanyAssessment(prior);
-    h.store.insertAssessment(makeFounderAssessment(founder.id, "2026-11-13T17:00:00.000Z", 0.8));
+    h.store.insertCompany(soloCompany);
+    h.store.insertCompany(teamCompany);
+    h.store.insertCompanyAssessment(soloPrior);
+    h.store.insertCompanyAssessment(teamPrior);
+    h.store.insertAssessment(makeFounderAssessment(solo.id, "2026-11-13T17:00:00.000Z", 0.8));
+    h.store.insertAssessment(makeFounderAssessment(a.id, "2026-11-12T10:00:00.000Z", 0.9));
+    h.store.insertAssessment(makeFounderAssessment(b.id, "2026-11-12T11:00:00.000Z", 0.8));
+    h.store.insertAssessment(makeFounderAssessment(a.id, "2026-11-13T17:00:00.000Z", 0.2));
+
     const result = await run(h);
     expect(result.status).toBe("succeeded");
-    expect(h.store.companyAssessmentHistory(company.id)).toHaveLength(2);
-    const current = h.store.latestCompanyAssessment(company.id)!;
-    expect(current.judgments).toEqual(prior.judgments);
-    expect(current.breakdown).toEqual(prior.breakdown);
-    expect(current.brief).toEqual(prior.brief);
+    expect(h.store.companyAssessmentHistory(soloCompany.id)).toHaveLength(2);
+    const soloCurrent = h.store.latestCompanyAssessment(soloCompany.id)!;
+    expect(soloCurrent.leadFounderId).toBe(solo.id);
+    expect(soloCurrent.deal, "the stored deal uses the newer founder score").not.toBe(soloPrior.deal);
+    expect(soloCurrent.judgments).toEqual(soloPrior.judgments);
+    expect(soloCurrent.breakdown).toEqual(soloPrior.breakdown);
+    expect(soloCurrent.brief).toEqual(soloPrior.brief);
+
+    expect(h.store.companyAssessmentHistory(teamCompany.id)).toHaveLength(2);
+    const teamCurrent = h.store.latestCompanyAssessment(teamCompany.id)!;
+    expect(teamCurrent.leadFounderId).toBe(b.id);
+    expect(teamCurrent.team).toBe(0.8);
     expect(h.store.listTasks({ runId: result.id }).some((task) => task.jobId === "assess.company")).toBe(false);
   });
 
@@ -613,44 +634,6 @@ describe("company pipeline stages", () => {
     expect(assessment.leadFounderId).toBe(founders[0]!.id);
     expect(assessment.team).toBe(0.9);
     expect(assessment.decision).toBe("watch");
-  });
-
-  it("recomputes when a founder reassessment changes the lead", async () => {
-    const world = createSimWorld({ seed: 202, founders: 2, days: 1 });
-    const company = makeCompany("cmp_lead_change", "Lead Change Co", { status: "surfaced" });
-    const [a, b] = world.founders().slice(0, 2).map((sim, index) => makeFounder(sim, `fnd_lead_change_${index}`, {
-      status: "surfaced",
-      company: { name: company.name, url: null, oneLiner: null, stage: null },
-      companyId: company.id,
-    }));
-    const prior = makeCompanyAssessment(company.id, "cas_before_lead_change", "2026-11-12T15:00:00.000Z", {
-      leadFounderId: a!.id,
-      team: 0.9,
-      company: 0.7,
-      companyCoverage: 0.5,
-      companyPotential: 0.75,
-      deal: 0.82,
-      decision: "surface",
-    });
-    const h = harness({
-      jobs: ["assess.company"],
-      founders: [a!, b!],
-      world,
-      now: () => new Date("2026-11-13T18:00:00.000Z"),
-    });
-    h.store.insertCompany(company);
-    h.store.insertAssessment(makeFounderAssessment(a!.id, "2026-11-12T10:00:00.000Z", 0.9));
-    h.store.insertAssessment(makeFounderAssessment(b!.id, "2026-11-12T11:00:00.000Z", 0.8));
-    h.store.insertCompanyAssessment(prior);
-    h.store.insertAssessment(makeFounderAssessment(a!.id, "2026-11-13T17:00:00.000Z", 0.2));
-
-    const result = await run(h);
-    expect(result.status).toBe("succeeded");
-    const updated = h.store.latestCompanyAssessment(company.id)!;
-    expect(updated.leadFounderId).toBe(b!.id);
-    expect(updated.team).toBe(0.8);
-    expect(h.store.companyAssessmentHistory(company.id)).toHaveLength(2);
-    expect(h.store.listTasks({ runId: result.id }).some((task) => task.jobId === "assess.company")).toBe(false);
   });
 
   it("keeps a company quote distinct from identical founder evidence and deduplicates company repeats", async () => {

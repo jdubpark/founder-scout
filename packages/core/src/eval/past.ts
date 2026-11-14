@@ -348,7 +348,7 @@ function contamination(cases: readonly PastCase[], rows: readonly ResultRow[], i
  * or take one year, so a dataset spanning three years is dated in full by always saying the
  * middle one; the share a model dates means something only above this.
  */
-export function fixedYearHits(years: readonly number[]): number {
+function fixedYearHits(years: readonly number[]): number {
   if (!years.length) return 0;
   let best = 0;
   // Every year in the span, not only those present: between 2018 and 2020 the best answer is 2019.
