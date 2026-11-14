@@ -65,6 +65,7 @@ const SOURCE_ICON: Record<SourceId, LucideIcon> = {
   github: GitBranch,
   arxiv: BookOpenText,
   people_data: IdCard,
+  yc: Rocket,
   web: Globe,
   call: Phone,
   network: Users,

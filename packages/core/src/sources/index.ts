@@ -18,6 +18,7 @@ import { createLiveRepoFinder as buildRepoFinder, type RepoFinderOptions } from 
 import { huntProxyFromEnv, linkedinAccountsFromEnv } from "./sessions";
 import { createWebReader } from "./web";
 import { createGitHubSearchEngine, createHnSearchEngine, createHuggingFaceSearchEngine } from "./search";
+import { createYcAdapter } from "./yc";
 
 export { createArxivAdapter } from "./arxiv";
 export { createBrowserLinkedInReader, createRoutingWebReader, type BrowserLinkedInReaderOptions } from "./browser-reader";
@@ -38,6 +39,7 @@ export {
 } from "./sessions";
 export { createWebReader, type WebReaderOptions } from "./web";
 export { createGitHubSearchEngine, createHnSearchEngine, createHuggingFaceSearchEngine, type SearchOptions } from "./search";
+export { createYcAdapter } from "./yc";
 export { looksLikeFounder, parseConnectionsCsv, type ParsedContact } from "./connections";
 export { sanitizeCheckout, type SanitizeResult } from "./sanitize";
 export { parseRepoUrl, parseGitHubLogin, type RepoFinderOptions } from "./repo-finder";
@@ -175,16 +177,27 @@ export function createLivePeopleLookup(env: NodeJS.ProcessEnv = process.env): Pe
   return pdlLookup(env);
 }
 
-/** Adapters that fetch from the outside world. web, call and manual have none in live mode. */
-const LIVE_IDS = ["hackernews", "github", "arxiv", "people_data"] as const satisfies readonly SourceId[];
+/**
+ * Adapters that fetch from the outside world. web, call and manual have none in live mode.
+ * When a reader is supplied it is shared with the hunt, so both space their reads of one host.
+ */
+const LIVE_IDS = ["hackernews", "github", "arxiv", "people_data", "yc"] as const satisfies readonly SourceId[];
 
-export function createLiveSources(env: NodeJS.ProcessEnv = process.env): SourceRegistry {
+export function createLiveSources(env: NodeJS.ProcessEnv = process.env, options: { webReader?: WebReader } = {}): SourceRegistry {
   const pdlApiKey = env.PDL_API_KEY?.trim();
   const adapters = new Map<SourceId, SourceAdapter>([
     ["hackernews", createHackerNewsAdapter()],
     ["github", createGitHubAdapter({ env })],
     ["arxiv", createArxivAdapter()],
     ["people_data", createPeopleDataAdapter(pdlApiKey ? createPdlVendor({ apiKey: pdlApiKey, allowance: pdlAllowance(env, pdlApiKey) }) : null)],
+    // Falls back to its own reader only when the caller kept none, so the scout still
+    // reads within robots.txt and spacing on its own.
+    ["yc", createYcAdapter({
+      reader: options.webReader ?? createWebReader({
+        ...(env.HUNT_USER_AGENT ? { userAgent: env.HUNT_USER_AGENT } : {}),
+        ...(huntProxyFromEnv(env) ? { proxyUrl: huntProxyFromEnv(env) } : {}),
+      }),
+    })],
   ]);
 
   return {

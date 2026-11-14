@@ -45,9 +45,9 @@ export async function httpGet(
   fetchFn: FetchFn,
   source: string,
   url: string,
-  options: { headers?: Record<string, string>; signal?: AbortSignal } = {},
+  options: { headers?: Record<string, string>; signal?: AbortSignal; timeoutMs?: number } = {},
 ): Promise<HttpResult> {
-  const timeout = AbortSignal.timeout(REQUEST_TIMEOUT_MS);
+  const timeout = AbortSignal.timeout(options.timeoutMs ?? REQUEST_TIMEOUT_MS);
   const signal = options.signal ? AbortSignal.any([options.signal, timeout]) : timeout;
   try {
     let currentUrl = url;
@@ -94,7 +94,7 @@ export async function httpGet(
     if (err instanceof HttpGetPolicyError) throw err;
     if (options.signal?.aborted) throw err;
     if (timeout.aborted) {
-      throw new Error(`${source} request timed out after ${REQUEST_TIMEOUT_MS / 1000} seconds.`, { cause: err });
+      throw new Error(`${source} request timed out after ${(options.timeoutMs ?? REQUEST_TIMEOUT_MS) / 1000} seconds.`, { cause: err });
     }
     throw new Error(`${source} request failed: ${errorMessage(err)}`, { cause: err });
   }

@@ -24,6 +24,7 @@ function harness(defaultPools?: () => Promise<Pools>, existingSwarm = false) {
     { id: "github", label: "GitHub", configured: sourceConfigured, detail: sourceConfigured ? "ready" : "missing credentials" },
     { id: "arxiv", label: "arXiv", configured: sourceConfigured, detail: sourceConfigured ? "ready" : "missing credentials" },
     { id: "people_data", label: "Professional profiles", configured: sourceConfigured, detail: sourceConfigured ? "ready" : "missing credentials" },
+    { id: "yc", label: "Y Combinator", configured: sourceConfigured, detail: sourceConfigured ? "ready" : "missing credentials" },
   ] };
   const runs: RunController = {
     async start(input) {
@@ -948,7 +949,7 @@ describe("createSwarmService", () => {
 
     setSourceConfigured(false);
     ids = new Set((await api.getOverview(swarm.id)).alerts.map((alert) => alert.id));
-    expect(["source-hackernews", "source-github", "source-arxiv", "source-people_data"].every((id) => ids.has(id))).toBe(true);
+    expect(["source-hackernews", "source-github", "source-arxiv", "source-people_data", "source-yc"].every((id) => ids.has(id))).toBe(true);
     setSourceConfigured(true);
 
     const run = runRecord(swarm.id, { status: "failed", error: "Provider unavailable", finishedAt: stamp, stats: { ...ZERO_STATS, failures: 1 } });

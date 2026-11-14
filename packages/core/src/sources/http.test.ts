@@ -136,4 +136,14 @@ describe("httpGet", () => {
     },
     30_000,
   );
+
+  it("honours a longer timeout an adapter asks for, and says which one", async () => {
+    const fetchFn = (_url: string, init?: RequestInit) =>
+      new Promise<Response>((_resolve, reject) => {
+        init?.signal?.addEventListener("abort", () => reject(new DOMException("timeout", "TimeoutError")));
+      });
+    await expect(httpGet(fetchFn, "Test", "https://example.test/slow.json", { timeoutMs: 80 })).rejects.toThrow(
+      "Test request timed out after 0.08 seconds.",
+    );
+  });
 });

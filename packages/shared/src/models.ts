@@ -215,6 +215,7 @@ export const DEFAULT_ROUTES: Record<JobId, ModelRoute> = {
   "scout.github": { provider: "claude-cli", model: "claude-haiku-5-5", effort: "low" },
   "scout.research": { provider: "claude-cli", model: "claude-haiku-5-5", effort: "low" },
   "scout.talent": { provider: "claude-cli", model: "claude-haiku-5-5", effort: "low" },
+  "scout.yc": { provider: "claude-cli", model: "claude-haiku-5-5", effort: "low" },
   // The navigator plans over days: the strongest judgment model, on a login that needs no key.
   "hunt.navigate": { provider: "claude-cli", model: "claude-opus-5-5", effort: "high" },
   // Runners are tools: the smallest capable model. This route is what runs with no key set;

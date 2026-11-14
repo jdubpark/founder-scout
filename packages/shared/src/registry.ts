@@ -97,6 +97,7 @@ export type SourceId =
   | "github"
   | "arxiv"
   | "people_data"
+  | "yc"
   | "web"
   | "call"
   | "network"
@@ -126,6 +127,12 @@ export const SOURCES = [
     label: "Professional profiles (data vendor)",
     access: "A data vendor's API under contract. Nothing here requests LinkedIn.",
     compliance: "licensed",
+  },
+  {
+    id: "yc",
+    label: "Y Combinator",
+    access: "Public company pages and an open mirror of the company directory, read within robots.txt.",
+    compliance: "open",
   },
   {
     id: "web",
@@ -198,6 +205,16 @@ export const JOBS = [
     enabled: true,
     description:
       "Uses licensed professional-profile data to spot strong people leaving a job to start something.",
+  },
+  {
+    id: "scout.yc",
+    classId: "scout",
+    label: "Y Combinator scout",
+    kind: "structured",
+    source: "yc",
+    enabled: true,
+    description:
+      "Reads Y Combinator company pages and extracts each founder with their public links.",
   },
   {
     id: "hunt.navigate",

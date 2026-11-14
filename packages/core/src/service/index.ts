@@ -1228,11 +1228,12 @@ export function createApp(options: AppOptions): App {
   const store = openStore(options.dbPath);
   const world = createSimWorld({ seed: options.simSeed });
   const simSources = createSimSources(world);
-  const liveSources = createLiveSources(options.env);
+  const web = { sim: createSimWebAccess(world), live: createLiveWebAccess({ env: options.env }) };
+  // One reader for the hunt and the scouts that read pages (YC), so their reads of one host are spaced together.
+  const liveSources = createLiveSources(options.env, { webReader: web.live.reader });
   const simRepos = createSimRepoFinder(world);
   const liveRepos = createLiveRepoFinder({ env: options.env, workDir: join(options.dataDir, "repos") });
   const providers = createProviderRegistry(options.env);
-  const web = { sim: createSimWebAccess(world), live: createLiveWebAccess({ env: options.env }) };
   // In browser mode the professional network is read by one reader everywhere, so its
   // rhythm covers the hunt and the quote checks together; only the fetch mode carries accounts.
   const networkReader = web.live.networkReader ?? null;

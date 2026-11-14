@@ -4,12 +4,13 @@ import { createPeopleDataAdapter, NOT_CONFIGURED_ERROR, type ProfileDataVendor }
 import { request, scriptedFetch } from "./test-support";
 
 describe("createLiveSources", () => {
-  it("returns an adapter for each of the four live sources and null for the rest", () => {
+  it("returns an adapter for each of the five live sources and null for the rest", () => {
     const registry = createLiveSources({});
     expect(registry.get("hackernews")?.id).toBe("hackernews");
     expect(registry.get("github")?.id).toBe("github");
     expect(registry.get("arxiv")?.id).toBe("arxiv");
     expect(registry.get("people_data")?.id).toBe("people_data");
+    expect(registry.get("yc")?.id).toBe("yc");
     expect(registry.get("web")).toBeNull();
     expect(registry.get("call")).toBeNull();
     expect(registry.get("manual")).toBeNull();
@@ -17,12 +18,13 @@ describe("createLiveSources", () => {
 
   it("reports one status per live adapter, in order, with labels from the shared registry", async () => {
     const statuses = await createLiveSources({}).statuses();
-    expect(statuses.map((s) => s.id)).toEqual(["hackernews", "github", "arxiv", "people_data"]);
+    expect(statuses.map((s) => s.id)).toEqual(["hackernews", "github", "arxiv", "people_data", "yc"]);
     expect(statuses.map((s) => s.label)).toEqual([
       "Hacker News",
       "GitHub",
       "arXiv",
       "Professional profiles (data vendor)",
+      "Y Combinator",
     ]);
   });
 

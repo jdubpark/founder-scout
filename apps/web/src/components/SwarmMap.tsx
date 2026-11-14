@@ -56,6 +56,7 @@ const JOB_SHORT: Record<JobId, string> = {
   "scout.github": "GitHub",
   "scout.research": "Research",
   "scout.talent": "Talent moves",
+  "scout.yc": "Y Combinator",
   "hunt.navigate": "Navigate",
   "hunt.look": "Page reader",
   "hunt.sift": "Result sifter",
