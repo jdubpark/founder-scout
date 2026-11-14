@@ -20,6 +20,7 @@
 
 import type { Thesis } from "./domain";
 import { seededRandom, textSeed } from "./stats";
+import { isXHost } from "./x";
 
 /* ------------------------------------------------------------------ */
 /* The notebook: what is kept in the database                           */
@@ -560,6 +561,10 @@ export function cleanUrl(raw: string): string | null {
   // would point a reader at a machine inside a network; the reader refuses those again itself.
   const host = url.hostname.toLowerCase().replace(/\.$/, "");
   if (!host.includes(".") || IP_LITERAL.test(host) || (RESERVED_HOST.test(host) && host !== SIM_WEB_HOST)) return null;
+  // X is read through its own API, where a post's words can be checked and later removed with
+  // the post. An address on X is therefore never a page for the reader. This is about which
+  // channel reads X, not about a site's rules, and it held before those rules stopped being read.
+  if (isXHost(host)) return null;
   url.hash = "";
   for (const key of [...url.searchParams.keys()]) if (TRACKING.test(key)) url.searchParams.delete(key);
   const text = url.href;

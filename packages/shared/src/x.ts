@@ -6,6 +6,11 @@
 
 const X_HOSTS = new Set(["x.com", "twitter.com", "mobile.twitter.com", "mobile.x.com"]);
 
+/** Whether a host name is X's. */
+export function isXHost(hostname: string): boolean {
+  return X_HOSTS.has(hostname.toLowerCase().replace(/\.$/, "").replace(/^www\./, ""));
+}
+
 /** What is left of a stored item once X no longer shows the post it quoted. */
 export const X_POST_REMOVED = {
   title: "Post on X, removed",
