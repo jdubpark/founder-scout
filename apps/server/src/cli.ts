@@ -31,6 +31,7 @@ import {
   type PastCase,
   type Run,
   runnerPools,
+  xPostId,
 } from "@agentswarm/shared";
 import { resolveConfig } from "./config";
 import { createCronHelper } from "./cron";
@@ -46,8 +47,9 @@ type DirectoryFetcher = typeof fetchYcDirectory;
 const DEFAULT_MIN_TEAM = 100;
 
 const CLI_HELP = [
-  "Usage: swarm <run|doctor|eval|past|demo-snapshot|seed|mcp> [options]",
+  "Usage: swarm <run|doctor|eval|past|demo-snapshot|seed|mcp|x> [options]",
   "  swarm mcp [--url http://127.0.0.1:4317] [--swarm <id>]",
+  "  swarm x forget <post address or id>...",
   "  swarm eval rounds [--flow <id>] [--rounds <n>] [--budget <usd>]",
   "  swarm past collect --from <date> --to <date> [--yc] [--min-team <n>] [--unicorns] [--labels <file.csv>] [--controls <n>]",
   "  swarm past import --file <deals.csv> [--bar <text>]",
@@ -577,6 +579,19 @@ export async function runCliCommand(
     if (command === "seed") {
       if (argv.length > 1) throw new Error("seed takes no options.");
       await seedCommand(service, write);
+      return 0;
+    }
+    if (command === "x") {
+      if (argv[1] !== "forget" || argv.length < 3) throw new Error("Usage: swarm x forget <post address or id>...");
+      const ids = [...new Set(argv.slice(2).map((argument) => {
+        const id = /^\d{1,25}$/.test(argument) ? argument : xPostId(argument);
+        if (!id) throw new Error(`Invalid X post address or id: ${argument}`);
+        return id;
+      }))];
+      const { founders } = await service.forgetXPosts("Partner", ids);
+      const postLabel = ids.length === 1 ? "post" : "posts";
+      const founderLabel = founders === 1 ? "founder's evidence" : "founders' evidence";
+      write(`Removed the words of ${ids.length} ${postLabel}. ${founders} ${founderLabel} changed.`);
       return 0;
     }
     if (command === "run") {

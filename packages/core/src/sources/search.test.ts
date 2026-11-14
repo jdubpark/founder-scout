@@ -156,7 +156,7 @@ describe("hunt search engines", () => {
     };
     const { createLiveWebAccess } = await import("./index");
     const access = createLiveWebAccess({ env: { GITHUB_TOKEN: "token", HUNT_USER_AGENT: "web-reader-test/1.0" }, extraEngines: [extra] });
-    expect(access.engines.map((engine) => engine.id)).toEqual(["hn", "github", "huggingface", "web"]);
+    expect(access.engines.map((engine) => engine.id)).toEqual(["hn", "github", "huggingface", "accelerators", "web"]);
     await expect(access.engines[1]!.status()).resolves.toMatchObject({ configured: true });
   });
 });

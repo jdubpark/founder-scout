@@ -35,6 +35,8 @@ export interface PlainTaskInput {
 export interface TaskResult<J extends ModelJobId> {
   task: TaskRun;
   output: JobOutput<J> | null;
+  /** The addresses the provider's own search tool returned in the call that gave this output. */
+  cited?: readonly string[];
 }
 
 /** Shared per-run state and task boundary used by the ordered stage handlers. */
@@ -67,6 +69,8 @@ export interface EngineRuntime {
     /** Set for work on a company, so the company page can list it. */
     companyId?: string | null;
     repoDir?: string | null;
+    /** The input carries what no model whose vendor trains on what it is sent may see. */
+    noContributorModel?: boolean;
   }): Promise<TaskResult<J> | null>;
 }
 

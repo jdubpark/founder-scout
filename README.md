@@ -121,6 +121,52 @@ in `packages/shared/src/policy.ts`.
 Set `HUNT_USER_AGENT` to a name and a contact address of your own before a live hunt, so a
 site can tell who is reading and say no by name.
 
+## X and accelerator batches
+
+Set `XAI_API_KEY` and three things switch on for live runs:
+
+- **A founder's own X account** is read by Grok through xAI's X search tool: what they ship,
+  launches and how people answered, numbers they state, and what is said or shown in attached
+  video. Posts about the company are filed with the company.
+- **The hunt can search X** for recent posts by small accounts announcing something of their
+  own (`x.max_followers`, 25,000 by default, as the model reports it).
+- **X evidence is checked** by a second Grok call that fetches each post again and carries a
+  planted false claim. A post counts as supported only when xAI's API lists it among what
+  that call fetched.
+
+xAI's API returns the model's answer and the addresses its search found, not the posts. X's
+robots.txt refuses a generic reader, at its site and at its embed address, so no page on X is
+opened. A post's words and its counts are therefore a model's report, labelled as such, and an
+address is kept only when xAI's API lists it. Every post fetched is billed ($5 a thousand,
+plus tokens); `x.enabled` and `x.media` turn it off.
+
+Set `X_BEARER_TOKEN` as well, a token for X's own API, and code reads each post xAI named, by
+its id, and checks it:
+
+- a quote that is not in the post rejects the item, and one that is carries X's own counts
+  and date;
+- in the hunt, a runner reads the post's own words and the follower ceiling uses X's count;
+- a post X no longer shows has its words removed here, from evidence, leads, the hunt's queue
+  and task transcripts, and stored posts are re-read in turn to find them.
+
+`pnpm swarm x forget <post address or id>` removes one post's words at once, for when X or an
+account's owner asks.
+
+X bills each post read ($0.005, outside the run's spend cap); `X_POSTS_PER_DAY` (200) is the
+ceiling, kept in memory, so a restart begins the day's count again. This API never searches
+and never looks a person up. X's developer terms restrict uses that concern individual people:
+"The remaining decisions" in section 18 of the design says what was decided, and holds the
+use-case description to submit on the developer account, which only its holder can do.
+
+With no key at all, the hunt has one more engine: **accelerators**. Code lists the newest
+batches of Y Combinator (through an open mirror), a16z speedrun, 500 Global and Berkeley
+SkyDeck, after reading each directory's robots.txt, and the hunt reads each company's page
+for its founders.
+
+None of the xAI path has run against the live service: no key was on the machine that built it.
+X's own API was read live on 2026-11-13, and the accelerator engine was run against the four
+live directories the same day.
+
 ## Professional profiles, without reading LinkedIn
 
 Nothing here requests linkedin.com, logged in or not; the design explains why

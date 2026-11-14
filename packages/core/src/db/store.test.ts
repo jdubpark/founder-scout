@@ -23,6 +23,7 @@ import {
   type Trail,
   type NetworkContact,
   ZERO_STATS,
+  X_POST_REMOVED,
 } from "@agentswarm/shared";
 import { normalizeLink, normalizeName, openStore } from "./index";
 
@@ -206,6 +207,104 @@ describe("SQLite store", () => {
     expect(store.insertEvidence(evidence("evd_2", "fnd_1", "same-hash", "supported"))).toBe(false);
     expect(store.listEvidence("fnd_1")).toHaveLength(1);
     expect(store.insertEvidence(evidence("evd_3", "fnd_2", "same-hash"))).toBe(true);
+    store.close();
+  });
+
+  it("forgets an X post across evidence, leads, held pages and task records without prefix matches", () => {
+    const store = openStore(":memory:");
+    const person = founder("fnd_x_forget");
+    store.insertFounder(person);
+    const shortId = "1234567890123";
+    const longId = "12345678901234";
+    const shortAddress = `https://x.com/ari_founder/status/${shortId}`;
+    const longAddress = `https://x.com/ari_founder/status/${longId}`;
+    const shortEvidence = {
+      ...evidence("evd_x_forget_short", person.id, "x-forget-short", "supported"),
+      kind: "post" as const,
+      source: "x" as const,
+      url: shortAddress,
+      title: "Original short post",
+      quote: "found" as const,
+    };
+    const longEvidence = {
+      ...evidence("evd_x_forget_long", person.id, "x-forget-long", "supported"),
+      kind: "post" as const,
+      source: "x" as const,
+      url: longAddress,
+      title: "Original longer post",
+      quote: "found" as const,
+    };
+    store.insertEvidence(shortEvidence);
+    store.insertEvidence(longEvidence);
+
+    // The older spelling of a post's address names the same post.
+    const shortLead = lead("lead_x_forget_short", "2026-01-03T00:00:00.000Z", {
+      source: "x", sourceRef: `https://twitter.com/ari_founder/statuses/${shortId}`, quote: "Quoted words", founderId: person.id,
+      stage: { funding: "angel_or_accelerator", fundingQuote: "we just raised a small round", team: "unknown", teamQuote: null, progress: "unknown", progressQuote: null },
+      earliness: 0.8,
+    });
+    const longLead = lead("lead_x_forget_long", "2026-01-04T00:00:00.000Z", {
+      source: "x", sourceRef: longAddress, quote: "Longer quoted words", founderId: person.id,
+    });
+    store.insertLead(shortLead);
+    store.insertLead(longLead);
+
+    const savedHunt = hunt("hnt_x_forget");
+    store.saveHunt(savedHunt);
+    const shortFrontier = frontier("frt_x_forget_short", {
+      huntId: savedHunt.id, kind: "page", engine: null, target: shortAddress,
+      held: { title: "Short held post", text: "Short post words", fromX: true },
+    });
+    const longFrontier = frontier("frt_x_forget_long", {
+      huntId: savedHunt.id, kind: "page", engine: null, target: longAddress,
+      held: { title: "Long held post", text: "Long post words", fromX: true },
+    });
+    store.addFrontier([shortFrontier, longFrontier]);
+
+    const shortTask = task("tsk_x_forget_short", {
+      output: { address: shortAddress },
+      outputSummary: `Carried ${shortAddress}`,
+      error: `Failed on ${shortAddress}`,
+      costUsd: 0.42,
+      trace: [{ role: "assistant", content: `Transcript mentioned twitter.com/ari_founder/statuses/${shortId}` }],
+    });
+    const longTask = task("tsk_x_forget_long", {
+      output: { address: longAddress },
+      outputSummary: `Carried ${longAddress}`,
+      costUsd: 0.84,
+      trace: [{ role: "assistant", content: `Transcript mentioned ${longAddress}` }],
+    });
+    store.insertTask(shortTask);
+    store.insertTask(longTask);
+
+    expect(store.forgetXPosts([shortId, "invalid"])).toEqual({ founderIds: [person.id] });
+
+    expect(store.listEvidence(person.id).find((item) => item.id === shortEvidence.id)).toMatchObject({
+      title: X_POST_REMOVED.title,
+      excerpt: X_POST_REMOVED.excerpt,
+      claim: X_POST_REMOVED.claim,
+      quote: "not_found",
+      verification: "unsupported",
+      verificationNote: X_POST_REMOVED.note,
+    });
+    expect(store.listEvidence(person.id, { verifications: ["unsupported"] }).map((item) => item.id)).toContain(shortEvidence.id);
+    expect(store.listEvidence(person.id).find((item) => item.id === longEvidence.id)).toEqual(longEvidence);
+    expect(store.listLeads({ swarmId: person.swarmId }).find((item) => item.id === shortLead.id)).toEqual({
+      ...shortLead, sourceTitle: X_POST_REMOVED.title, quote: null, oneLiner: null, why: X_POST_REMOVED.note, stage: null, earliness: null,
+    });
+    expect(store.listLeads({ swarmId: person.swarmId }).find((item) => item.id === longLead.id)).toEqual(longLead);
+    expect(store.listFrontier(savedHunt.id, { state: "skipped" }).find((item) => item.id === shortFrontier.id)).toEqual({
+      ...shortFrontier, held: null, state: "skipped",
+    });
+    expect(store.listFrontier(savedHunt.id).find((item) => item.id === longFrontier.id)).toEqual(longFrontier);
+    expect(store.getTask(shortTask.id, { withTrace: true })).toMatchObject({
+      output: null,
+      outputSummary: "Removed: it carried a post that is no longer on X.",
+      error: "Removed: it carried a post that is no longer on X.",
+      costUsd: shortTask.costUsd,
+      trace: [],
+    });
+    expect(store.getTask(longTask.id, { withTrace: true })).toEqual(longTask);
     store.close();
   });
 

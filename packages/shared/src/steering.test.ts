@@ -266,6 +266,17 @@ describe("effective values", () => {
       route: DEFAULT_ROUTES["investigate.background"], member: null,
       reason: expect.stringContaining("Contributor model blocked"),
     });
+
+    // A job that may use such a model, on a task that carries what one may not be sent.
+    const runners: SwarmConfig = {
+      ...config,
+      pools: { "hunt.look": [{ id: "contributor", route: { provider: "meta-api", model: "muse-spark-1.3-contributor" }, share: 1, status: "active", note: null }] },
+    };
+    expect(routeForTask("hunt.look", EMPTY_STEERING, runners, "page").member).toBe("contributor");
+    expect(routeForTask("hunt.look", EMPTY_STEERING, runners, "page", { noContributorModel: true })).toEqual({
+      route: DEFAULT_ROUTES["hunt.look"], member: null,
+      reason: expect.stringContaining("Contributor model blocked"),
+    });
   });
 });
 

@@ -18,7 +18,7 @@ import type {
 import { ServiceError } from "../contracts";
 import { openStore } from "../db";
 import { createSimDialler, createSimRepoFinder, createSimSources, createSimWorld } from "../sim";
-import { createLiveDialler, createLivePeopleLookup, createLiveRepoFinder, createLiveSources, createQuoteChecker, createLinkupSearchEngine, createLiveWebAccess, createModelSearchEngine, createSimWebAccess, createLiveTranscriber, createMediaFetcher, mediaMaxBytes, probeMediaDuration, looksLikeFounder, parseConnectionsCsv } from "../sources";
+import { createLiveDialler, createLivePeopleLookup, createLiveXPostReader, createLiveRepoFinder, createLiveSources, createQuoteChecker, createLinkupSearchEngine, createLiveWebAccess, createModelSearchEngine, createXSearchEngine, createSimWebAccess, createLiveTranscriber, createMediaFetcher, mediaMaxBytes, probeMediaDuration, looksLikeFounder, parseConnectionsCsv } from "../sources";
 import { createProviderRegistry } from "../providers";
 import { createJobRegistry, createExecuteJob, findSensitive, loadSkillLibrary, redactSensitive } from "../jobs";
 import { createRunController } from "../engine";
@@ -1126,6 +1126,11 @@ export function createSwarmService(deps: ServiceDeps): SwarmService {
     as: apiFor,
     runs: deps.runs,
     evals: deps.evals,
+    async forgetXPosts(actor: string, ids: readonly string[]) {
+      const result = store.forgetXPosts(ids);
+      audit(actor, "x.forget", "x", { ids: [...ids] });
+      return { founders: result.founderIds.length };
+    },
     async runScheduled(only?: readonly string[]) {
       const settings = store.getSettings();
       if (!settings.schedule.enabled) return [];
@@ -1313,11 +1318,15 @@ export function createApp(options: AppOptions): App {
       // One engine answers to "web". A contracted search service is used when its key is set:
       // it is faster and a search costs half a cent. Otherwise the model provider's own search
       // tool does it, as a task inside the run's spend cap. HUNT_WEB_SEARCH=off leaves it out.
-      extraEngines: env.HUNT_WEB_SEARCH === "off"
-        ? []
-        : env.LINKUP_API_KEY?.trim()
-          ? [createLinkupSearchEngine({ env })]
-          : [createModelSearchEngine({ status: () => providers.get("claude-cli").status() })],
+      extraEngines: [
+        ...(env.HUNT_WEB_SEARCH === "off"
+          ? []
+          : env.LINKUP_API_KEY?.trim()
+            ? [createLinkupSearchEngine({ env })]
+            : [createModelSearchEngine({ status: () => providers.get("claude-cli").status() })]),
+        // Listed only while an xAI key is set: an engine that is not configured is not offered to the navigator.
+        createXSearchEngine({ status: () => providers.get("xai-api").status() }),
+      ],
     }),
   };
   let defaultPoolsPromise: Promise<Pools> | null = null;
@@ -1337,6 +1346,7 @@ export function createApp(options: AppOptions): App {
     executeJob,
     quotes: createQuoteChecker(),
     people: createLivePeopleLookup(env),
+    xPosts: createLiveXPostReader(env),
     transcriber: {
       sim: {
         async status() { return { configured: true, detail: "Simulated transcription is ready." }; },
@@ -1354,6 +1364,7 @@ export function createApp(options: AppOptions): App {
     sources: { sim: simSources, live: liveSources },
     repos: { sim: simRepos, live: liveRepos },
     web,
+    xReady: () => providers.get("xai-api").status().then((status) => status.configured, () => false),
     defaultPools,
     simWorld: world,
     fundName: options.fundName ?? "the fund",

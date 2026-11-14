@@ -98,6 +98,7 @@ export type SourceId =
   | "arxiv"
   | "people_data"
   | "web"
+  | "x"
   | "call"
   | "network"
   | "manual";
@@ -132,6 +133,12 @@ export const SOURCES = [
     label: "Open web",
     access: "Web search and page fetch through the model provider",
     compliance: "open",
+  },
+  {
+    id: "x",
+    label: "X",
+    access: "xAI's API searches X and reports what it read. Nothing here requests a page on x.com, so a post's words are a model's report and no code can check them.",
+    compliance: "licensed",
   },
   {
     id: "call",
@@ -229,6 +236,16 @@ export const JOBS = [
     description: "Searches the open web through the model provider's search tool and returns its links.",
   },
   {
+    id: "hunt.xsearch",
+    classId: "runner",
+    label: "X searcher",
+    kind: "search",
+    source: "x",
+    enabled: true,
+    description:
+      "Searches X through xAI's search tool for recent posts by small accounts. Each post it reports is held as a page for a runner to read, because code cannot open the post itself.",
+  },
+  {
     id: "hunt.sift",
     classId: "runner",
     label: "Result sifter",
@@ -308,6 +325,16 @@ export const JOBS = [
     description: "Reads a short transcript stretch and extracts exact, sourced evidence.",
   },
   {
+    id: "investigate.x",
+    classId: "investigator",
+    label: "X posts analyst",
+    kind: "research",
+    source: "x",
+    enabled: true,
+    description:
+      "Reads a founder's own X account through xAI's search tool: what they post and show, in text and in video, and how people respond.",
+  },
+  {
     id: "investigate.redflags",
     classId: "investigator",
     label: "Risk checker",
@@ -356,6 +383,16 @@ export const JOBS = [
     enabled: true,
     description:
       "Re-reads each piece of evidence with a different model family and marks whether it supports the claim and is about the right person.",
+  },
+  {
+    id: "verify.x",
+    classId: "verifier",
+    label: "X post checker",
+    kind: "research",
+    source: "x",
+    enabled: true,
+    description:
+      "Looks each X post up again through xAI's search tool, in a separate call, and marks whether the post says what was reported and is this person's. The usual checker cannot read X.",
   },
   {
     id: "assess.judgments",
@@ -472,7 +509,7 @@ export function isClassId(value: string): value is ClassId {
 /* Model providers                                                      */
 /* ------------------------------------------------------------------ */
 
-export type Vendor = "anthropic" | "openai" | "deepseek" | "meta" | "none";
+export type Vendor = "anthropic" | "openai" | "deepseek" | "meta" | "xai" | "none";
 
 export const PROVIDERS = [
   {
@@ -530,6 +567,13 @@ export const PROVIDERS = [
     label: "Meta Model API",
     capabilities: { structured: true, research: false, search: false, repoReview: false },
     note: "Muse models through an OpenAI-compatible endpoint, first-party or a hosted provider, set with META_BASE_URL.",
+  },
+  {
+    id: "xai-api",
+    vendor: "xai",
+    label: "xAI API (Grok)",
+    capabilities: { structured: true, research: true, search: true, repoReview: false },
+    note: "Grok through xAI's API. Research and search on this provider read X posts only, through xAI's X search tool. Needs XAI_API_KEY.",
   },
 ] as const satisfies ReadonlyArray<{
   id: string;

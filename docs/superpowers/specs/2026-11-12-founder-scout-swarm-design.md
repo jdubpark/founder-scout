@@ -220,6 +220,8 @@ tier. No route in the default pool uses it.
 | arXiv | Official API, one request per three seconds | Live, verified |
 | Open web | Claude WebSearch for hunt queries, or Linkup when configured; research tools for investigations | Linkup is wired but unverified against the live service |
 | Professional profiles | A data vendor's API under contract. An adapter for People Data Labs is built | Built, unverified against the live service (no key on this machine) |
+| X | xAI's API with its X search tool finds and reads; X's own API reads a post xAI named, by id, to check its words (section 18). No page on x.com is requested | Built. The xAI side is unverified against the live service (no key on this machine); X's API was read live on 2026-11-13 |
+| Accelerator batches | Four programmes' public company lists, read by code (section 18) | Built; the listing addresses were read by hand on 2026-11-13 |
 | Your network | A partner's own exported contact list, uploaded by that partner | Built |
 | Added by a person | A name and a link typed into the dashboard | Built |
 | Conversations | Approved calls, simulated calls, pasted notes | Call controls and simulation built; no live dialler |
@@ -881,3 +883,293 @@ a live service and leaves legal questions open.
     the reader name and contact address in `HUNT_USER_AGENT`. Seed remains the latest stage by
     default; any direct DeepSeek API requires a separately approved host.
 13. Which sites to add to the list the hunt does not read. The list holds the ones whose terms were read; a trail will reach others.
+
+## 18. X through xAI, and accelerator batches
+
+Added on 2026-11-13. Three things reach the pipeline that did not before: what a founder posts
+on X, in words and in video; recent posts by small accounts announcing something of their own;
+and the newest batches of four startup accelerators. Each enters as a lead or as unverified
+evidence and goes through the same screen, fact-check and rubric as everything else.
+
+**What xAI's API gives, and what it does not.** The Responses API has a tool, `x_search`, that
+lets Grok search X by keyword and by meaning, find accounts, fetch a thread, and look at images
+and video attached to posts. Code can hold a call to named accounts (at most twenty) and to a
+range of dates. The API does not hand back the posts. It returns the model's answer, a list of
+the addresses its searches returned, and counts of posts and profiles fetched, which is what it
+bills: $5 for a thousand posts and $10 for a thousand profiles, on top of tokens. So every word
+of a post in this system, every date and every count of likes or followers, is what a model
+wrote. The one fact that comes from the API and not from the model is which posts a search
+returned. The research, with each sentence of the documentation it rests on, is in
+`docs/research/grok-x-search.md`.
+
+**How code checks a post's words.** X's robots.txt refuses a generic agent. Its embed
+address (`publish.x.com/oembed`), which X documents as open and needing no key, is refused by
+robots.txt on both of its hosts as well. This system obeys robots.txt, so neither is read.
+What code can read is X's own API, with the fund's credentials: one post by its id, for a fee.
+With `X_BEARER_TOKEN` set, every post xAI names is read that way and its words, author, date
+and counts are X's. Without it, a post stays a model's report, labelled as one, and the quote
+check does not run on X.
+
+**Approaches considered.**
+
+1. Grok alone, with a second Grok call as the check. Built. One vendor, one key, video
+   included. Its weakness is that a model's report is checked by another model of the same
+   vendor; the planted false claim shows whether the checker looked, not whether both are wrong
+   in the same way.
+2. The official X API to read each post Grok names ($0.005 a post, $0.010 an account). Exact
+   words and measured counts, so the quote check runs. It needs a developer account whose
+   application describes the use, and its terms require stored posts to follow X, which means
+   a refresh. Built on 2026-11-13, on top of 1, after the owner supplied the credentials. It
+   checks what Grok found; it does not find anything itself.
+3. Reading the embed address despite robots.txt. Not built. That is the owner's decision, as
+   it was for the professional network, and it has not been made.
+
+**What code decides.**
+
+- The scope of a call (accounts, dates, whether video and images may be opened) is set by the
+  job and sent as the tool's settings. A prompt, or a post, cannot widen it. Only the xAI
+  provider may run a job that reads X, and that provider refuses a research or search call that
+  carries no scope, so nothing is answered from memory and called a post.
+- An address is kept only when xAI's API lists that post among what its search returned in the
+  same call. A post the model wrote down and no search returned is dropped. The API usually
+  writes a post's address without its account; where it does name the account, an answer that
+  gives the post to another account is dropped.
+- A call's cost is what xAI reports. When an answer carries neither a cost nor a count of what
+  was fetched, or a search runs out of time, the call is charged at the cap it was given: the
+  run's spend cap treats an unknown cost as nothing, and a paid search must never count as
+  free. That also stops the blind retry of a paid call. A request xAI refuses or fails
+  outright, with no usage in its answer, is not taken as spend; that is a judgment, since xAI
+  does not say whether such a request is billed.
+- A founder's evidence comes from one account. When the founder's profile link or a post the
+  checker already supported names it, the search is held to that account. When neither does,
+  the model must find it and say which words in its bio or posts tie it to this person and
+  their company; with no such tie it returns nothing. The founder's profile link is not changed
+  by what the model found.
+- A post about the company (product, traction, team, funding and the other facets) is filed as
+  company evidence, which the founder analyst is not shown. With no company on file it is
+  dropped.
+- Counts are stored in the item's title as "xAI reports: ...". The size ceiling for a search
+  (`x.max_followers`, 25,000, a first guess) is applied to the count the model reports, and an
+  account whose size it did not report is left out.
+- In the hunt, a post cannot be opened, so what the search reported is held on the queued item
+  and a runner reads that. Nothing is requested. The runner's checks are unchanged: a person is
+  kept only when the name and the quoted words are in what it was shown. That guards against
+  the runner inventing someone. It does not guard against xAI's report being wrong, which is
+  why such a lead is only a lead. The lead's X link is set by code, and only when the person
+  is the account's own display name.
+- X evidence is never sent to the usual fact-checker, which cannot read X and would mark all
+  of it unsupported. It goes to `verify.x`: a separate call, on a different Grok model from the
+  one that collected, that fetches each post again and carries the planted false claim. A
+  checker that accepts the plant has its verdicts thrown away. After that, "supported" stands
+  only for a post the API lists among what that call fetched; a post the checker called
+  supported without fetching stays unverified. The account item, which is not a post, is
+  judged by the verdict alone. With no xAI key, X evidence stays unverified and is never scored.
+- The reading of a founder's account is shown the founder's own posts already on file and not
+  the company's, since no company evidence crosses back to a founder's researcher. Code keeps
+  a post from being filed twice.
+- A simulated run reads no X and lists no accelerator. The simulated world and the numbers
+  tuned on it are unchanged.
+
+**What X's own API is used for, and only for.** The reader in
+`packages/core/src/sources/x-api.ts` asks for posts by id (`GET api.x.com/2/tweets`). It never
+searches, never lists an account's posts and never looks a person up, so it cannot find
+anyone: it confirms or refutes what xAI's search already named. It sends X nothing but post
+ids. What X's terms say about this use, sentence by sentence, is in
+`docs/research/x-api-post-lookup.md`.
+
+- Before the X fact-check, each new post is read and the item's quoted words are looked for
+  in the post, as the quote check does on a web page. X shortens every link in a post's text,
+  and a copy of the post may give the address the link leads to, the short one, or none. So a
+  link in the post may be left out of the quote, or matched by one link-shaped word of it
+  ("acme.studio"); anywhere else such a word is compared as the words it is, and an ordinary
+  word never takes a link's place. Links do not count towards the four words a quote needs.
+  A quote over 4,000 characters is not looked for, and a post over 30,000 is cut at the end
+  of a word; neither is reached by a real one.
+  Words that are not in the post reject the item. So does a post X gives to another account
+  than the item's address names.
+- Words said or shown in a video cannot be found in a post's text, so a video item is marked
+  as not checkable by code and stands or falls with the X fact-check alone.
+- An item that passes has the model's counts and date replaced by X's: its title says
+  "X reports", not "xAI reports".
+- In the X fact-check, "supported" stands for a post that call fetched or a post whose words
+  code found.
+- In the hunt, each hit of an X search is read before anything else. A post X no longer shows
+  is dropped, and so is one whose account is over the follower ceiling by X's own count. The
+  sifter and the runner are then shown the post's own words, and the runner is told so. A hit
+  that could not be read (the day's ceiling, a failed request) stays a model's report.
+- X's terms require a stored post to follow X: removed there, removed here. A post X no
+  longer shows (deleted, protected, suspended, withheld) has its words taken out of everything
+  that holds them, in one step (`forgetXPosts` in the store), in every swarm:
+  - every evidence item that cites it, whatever its verdict. The item keeps its id, so that
+    whatever cited it still points somewhere;
+  - a lead found on it: the quote, the title, the model's description and the stage answers
+    with the words they quoted go; the name and account stay;
+  - a page held for a runner in the hunt's queue, which is then never shown to one;
+  - the output and the transcript of every task that names the post, by either spelling of
+    its address and on any host, since a mirror carries the same words. Such a task carried
+    other posts too, and loses those as well; its cost and counts stay.
+- The founder is then assessed again without the item. When a run finds the post gone while
+  checking evidence, that is in the same run. Otherwise (the hunt found it, another swarm's
+  run did, or a person removed it) it is the next full live run, and only if the founder's
+  current assessment cites the item.
+- Each live run re-reads up to 200 stored posts, starting at a place drawn afresh each run, so
+  every one comes round: posts cited by evidence, posts leads were found on, and posts held in
+  the hunt's queue. This runs even with `x.enabled` off. It is upkeep in turn, not a watch: a
+  post deleted today may stay on file until its turn. `pnpm swarm x forget <address or id>`
+  removes one post at once, for a written request.
+- Not removed: what a model wrote after reading the post, in a founder's profile fields or in
+  an assessment made while the post was up. And a post that reached nothing but a task's
+  transcript (a search hit nobody picked) is not re-read by the upkeep; the command above
+  removes it. X documents a batch compliance job (`POST /2/compliance/jobs`) for checking many
+  stored posts at once; its price is not stated anywhere and it is not used here.
+- Every post read is billed by X, outside the run's spend cap, so the reader has its own
+  ceiling, `X_POSTS_PER_DAY` (200). A request counts against it when it is sent, and is given
+  back only when X answers that it refused the token or the rate: a request that timed out may
+  have been billed. New evidence is read before the upkeep. A post read once is not asked for
+  again that day. A refused token stops all reading until the server is restarted. The count
+  and the day's answers are kept in memory, as the data vendor's are, so a restart begins the
+  day's ceiling again; X says it bills a post once however often it is read in a day, and
+  calls that a soft guarantee.
+
+**Accelerator batches.** A search engine for the hunt, `accelerators`, run by code. It lists
+the newest batches of Y Combinator (through the open mirror `yc-oss.github.io`, two newest
+batches), a16z speedrun (the current cohort), 500 Global (companies first funded in the last
+eighteen months) and Berkeley SkyDeck (two newest batches), ranks them by the words of the
+query and by recency, and takes turns between programmes. A hit is the company's own site, or
+for speedrun the programme's page about the company, which names its founders. The hunt then
+does what it does with any hit: a runner picks, code reads the page within robots.txt, and a
+person is kept only when the page names them. 500 Global's list names founders; those names
+are not used, because a person enters only from a page a runner read. Y Combinator's own pages
+are on the list of sites this branch does not read, so its founders come from each company's
+own site. Listings are kept for six hours, and before a listing is asked for, the directory's
+robots.txt is read and obeyed under the name the page reader uses, so a directory that later
+refuses is no longer read. Requests to one directory are two seconds apart, as the page
+reader's are, or as far apart as its robots.txt asks; a directory that asks for more time than
+one search has is not listed. A record needs only a name and a site: the newest companies leave
+other fields blank. What each directory allows, and the ones left out
+and why (Techstars hands its list out behind a key in the page; Antler's robots.txt refuses
+its company pages; Entrepreneurs First loads the rest of its list by a call that was not
+identified), is in `docs/research/accelerator-directories.md`.
+
+**What these add to the knowledge of a founder.** A founder found in a batch or on X is
+screened, then investigated by the existing researchers (background, their part in the company,
+talks, risks, code), by the data vendor for work history, and now by the reading of their X
+account. The professional network itself is read or not read as `packages/shared/src/policy.ts`
+says on the branch this lands on.
+
+**Not verified.** No xAI key was on this machine, so the provider, the three jobs and the
+check have run only against a fake client; the request and response shapes come from xAI's
+documentation as read on 2026-11-13. Not known: whether a JSON schema works together with
+`x_search` (the documentation shows it with web search), what video costs in tokens, how long
+a video may be, and whether the tool honours a request to prefer small accounts. Check first,
+with a live key: whether a post the checker fetches again by its address appears in the list
+of addresses the API returns. If it does not, no X post can be marked supported, X evidence
+stays unverified, and every run pays to check it again.
+
+X's own API was read live on 2026-11-13 with the fund's token: two public posts and one
+made-up id came back as two posts with their authors and counts, and one "not found". Not
+known: whether X bills the author returned with a post as a separate read ($0.010; its
+pricing page says "per resource returned in the response" and no more); how a post from a
+protected or suspended account, or one withheld in a country, comes back (the reader treats
+any post X names in its errors as gone); the whole text of a long post, which was not among
+the posts read; and how Grok writes a link inside a quote, which the matcher allows for but
+has not seen.
+
+The accelerator engine was run against the four live directories on 2026-11-13: ten requests
+(four robots.txt files, six listings), a hundred hits, all four programmes present. That is one day's page shapes; a directory that changes its page stops
+being listed and the other three carry on.
+
+**Decisions the owner made on 2026-11-13.** Asked about the first two below, the owner
+answered "that's fine" to each, and gave the credentials for X's own API in answer to the
+third.
+
+1. xAI's enterprise terms have the customer warrant that personal data is sent only through a
+   team with zero data retention switched on. A founder's name and posts are personal data.
+   The choice put to the owner was to switch it on for the team behind `XAI_API_KEY`, or to
+   accept that prompts naming founders are kept by xAI for 30 days. Whether `x_search` works
+   with it on is not stated.
+2. xAI's acceptable-use policy bars "high-stakes automated decisions" about a person. Here a
+   model answers rubric questions, code scores, and a partner decides.
+3. The official X API was added so that a post's words and counts are measured.
+
+**The remaining decisions.** Asked for these the same day, the owner answered "for my
+decisions, go with your recommendations". These are the recommendations. They stand until
+the owner changes them, and the first four come from X's developer terms, which bind whoever
+holds the credentials.
+
+1. **Tell X plainly what this does.** X's Developer Agreement (section XIV.B) says that
+   "unless explicitly approved by X in writing" X content is not used for "conducting or
+   providing surveillance or gathering intelligence, including but not limited to
+   investigating or tracking X users or X Content", and its restricted-use rules list
+   "Background checks or any form of extreme vetting" and "Individual profiling or
+   psychographic segmentation". None of these is defined, and none mentions investors. A
+   dossier on a named founder is close enough to those words that X should be asked, and
+   "your use case description is binding on you". A description to submit is below. Only the
+   account's holder can submit it, so that is still the owner's to do. Until X answers, its
+   API is used as built: posts xAI already named, read by id. If X refuses the use, blank
+   `X_BEARER_TOKEN` and remove what was read.
+2. **Models may be shown what X's API returned.** The agreement bars providing X content "to
+   any third party except as expressly permitted", with no exception written for a service
+   provider. A model provider that answers one request and keeps nothing is not who that bar
+   is aimed at, X's own "what to build" page proposes feeding X data to language models, and
+   training a model on X content, which is barred outright, is not done here. So a runner
+   reads a post's own words and an analyst reads X's counts. The description below says so,
+   so that X's answer covers it. Code keeps the one line X draws outright: a runner's task
+   that carries a post read through X's API is never sent to a model whose vendor trains on
+   what it is sent (`noContributorModel` in `routeForTask`), and the jobs that read a
+   founder's file may not use such a model at all. Still the owner's to keep true: every
+   other provider in use has terms under which it does not train on what it is sent.
+3. **A removal request is acted on by hand, the same day.** A stored post must be removed
+   "as soon as possible, and in any case within twenty four (24) hours after a written
+   request". The upkeep takes posts in turn, so a request from X or an account's owner is
+   answered with `pnpm swarm x forget <address or id>`. If access ends, everything read
+   through the API has to be deleted, and no command does that yet.
+4. **What is read from X is held to X's list as well as this system's.** X asks that nothing
+   be derived or stored about a person's health, "negative financial status or condition",
+   politics, origin, religion, sex life, union membership or "alleged or actual commission of
+   a crime". The prohibited attributes in `rubric.ts` cover all but money troubles, union
+   membership and crime. Those three are now barred for anything read from X: the two jobs
+   that read X are told so, and code drops a hit, an account or an item whose words state one
+   about a person (`offLimitsOnX` in `packages/core/src/jobs/common.ts`). A post read through
+   X's API is held to the same check before its words are kept. It is a check on phrases: it
+   misses what is said another way, and it leaves a company's finances alone. Elsewhere the
+   researchers may still report a court record or a bankruptcy from a public page.
+5. **Spending on X's API stays at the default ceiling**, 200 posts a day: $0.005 a post,
+   perhaps $0.010 more for each distinct author in a day, so at most $1 to $3 a day.
+6. **X is read with video, as asked, and measured on the first live run.** Reading one
+   account fetches tens of posts: about $0.30 for sixty, plus tokens, and video costs more by
+   an amount xAI does not publish. Give the first run with an xAI key a small budget and read
+   what it spent before raising it. `x.enabled` turns off all reading of X but the upkeep of
+   posts already on file; `x.media` turns off video and images. When the key is made, switch
+   zero data retention on for its team: xAI's terms ask for that where personal data is sent.
+7. **Y Combinator's own company pages are not decided here.** Its robots.txt allows them and
+   its terms forbid scraping. This branch does not read them; the page reader's policy on the
+   branch this lands on decides, and nothing in this section changes it.
+
+The description for X's developer account, to be checked against what is then running and
+with the model providers named:
+
+> We are a venture investment team. Our internal tool helps a partner find and read about
+> founders of early companies. It uses one endpoint of the X API, post lookup by id (`GET
+> /2/tweets`). Through this API it never searches, never lists an account's posts and never
+> looks a person up.
+>
+> Posts in which a founder writes about their own product or company are found for us by
+> xAI's Grok API, which also reads a founder's recent public posts when our tool studies that
+> founder, and again when the founder is next reviewed. Before the tool relies on such a
+> post, it looks the post up by id through the X API to confirm that the post exists and who
+> wrote it, that words quoted from it are in it, and to read its public counts and the
+> author's follower count. A confirmed post becomes one source in an internal profile of the
+> founder's professional work. The profile is scored against our own rubric about that work,
+> and a partner reads it when deciding whether to contact the founder. A person makes every
+> decision; nothing is sent to a founder automatically.
+>
+> We do not keep or infer anything about health, finances, politics, religion, origin,
+> sexual orientation, union membership or criminal history, and posts about these are
+> discarded. We do not share or resell X content. Post text and counts are processed by our
+> language model providers (named here) for inference only, under terms that bar training on
+> our data. No model is trained or fine-tuned on X content.
+>
+> Stored posts are looked up again in turn, and the content of a post X no longer shows is
+> deleted. A post named in a removal request is deleted within 24 hours. We make at most 200
+> lookups a day.

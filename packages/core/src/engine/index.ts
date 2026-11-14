@@ -192,11 +192,13 @@ export function createRunController(deps: EngineDeps): RunController {
       founderId: string | null,
       companyId: string | null,
       routeKey?: string,
+      noContributorModel = false,
     ) => routeForTask(
       jobId,
       steering,
       config,
       `${run.swarmId}:${jobId}:${routeKey ?? companyId ?? founderId ?? agent.id}`,
+      { noContributorModel },
     );
 
     /**
@@ -306,12 +308,13 @@ export function createRunController(deps: EngineDeps): RunController {
         routeKey?: string;
         maxBudgetUsd?: number;
         repoDir?: string | null;
+        noContributorModel?: boolean;
       }): Promise<TaskResult<J> | null> => {
         const { agent, stage, jobId, input, founderId = null, companyId = null, routeKey, repoDir = null } = args;
         if (stopped()) return null;
         const job = deps.jobs.get(jobId);
         const steering = steeringForTask(agent);
-        const selected = routeFor(jobId, steering, agent, founderId, companyId, routeKey);
+        const selected = routeFor(jobId, steering, agent, founderId, companyId, routeKey, args.noContributorModel);
         const route = selected.route;
         const steeringBlock = steeringBlockForTask(agent, steering, route.model);
         // A stage that shares out its own allowance between calls may give this one less than the per-task cap.
@@ -379,6 +382,7 @@ export function createRunController(deps: EngineDeps): RunController {
           let totalLatency = 0;
           const traces: NonNullable<TaskRun["trace"]> = [];
           let finalOutput: JobOutput<J> | null = null;
+          let finalCited: readonly string[] | undefined;
           let finalPromptHash: string | null = null;
           let finalSkills: string[] = [];
           let finalError: unknown = null;
@@ -425,6 +429,7 @@ export function createRunController(deps: EngineDeps): RunController {
                 repair: repairMessage,
               });
               finalOutput = execution.output;
+              finalCited = execution.cited;
               finalPromptHash = execution.promptHash ?? null;
               finalSkills = execution.skills ?? finalSkills;
               totalUsage = addUsage(totalUsage, execution.usage);
@@ -502,7 +507,7 @@ export function createRunController(deps: EngineDeps): RunController {
           if (!succeeded) stats.failures += 1;
           noteMemberResult(jobId, selected.member, succeeded, finalError);
           persist();
-          return { task: updated, output: finalOutput };
+          return { task: updated, output: finalOutput, cited: finalCited };
         } finally {
           release();
         }

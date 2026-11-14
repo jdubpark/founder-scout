@@ -107,6 +107,19 @@ export interface FrontierItem {
   /** For a search: when it was last run, and by which run. Decides when it may run again. */
   ranAt?: string | null;
   ranBy?: string | null;
+  /**
+   * For a page code cannot open: what the search that found it reported. A runner reads this in
+   * place of the page, and nothing is requested. Today only a post on X, as xAI reported it.
+   */
+  held?: HeldPage | null;
+}
+
+/** A search result kept whole because the address it names cannot be read by code. */
+export interface HeldPage {
+  title: string;
+  text: string;
+  /** true when code read the post itself through X's own API, so `text` is the post's own words. */
+  fromX?: boolean;
 }
 
 /** One line in the notebook. The navigator reads the latest; a runner is shown a few. */
@@ -944,6 +957,20 @@ export function seedTrails(thesis: Thesis, engines: readonly string[], today: st
       name: "New models and demos",
       intent: "Models and demos a person or a team of a few published in the last weeks, and who is behind them.",
       starts: topics.map((topic) => ({ kind: "search" as const, engine: "huggingface", query: topic || "agent" })),
+    });
+  }
+  if (engines.includes("x")) {
+    trails.push({
+      name: "Small accounts launching",
+      intent: "People with a small following who say, in their own post, that they just launched or are building their own product.",
+      starts: topics.map((topic) => ({ kind: "search" as const, engine: "x", query: `founder announcing their own new ${topic} product launch`.replace(/\s+/g, " ").trim() })),
+    });
+  }
+  if (engines.includes("accelerators")) {
+    trails.push({
+      name: "New accelerator companies",
+      intent: "Companies in the newest batches of startup accelerators, and who founded them.",
+      starts: topics.map((topic) => ({ kind: "search" as const, engine: "accelerators", query: topic })),
     });
   }
   if (engines.includes("web")) {

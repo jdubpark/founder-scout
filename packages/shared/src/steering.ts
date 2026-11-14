@@ -511,6 +511,12 @@ export function routeForTask(
   resolved: ResolvedSteering,
   config: SwarmConfig,
   key: string,
+  /**
+   * `noContributorModel`: this one task carries something a job of its kind usually does not,
+   * and that no model whose vendor trains on what it is sent may see. Today that is a post
+   * read through X's own API, whose terms bar training on it.
+   */
+  options: { noContributorModel?: boolean } = {},
 ): { route: ModelRoute; member: string | null; reason?: string } {
   const pinned = resolved.params["route.provider"] !== undefined || resolved.params["route.model"] !== undefined;
   const member = pinned ? null : pickMember(config.pools?.[jobId], key);
@@ -520,6 +526,13 @@ export function routeForTask(
       route: { ...DEFAULT_ROUTES[jobId] },
       member: null,
       reason: "Contributor model blocked because this job reads private material or partner calls; using the job's default model.",
+    };
+  }
+  if (isContributorModel(route.model) && options.noContributorModel) {
+    return {
+      route: { ...DEFAULT_ROUTES[jobId] },
+      member: null,
+      reason: "Contributor model blocked because this task carries material such a model may not be sent; using the job's default model.",
     };
   }
   if (!member) return { route, member: null };

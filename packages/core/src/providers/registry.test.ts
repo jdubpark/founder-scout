@@ -41,6 +41,7 @@ describe("createProviderRegistry statuses", () => {
     expect(without["openai-api"]?.configured).toBe(false);
     expect(without["deepseek-api"]?.configured).toBe(false);
     expect(without["meta-api"]?.configured).toBe(false);
+    expect(without["xai-api"]?.configured).toBe(false);
 
     const withKeys = Object.fromEntries(
       (
@@ -52,6 +53,7 @@ describe("createProviderRegistry statuses", () => {
           DEEPSEEK_BASE_URL: "https://deepseek-host.example.test/v1",
           META_API_KEY: "l",
           META_BASE_URL: "https://llama.example.test/v1",
+          XAI_API_KEY: "x",
         }).statuses()
       ).map((s) => [s.id, s]),
     );
@@ -59,6 +61,7 @@ describe("createProviderRegistry statuses", () => {
     expect(withKeys["openai-api"]?.configured).toBe(true);
     expect(withKeys["deepseek-api"]?.configured).toBe(true);
     expect(withKeys["meta-api"]?.configured).toBe(true);
+    expect(withKeys["xai-api"]?.configured).toBe(true);
   });
 
   it("never puts a key value into a status detail", async () => {
@@ -70,6 +73,7 @@ describe("createProviderRegistry statuses", () => {
       DEEPSEEK_API_KEY: secret,
       META_API_KEY: secret,
       META_BASE_URL: "https://llama.example.test/v1",
+      XAI_API_KEY: secret,
     }).statuses();
     expect(JSON.stringify(statuses)).not.toContain(secret);
   });

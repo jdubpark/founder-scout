@@ -24,7 +24,8 @@ describe("pools of context", () => {
   it("allows contributor models only for jobs whose inputs are permitted", () => {
     expect(MODEL_JOB_IDS.filter(mayUseContributorModel)).toEqual([
       "scout.hackernews", "scout.github", "scout.research", "scout.talent",
-      "hunt.navigate", "hunt.search", "hunt.look", "hunt.sift",
+      // The search of X is sent the same things as the web search: words from the hunt and limits.
+      "hunt.navigate", "hunt.search", "hunt.xsearch", "hunt.look", "hunt.sift",
     ]);
   });
 

@@ -121,6 +121,26 @@ export function createModelSearchEngine(options: {
   };
 }
 
+/**
+ * Search of X through xAI's search tool inside a budgeted hunt job. Code cannot open a post on X
+ * (its robots.txt refuses a generic agent), so each hit is held whole for a runner to read.
+ */
+export function createXSearchEngine(options: {
+  status: () => Promise<{ configured: boolean; detail: string }>;
+}): SearchEngine {
+  return {
+    id: "x",
+    label: "X",
+    searches: "Recent posts on X by accounts with a small following. Describe in plain words the kind of post to find; it is not a keyword match.",
+    job: "hunt.xsearch",
+    holdsPages: true,
+    status: options.status,
+    async search() {
+      throw new Error("Search of X must run through hunt.xsearch.");
+    },
+  };
+}
+
 export function createGitHubSearchEngine(options: SearchOptions = {}): SearchEngine {
   const fetchFn = options.fetch ?? defaultFetch;
   const env = options.env ?? process.env;

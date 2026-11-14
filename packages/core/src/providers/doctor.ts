@@ -32,6 +32,7 @@ export const PROBE_MODEL: Partial<Record<ProviderId, string>> = {
   "openai-api": "gpt-6-luna",
   "deepseek-api": "deepseek-flash",
   "meta-api": "muse-ember-1.0",
+  "xai-api": "grok-4.3",
 };
 
 /** Providers that accept a low reasoning-effort value. The others get none. */

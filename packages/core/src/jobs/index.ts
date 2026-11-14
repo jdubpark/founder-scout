@@ -51,8 +51,12 @@ import type {
   SkillTask,
   SwarmConfig,
   Thesis,
+  SearchOutput,
   VerifyInput,
   VerifyOutput,
+  XInvestigateInput,
+  XInvestigateOutput,
+  XSearchInput,
 } from "@agentswarm/shared";
 import { ProviderError } from "../contracts";
 import type {
@@ -73,6 +77,7 @@ import {
   redactDeep,
   redactSensitive,
   renderEvidence,
+  renderFounder,
   renderThesis,
   safeTag,
 } from "./common";
@@ -87,6 +92,7 @@ import {
 } from "./company";
 import type { CompanyJobId } from "./company";
 import { huntJobs } from "./hunt";
+import { isXJob, normalizeXInvestigation, normalizeXSearch, xJobs } from "./x";
 export { loadSkillLibrary, parseSkillFile } from "./skill-library";
 
 export { findSensitive, redactSensitive, plantControl };
@@ -126,35 +132,6 @@ function redactTraceContent(content: string): string {
 /** The system turn is this program's own rules, which name the prohibited attributes; it is kept whole. */
 function redactTrace<T extends { role: string; content: string }>(trace: readonly T[]): T[] {
   return trace.map((turn) => (turn.role === "system" ? turn : { ...turn, content: redactTraceContent(turn.content) }));
-}
-
-function renderFounder(founder: FounderBrief): string {
-  return explicitJson({
-    id: founder.id,
-    name: founder.name,
-    headline: founder.headline,
-    location: founder.location,
-    company: {
-      name: founder.company.name,
-      url: founder.company.url,
-      oneLiner: founder.company.oneLiner,
-      stage: founder.company.stage,
-    },
-    links: {
-      github: founder.links.github,
-      linkedin: founder.links.linkedin,
-      x: founder.links.x,
-      site: founder.links.site,
-      scholar: founder.links.scholar,
-    },
-    tags: founder.tags,
-    sightings: founder.sightings.map((sighting) => ({
-      source: sighting.source,
-      title: sighting.title,
-      why: sighting.why,
-      ref: sighting.ref,
-    })),
-  });
 }
 
 function renderItems(items: RawItem[]): string {
@@ -218,6 +195,10 @@ const PIPELINE_ROLES: Record<ModelJobId, { role: string; contribution: string }>
   "company.team": { role: "a Team researcher", contribution: "research the company's public professional team" },
   "hunt.navigate": { role: "the hunt navigator", contribution: "decide where the open-web runners should look next" },
   "hunt.search": { role: "a web search tool caller", contribution: "run one web search for the hunt" },
+  // The three jobs that read X carry their own instructions in ./x; these lines only name them.
+  "hunt.xsearch": { role: "an X searcher for the hunt", contribution: "find recent posts by small accounts showing their own new product" },
+  "investigate.x": { role: "an analyst of a founder's own X account", contribution: "report what the founder posts and shows about their work" },
+  "verify.x": { role: "an independent checker of posts on X", contribution: "look each reported post up again" },
   "hunt.look": { role: "a page reader for the hunt", contribution: "read one public page and report what its own words support" },
   "hunt.sift": { role: "a search-result sifter for the hunt", contribution: "pick the search results most worth opening" },
   "assess.company": { role: "a Company analyst", contribution: "answer the company rubric from verified evidence" },
@@ -357,6 +338,10 @@ function buildPromptFor(id: ModelJobId, input: AnyInput, ctx: JobContext): { sys
     case "hunt.look":
     case "hunt.sift":
       throw new Error("Hunt jobs must use their registered job definitions.");
+    case "hunt.xsearch":
+    case "investigate.x":
+    case "verify.x":
+      throw new Error("Jobs that read X must use their registered job definitions.");
     case "media.read": {
       const value = input as MediaReadInput;
       prompt = [
@@ -1067,7 +1052,9 @@ function sanitizeEvidenceDrafts(items: EvidenceDraft[]): EvidenceDraft[] {
     }));
 }
 
-function normalizeFor(id: ModelJobId, input: AnyInput, output: AnyOutput): AnyOutput {
+function normalizeFor(id: ModelJobId, input: AnyInput, output: AnyOutput, cited?: readonly string[]): AnyOutput {
+  if (id === "hunt.xsearch") return normalizeXSearch(input as XSearchInput, output as SearchOutput, cited) as AnyOutput;
+  if (id === "investigate.x") return normalizeXInvestigation(input as XInvestigateInput, output as XInvestigateOutput, cited) as AnyOutput;
   if (id === "media.read") {
     const media = input as MediaReadInput;
     const raw = output as MediaReadOutput;
@@ -1131,7 +1118,7 @@ function normalizeFor(id: ModelJobId, input: AnyInput, output: AnyOutput): AnyOu
   if (id === "company.product" || id === "company.traction" || id === "company.team") {
     return normalizeCompanyResearch(input as CompanyResearchInput, output as CompanyResearchOutput) as AnyOutput;
   }
-  if (id === "verify.claims") {
+  if (id === "verify.claims" || id === "verify.x") {
     const verify = input as VerifyInput;
     const result = output as VerifyOutput;
     // One verdict per supplied item, the last one given. An item the checker did not judge gets
@@ -1181,10 +1168,12 @@ export function normalizeOutput<J extends ModelJobId>(
   id: J,
   input: JobInput<J>,
   output: JobOutput<J>,
+  /** The addresses the provider's own search returned, when it reports them apart from the answer. */
+  cited?: readonly string[],
 ): JobOutput<J> {
   // Items that state a personal attribute are dropped by the job's own rules above. Whatever
   // text is left (reasons, rationales, memos, notes, drafts) passes the same boundary here.
-  return redactDeep(normalizeFor(id, input as AnyInput, output as AnyOutput)) as JobOutput<J>;
+  return redactDeep(normalizeFor(id, input as AnyInput, output as AnyOutput, cited)) as JobOutput<J>;
 }
 
 function createDefinition(id: ModelJobId): JobDefinition<ModelJobId> {
@@ -1259,7 +1248,9 @@ export function createJobRegistry(library: readonly Skill[] = []): JobRegistry {
       (() => {
         const base = id === "hunt.navigate" || id === "hunt.search" || id === "hunt.look" || id === "hunt.sift"
           ? withLearnedGuidance(huntJobs[id] as JobDefinition<ModelJobId>)
-          : createDefinition(id);
+          : isXJob(id)
+            ? withLearnedGuidance(xJobs[id] as JobDefinition<ModelJobId>)
+            : createDefinition(id);
         return library.length ? withProjectSkills(base, library) : base;
       })(),
     ]),
@@ -1362,6 +1353,12 @@ function liveExecution<J extends ModelJobId>(
       "Provider " + ctx.route.provider + " does not support " + definition.kind + " jobs.",
     );
   }
+  // Only xAI's API can search X. Any other provider would answer from memory, or from the open
+  // web, and call it a post.
+  const x = definition.xScope?.(input, ctx) ?? null;
+  if (x && ctx.route.provider !== "xai-api") {
+    throw new ProviderError("unsupported", "Only the xAI API can read X. Route " + definition.id + " to xai-api.");
+  }
   const provider: ModelProvider = providers.get(ctx.route.provider);
   return provider.run({
     jobId: definition.id,
@@ -1372,13 +1369,15 @@ function liveExecution<J extends ModelJobId>(
     schema: definition.outputSchema,
     schemaName: "job_" + definition.id.replace(/[^A-Za-z0-9_]/g, "_"),
     repoDir: options.repoDir,
+    x,
     maxBudgetUsd: options.maxBudgetUsd,
     timeoutMs: options.timeoutMs,
     signal: options.signal,
   }).then((result) => ({
     promptHash: createHash("sha256").update(prompt.system).digest("hex").slice(0, 12),
     skills: definition.selectedSkills?.(input, ctx) ?? [],
-    output: normalizeOutput(definition.id, input, result.output as JobOutput<J>),
+    output: normalizeOutput(definition.id, input, result.output as JobOutput<J>, result.cited),
+    cited: result.cited,
     provider: result.provider,
     model: result.model,
     usage: result.usage,

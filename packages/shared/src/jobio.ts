@@ -67,6 +67,7 @@ export const EVIDENCE_KINDS = [
   "launch",
   "talk",
   "interview",
+  "video",
   "article",
   "funding",
   "reference",
@@ -631,6 +632,102 @@ export const SearchOutputSchema = z.object({
 export const SiftOutputSchema = z.object({ open: z.array(PickSchema) }) satisfies z.ZodType<SiftResult>;
 export type SiftOutput = z.infer<typeof SiftOutputSchema>;
 
+/* -------------------------------- X -------------------------------- */
+
+/**
+ * What one call may read on X. Code sets it and xAI's search tool is given it as settings, so
+ * the words of a prompt, or of a post, cannot widen it.
+ */
+export interface XScope {
+  /** Accounts the search is held to, without the @. Empty: any account. */
+  handles: string[];
+  /** Posts from this day on, as YYYY-MM-DD. null: no lower bound. */
+  fromDate: string | null;
+  /** Posts up to this day, as YYYY-MM-DD. null: up to now. */
+  toDate: string | null;
+  /** Whether the model may look at images and video attached to posts. */
+  media: boolean;
+  /** A search leaves out accounts the model reports as larger than this. null: no ceiling. */
+  maxFollowers: number | null;
+  /** The most posts a search returns. null for a call that is not a search. */
+  limit: number | null;
+}
+
+/** One search of X for recent posts by small accounts. The hits are addresses of posts. */
+export interface XSearchInput {
+  query: string;
+  limit: number;
+  /** YYYY-MM-DD. */
+  fromDate: string;
+  /** YYYY-MM-DD. */
+  toDate: string;
+  maxFollowers: number;
+}
+
+/** One founder's own X account, read for what they post and how people respond. */
+export interface XInvestigateInput {
+  founder: FounderBrief;
+  thesis: Thesis;
+  /** Evidence from X already on file, so the agent does not collect it again. */
+  known: EvidenceBrief[];
+  depth: InvestigationDepth;
+  /** Rubric questions still open after the last assessment. Empty on a first look. */
+  gaps: GapQuestion[];
+  /**
+   * The account to read, without the @: from the founder's profile link, or from a post the
+   * fact-checker already supported. null when neither names one, and the agent must find it.
+   */
+  handle: string | null;
+  /** Posts older than this day (YYYY-MM-DD) are out of scope. */
+  fromDate: string;
+  /** Whether video and images attached to posts may be looked at. */
+  media: boolean;
+}
+
+export const X_EVIDENCE_KINDS = ["post", "launch", "video"] as const satisfies readonly EvidenceKind[];
+
+export const XAccountSchema = z.object({
+  /** Without the @. */
+  handle: z.string(),
+  name: z.string(),
+  /** As the model reports it. Code never checks it, and it is shown as a report. */
+  followers: z.number().nullable(),
+  /** The words in the account's bio or posts that tie it to this person and this company. */
+  identity: z.string(),
+});
+
+export const XEvidenceDraftSchema = z.object({
+  /** "video": the excerpt is what is said or shown in a video attached to the post. */
+  kind: z.enum(X_EVIDENCE_KINDS),
+  /** null when the item is about the person. A facet when it is about their company. */
+  facet: z.enum(EVIDENCE_FACETS).nullable(),
+  /** The address of the post itself. */
+  url: z.string(),
+  /** The post's exact words. For a video, the words said or shown in it. */
+  excerpt: z.string(),
+  /** One sentence: what this shows about the founder or the company. */
+  claim: z.string(),
+  /** ISO date of the post. */
+  publishedAt: nullableString,
+  /** Counts as the model reports them. Shown as a report, never as a measurement. */
+  likes: z.number().nullable(),
+  reposts: z.number().nullable(),
+  replies: z.number().nullable(),
+  views: z.number().nullable(),
+});
+
+export const XInvestigateOutputSchema = z.object({
+  /** null when no account could be tied to this person. */
+  account: XAccountSchema.nullable(),
+  evidence: z.array(XEvidenceDraftSchema),
+  /** What was looked for and not found. */
+  notes: z.string(),
+});
+
+export type XAccount = z.infer<typeof XAccountSchema>;
+export type XEvidenceDraft = z.infer<typeof XEvidenceDraftSchema>;
+export type XInvestigateOutput = z.infer<typeof XInvestigateOutputSchema>;
+
 /* --------------------------- Job I/O map --------------------------- */
 
 /** Input and output types per model-backed job. */
@@ -641,6 +738,7 @@ export interface JobIO {
   "scout.talent": { input: ScoutInput; output: ScoutOutput };
   "hunt.navigate": { input: NavigateInput; output: NavigateOutput };
   "hunt.search": { input: SearchInput; output: SearchOutput };
+  "hunt.xsearch": { input: XSearchInput; output: SearchOutput };
   "hunt.look": { input: LookInput; output: LookOutput };
   "hunt.sift": { input: SiftInput; output: SiftOutput };
   "screen.fit": { input: ScreenInput; output: ScreenOutput };
@@ -649,11 +747,13 @@ export interface JobIO {
   "investigate.company": { input: InvestigateInput; output: InvestigateOutput };
   "investigate.media": { input: InvestigateInput; output: InvestigateMediaOutput };
   "media.read": { input: MediaReadInput; output: MediaReadOutput };
+  "investigate.x": { input: XInvestigateInput; output: XInvestigateOutput };
   "investigate.redflags": { input: InvestigateInput; output: InvestigateOutput };
   "company.product": { input: CompanyResearchInput; output: CompanyResearchOutput };
   "company.traction": { input: CompanyResearchInput; output: CompanyResearchOutput };
   "company.team": { input: CompanyResearchInput; output: CompanyResearchOutput };
   "verify.claims": { input: VerifyInput; output: VerifyOutput };
+  "verify.x": { input: VerifyInput; output: VerifyOutput };
   "assess.judgments": { input: AssessInput; output: AssessOutput };
   "assess.memo": { input: MemoInput; output: MemoOutput };
   "assess.company": { input: CompanyAssessInput; output: CompanyAssessOutput };
@@ -673,6 +773,7 @@ export const MODEL_JOB_IDS = [
   "scout.talent",
   "hunt.navigate",
   "hunt.search",
+  "hunt.xsearch",
   "hunt.look",
   "hunt.sift",
   "screen.fit",
@@ -681,11 +782,13 @@ export const MODEL_JOB_IDS = [
   "investigate.company",
   "investigate.media",
   "media.read",
+  "investigate.x",
   "investigate.redflags",
   "company.product",
   "company.traction",
   "company.team",
   "verify.claims",
+  "verify.x",
   "assess.judgments",
   "assess.memo",
   "assess.company",
@@ -701,6 +804,7 @@ export const JOB_OUTPUT_SCHEMAS = {
   "scout.talent": ScoutOutputSchema,
   "hunt.navigate": NavigateOutputSchema,
   "hunt.search": SearchOutputSchema,
+  "hunt.xsearch": SearchOutputSchema,
   "hunt.look": LookOutputSchema,
   "hunt.sift": SiftOutputSchema,
   "screen.fit": ScreenOutputSchema,
@@ -709,11 +813,13 @@ export const JOB_OUTPUT_SCHEMAS = {
   "investigate.company": InvestigateOutputSchema,
   "investigate.media": InvestigateMediaOutputSchema,
   "media.read": MediaReadOutputSchema,
+  "investigate.x": XInvestigateOutputSchema,
   "investigate.redflags": InvestigateOutputSchema,
   "company.product": CompanyResearchOutputSchema,
   "company.traction": CompanyResearchOutputSchema,
   "company.team": CompanyResearchOutputSchema,
   "verify.claims": VerifyOutputSchema,
+  "verify.x": VerifyOutputSchema,
   "assess.judgments": AssessOutputSchema,
   "assess.memo": MemoOutputSchema,
   "assess.company": CompanyAssessOutputSchema,

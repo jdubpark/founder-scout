@@ -49,6 +49,7 @@ export const EVIDENCE_KIND_LABEL: Record<EvidenceKind, string> = {
   launch: "Launch",
   talk: "Talk",
   interview: "Interview",
+  video: "Video",
   article: "Article",
   funding: "Funding",
   reference: "Reference",
