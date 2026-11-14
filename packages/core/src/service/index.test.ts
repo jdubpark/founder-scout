@@ -80,14 +80,13 @@ function harness(defaultPools?: () => Promise<Pools>, existingSwarm = false, dia
     store.insertSwarm(swarm);
     store.insertAgent({ id: "agt_legacy_scout", swarmId: swarm.id, jobId: "scout.github", classId: "scout", name: "GitHub", status: "active", beat: null, state: {}, createdAt: stamp });
   }
-  const service = createSwarmService({ store, runs, evals, providers, liveSources, ...(dialler ? { dialler } : {}), fundName, callbackNumber, ...(defaultPools ? { defaultPools } : {}), cron, now: () => clock });
   const recordings = createRecordingService({
     store,
     dataDir: "/tmp/agentswarm-service-tests",
     maxBytes: 150 * 1024 * 1024,
     checkAddress: async (url) => ({ url, addresses: ["93.184.216.34"] }),
   });
-  const service = createSwarmService({ store, runs, evals, providers, liveSources, recordings, ...(dialler ? { dialler } : {}), ...(defaultPools ? { defaultPools } : {}), cron, now: () => clock });
+  const service = createSwarmService({ store, runs, evals, providers, liveSources, recordings, ...(dialler ? { dialler } : {}), fundName, callbackNumber, ...(defaultPools ? { defaultPools } : {}), cron, now: () => clock });
   return {
     store, service, refused,
     setNow: (at: Date) => { clock = at; },

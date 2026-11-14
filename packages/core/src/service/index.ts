@@ -18,8 +18,7 @@ import type {
 import { ServiceError } from "../contracts";
 import { openStore } from "../db";
 import { createSimDialler, createSimRepoFinder, createSimSources, createSimWorld } from "../sim";
-import { createLiveDialler, createLivePeopleLookup, createLiveRepoFinder, createLiveSources, createQuoteChecker, createLinkupSearchEngine, createLiveWebAccess, createModelSearchEngine, createSimWebAccess, createLiveTranscriber, createMediaFetcher, looksLikeFounder, parseConnectionsCsv } from "../sources";
-import { createLiveDialler, createLivePeopleLookup, createLiveRepoFinder, createLiveSources, createQuoteChecker, createLiveWebAccess, createModelSearchEngine, createSimWebAccess, createLiveTranscriber, createMediaFetcher, mediaMaxBytes, probeMediaDuration, looksLikeFounder, parseConnectionsCsv } from "../sources";
+import { createLiveDialler, createLivePeopleLookup, createLiveRepoFinder, createLiveSources, createQuoteChecker, createLinkupSearchEngine, createLiveWebAccess, createModelSearchEngine, createSimWebAccess, createLiveTranscriber, createMediaFetcher, mediaMaxBytes, probeMediaDuration, looksLikeFounder, parseConnectionsCsv } from "../sources";
 import { createProviderRegistry } from "../providers";
 import { createJobRegistry, createExecuteJob, findSensitive, loadSkillLibrary, redactSensitive } from "../jobs";
 import { createRunController } from "../engine";
@@ -1310,16 +1309,14 @@ export function createApp(options: AppOptions): App {
   const web = {
     sim: createSimWebAccess(world),
     live: createLiveWebAccess({
-      env: options.env,
+      env,
       // One engine answers to "web". A contracted search service is used when its key is set:
       // it is faster and a search costs half a cent. Otherwise the model provider's own search
       // tool does it, as a task inside the run's spend cap. HUNT_WEB_SEARCH=off leaves it out.
-      extraEngines: (options.env ?? process.env).HUNT_WEB_SEARCH === "off"
-      env,
       extraEngines: env.HUNT_WEB_SEARCH === "off"
         ? []
-        : (options.env ?? process.env).LINKUP_API_KEY?.trim()
-          ? [createLinkupSearchEngine({ env: options.env ?? process.env })]
+        : env.LINKUP_API_KEY?.trim()
+          ? [createLinkupSearchEngine({ env })]
           : [createModelSearchEngine({ status: () => providers.get("claude-cli").status() })],
     }),
   };
@@ -1375,7 +1372,6 @@ export function createApp(options: AppOptions): App {
     now: options.now,
     logger: options.logger,
   }, { pastJudge: options.evalJudge ?? null });
-  const service = createSwarmService({ store, runs, evals, providers, liveSources, dialler: { sim: createSimDialler(world), live: createLiveDialler(options.env) }, fundName: env.FUND_NAME?.trim() || null, callbackNumber: env.FUND_CALLBACK_NUMBER?.trim() || null, web, defaultPools, skillLibrary, cron: options.cron, now: options.now, logger: options.logger });
-  const service = createSwarmService({ store, runs, evals, providers, liveSources, recordings: recordingService, dialler: { sim: createSimDialler(world), live: createLiveDialler(env) }, web, defaultPools, skillLibrary, cron: options.cron, now: options.now, logger: options.logger });
+  const service = createSwarmService({ store, runs, evals, providers, liveSources, recordings: recordingService, dialler: { sim: createSimDialler(world), live: createLiveDialler(env) }, fundName: env.FUND_NAME?.trim() || null, callbackNumber: env.FUND_CALLBACK_NUMBER?.trim() || null, web, defaultPools, skillLibrary, cron: options.cron, now: options.now, logger: options.logger });
   return { service, store, providers, close: () => store.close() };
 }
