@@ -297,24 +297,17 @@ describe("startScheduler catch-up", () => {
     scheduler.stop();
   });
 
-  it("does nothing when a run already started after the daily time", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-01-01T09:00:00.000Z"));
-    const fixture = makeCatchUpService("2026-01-01T06:00:01.000Z");
-    const scheduler = startScheduler({ service: fixture.service, cron: createCronHelper(), pollMs: 300_000, catchUp: true });
-    await settle();
-    expect(fixture.listRuns).toHaveBeenCalledWith("swarm-1", 1);
-    expect(fixture.runScheduled).not.toHaveBeenCalled();
-    scheduler.stop();
-  });
-
-  it("catches up only the swarms that missed their run", async () => {
+  it("catches up only active swarms that missed their run", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-01-01T09:00:00.000Z"));
     const getSettings = vi.fn(async () => ({ settings: { schedule: schedule() } }) as SettingsDTO);
-    const listSwarms = vi.fn(async () => [{ id: "ran-today", status: "active" }, { id: "missed", status: "active" }]);
+    const listSwarms = vi.fn(async () => [
+      { id: "ran-today", status: "active" },
+      { id: "missed", status: "active" },
+      { id: "paused", status: "paused" },
+    ]);
     const listRuns = vi.fn(async (swarmId: string) => [
-      { id: `run-${swarmId}`, startedAt: swarmId === "ran-today" ? "2026-01-01T06:00:01.000Z" : "2025-12-31T06:00:01.000Z" },
+      ...(swarmId === "paused" ? [] : [{ id: `run-${swarmId}`, startedAt: swarmId === "ran-today" ? "2026-01-01T06:00:01.000Z" : "2025-12-31T06:00:01.000Z" }]),
     ]);
     const runScheduled = vi.fn(async () => []);
     const service = { as: vi.fn(() => ({ getSettings, listSwarms, listRuns })), runScheduled } as unknown as SwarmService;
@@ -322,18 +315,15 @@ describe("startScheduler catch-up", () => {
     await settle();
     expect(runScheduled).toHaveBeenCalledTimes(1);
     expect(runScheduled).toHaveBeenCalledWith(["missed"]);
+    expect(listRuns).toHaveBeenCalledWith("ran-today", 1);
+    expect(listRuns).toHaveBeenCalledWith("missed", 1);
+    expect(listRuns).not.toHaveBeenCalledWith("paused", 1);
     scheduler.stop();
   });
 
-  it("leaves a paused swarm alone, and stays off unless asked for", async () => {
+  it("stays off unless catch-up is enabled", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-01-01T09:00:00.000Z"));
-    const paused = makeCatchUpService(null, "paused");
-    const first = startScheduler({ service: paused.service, cron: createCronHelper(), pollMs: 300_000, catchUp: true });
-    await settle();
-    expect(paused.runScheduled).not.toHaveBeenCalled();
-    first.stop();
-
     const neverRan = makeCatchUpService(null);
     const second = startScheduler({ service: neverRan.service, cron: createCronHelper(), pollMs: 300_000 });
     await settle();

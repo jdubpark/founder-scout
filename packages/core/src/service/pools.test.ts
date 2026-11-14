@@ -216,7 +216,7 @@ describe("pools service functions", () => {
     expect(h.swarm()).toMatchObject({ configId: result.config!.id, updatedAt: stamp });
   });
 
-  it("does not save when shares already match the measured yields", async () => {
+  it("does not save when shares already match or there are no pools to rebalance", async () => {
     const config: SwarmConfig = { ...BASE_CONFIG, id: "cfg_matched", pools: { [firstJob]: [member("alpha", 0.6), member("beta", 0.4)] } };
     const h = harness(config);
     h.setStats(firstJob, [
@@ -235,6 +235,12 @@ describe("pools service functions", () => {
     expect(result.config).toBeNull();
     expect(h.configs.size).toBe(1);
     expect(h.swarm().configId).toBe(config.id);
+
+    const empty = harness();
+    const emptyResult = await rebalancePools(empty.deps, "swarm-test", { apply: true });
+    expect(emptyResult).toEqual({ report: { applied: false, pools: [] }, config: null });
+    expect(empty.configs.size).toBe(1);
+    expect(empty.swarm().configId).toBe(BASE_CONFIG.id);
   });
 
   it("benches a member that accepts planted false claims and preserves the final member", async () => {
@@ -256,16 +262,6 @@ describe("pools service functions", () => {
       { ...member("steady", 0.5), share: 1 },
     ]);
     expect(h.swarm().configId).toBe(result.config?.id);
-  });
-
-  it("returns an empty report and saves nothing when the swarm has no pools", async () => {
-    const h = harness();
-
-    const result = await rebalancePools(h.deps, "swarm-test", { apply: true });
-
-    expect(result).toEqual({ report: { applied: false, pools: [] }, config: null });
-    expect(h.configs.size).toBe(1);
-    expect(h.swarm().configId).toBe(BASE_CONFIG.id);
   });
 
   it("rebalances configured defaults and saves only the changed job pool", async () => {

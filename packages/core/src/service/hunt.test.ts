@@ -5,6 +5,7 @@ import {
   ZERO_STATS,
   ZERO_TRAIL_STATS,
   type Agent,
+  type Directive,
   type FrontierItem,
   type Founder,
   type Hunt,
@@ -220,6 +221,11 @@ describe("hunt service", () => {
   it("shows an empty hunt with resolved limits, navigator state, runner pools, and scheduled engines", async () => {
     const h = harness();
     h.store.insertAgent(agentRecord({ status: "paused" }));
+    h.store.insertAgent(agentRecord({ id: "agt_hunt_look", jobId: "hunt.look", classId: "runner", name: "Page reader" }));
+    h.store.insertDirective({
+      id: "dir_hunt_wave_size", scope: { agentId: "agt_hunt_look" }, kind: "param", key: "hunt.wave_size", value: 18,
+      text: null, priority: 0, status: "active", author: "Partner", note: null, createdAt: stamp, updatedAt: stamp, expiresAt: null,
+    } satisfies Directive);
     const config = { ...BASE_CONFIG, id: "cfg_hunt_view", routes: { ...BASE_CONFIG.routes, "hunt.navigate": { provider: "sim" as const, model: "nav-model" } } };
     h.store.saveConfig(config);
     h.store.updateSwarm("swm_hunt", { configId: config.id });
@@ -239,7 +245,7 @@ describe("hunt service", () => {
     expect(view.engines.map((item) => [item.id, item.configured, item.detail])).toEqual([
       ["hn", true, "ready"], ["github", false, "missing credentials"],
     ]);
-    expect(view.limits).toMatchObject({ turns: 4, waveSize: 12, maxDepth: 2, budgetShare: 0.25, latestStage: "seed", plantedEvery: 12 });
+    expect(view.limits).toMatchObject({ turns: 4, waveSize: 18, maxDepth: 2, budgetShare: 0.25, latestStage: "seed", plantedEvery: 12 });
     expect(view.totals).toEqual(ZERO_TRAIL_STATS);
     expect(view.planted).toEqual({ read: 0, failed: 0 });
     expect(view.trails).toHaveLength(0);

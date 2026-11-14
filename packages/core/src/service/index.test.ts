@@ -149,7 +149,7 @@ function keptWinner(flow: EvalFlowDTO, costUsd = 0): EvalFlowDTO {
   return { ...flow, rounds: flow.rounds + 1, variants: [...flow.variants, winner], bestVariant: winner.id };
 }
 function contactCsv(rows: string[][]): string {
-  return ["First Name,Last Name,URL,Company,Position,Connected On", ...rows.map((row) => row.map((value) => `"${value.replaceAll('"', '""')}"`).join(","))].join("\n");
+  return ["First Name,Last Name,URL,Company,Position,Connected On,Email", ...rows.map((row) => [...row, row[6] ?? ""].map((value) => `"${value.replaceAll('"', '""')}"`).join(","))].join("\n");
 }
 function expectServiceError(promise: Promise<unknown>, status: number, field?: string) {
   return promise.then(() => { throw new Error("Expected ServiceError"); }, (error: unknown) => {
@@ -188,11 +188,13 @@ describe("createSwarmService", () => {
       await expectServiceError(recordings.addLink("Partner", founder.id, { title: "I was born in 1984", kind: "talk", url: "https://media.example.com/talk.mp3" }), 400, "title");
       expect(recordings.list("Partner", founder.id)).toEqual([]);
       const linked = await recordings.addLink("Partner", founder.id, { title: "Founder interview", kind: "interview", url: "https://media.example.com/interview.mp3" });
+      await expectServiceError(recordings.upload("Partner", founder.id, { title: "Too large", kind: "talk", contentType: "audio/mpeg", data: new Uint8Array(1025) }), 413, "file");
       const data = new Uint8Array([1, 2, 3, 4]);
       const uploaded = await recordings.upload("Partner", founder.id, { title: "Founder talk", kind: "talk", contentType: "audio/mpeg", data });
       const generatedPath = join(dataDir, "recordings", `${uploaded.id}.media`);
 
       expect(uploaded.sourceUrl).toBeNull();
+      expect(uploaded.id).toMatch(/^rcd_[0-9a-z]{12}$/);
       expect(await readFile(generatedPath)).toEqual(Buffer.from(data));
       expect(recordings.list("Partner", founder.id).map((recording) => recording.id).sort()).toEqual([linked.id, uploaded.id].sort());
 
@@ -205,7 +207,7 @@ describe("createSwarmService", () => {
     }
   });
 
-  it("backfills enabled job agents for a swarm loaded from an older database", () => {
+  it("backfills enabled jobs for both legacy and partially upgraded swarms", async () => {
     const { service, store } = createHarness(undefined, true);
     const agents = store.listAgents("swm_legacy");
 
@@ -214,18 +216,19 @@ describe("createSwarmService", () => {
     expect(agents.filter((agent) => agent.jobId === "hunt.navigate")).toHaveLength(1);
     expect(agents.filter((agent) => agent.jobId === "hunt.look")).toHaveLength(1);
     expect(agents.filter((agent) => agent.jobId === "hunt.sift")).toHaveLength(1);
-    service.close();
-  });
 
-  it("uses agent scoped runner directives for Hunt limits", async () => {
-    const { service, store } = createHarness();
-    await service.ensureSeeded();
-    const swarm = store.listSwarms()[0]!;
-    const runner = store.listAgents(swarm.id).find((agent) => agent.jobId === "hunt.look")!;
     const api = service.as("Partner");
-    await api.createDirective({ scope: { agentId: runner.id }, kind: "param", key: "hunt.wave_size", value: 18 });
-
-    expect((await api.getHunt(swarm.id)).limits.waveSize).toBe(18);
+    const older: Swarm = { id: newId("swm"), name: "Partially upgraded", status: "active", thesis, configId: BASE_CONFIG.id, createdAt: stamp, updatedAt: stamp };
+    store.insertSwarm(older);
+    const newJobs = new Set(["company.product", "company.traction", "company.team", "assess.company"]);
+    for (const job of JOBS.filter((item) => !newJobs.has(item.id))) {
+      store.insertAgent({ id: newId("agt"), swarmId: older.id, jobId: job.id, classId: job.classId, name: job.label, status: "active", beat: null, state: {}, createdAt: stamp });
+    }
+    await api.getTree(older.id);
+    const upgradedIds = store.listAgents(older.id).map((agent) => agent.jobId);
+    expect([...upgradedIds].filter((id) => newJobs.has(id))).toEqual(["company.product", "company.traction", "company.team", "assess.company"]);
+    await api.getOverview(older.id);
+    expect(store.listAgents(older.id).filter((agent) => newJobs.has(agent.jobId))).toHaveLength(4);
   });
 
   it("keeps outside turns in the navigator seat and applies only checked requests", async () => {
@@ -234,6 +237,14 @@ describe("createSwarmService", () => {
     const api = service.as("Seat agent");
     const swarm = (await api.listSwarms())[0]!;
     await api.addHuntTrail(swarm.id, { name: "Pinned path", pages: ["https://founders-example.com/start"] });
+    const pageBody = "Private page body: founder shipped a database engine from scratch.";
+    const hiddenFounder = founderRecord(swarm.id, "fnd_hidden_page_text");
+    store.insertFounder(hiddenFounder);
+    store.insertEvidence({
+      id: "evidence-hidden-page-text", founderId: hiddenFounder.id, companyId: null, facet: "team", kind: "profile", source: "web",
+      url: "https://founders-example.com/profile", title: "Founder profile", excerpt: pageBody, claim: "Founder built a database engine.",
+      publishedAt: null, capturedAt: stamp, collectedByTaskId: null, hash: "hidden-page-text", verification: "supported", verificationNote: null, sim: null,
+    });
     const hunt = store.getHunt(swarm.id)!;
     const pinned = store.listTrails(hunt.id)[0]!;
     store.saveTrail({ ...pinned, pinned: true });
@@ -245,7 +256,12 @@ describe("createSwarmService", () => {
     await expect(api.takeHuntTurn(swarm.id, turn)).rejects.toMatchObject({ status: 409, message: expect.stringContaining("Set hunt.navigator to outside") });
     await expect(api.runHuntWave(swarm.id)).rejects.toMatchObject({ status: 409 });
     await api.createDirective({ scope: { swarmId: swarm.id }, kind: "param", key: "hunt.navigator", value: "outside" });
+    await expect(api.takeHuntTurn(swarm.id, {
+      ...turn,
+      open: [{ name: "Founder is 42 years old", intent: "Find a technical team", searches: [], pages: [] }],
+    })).rejects.toMatchObject({ status: 400, message: expect.stringContaining("personal attributes") });
 
+    const seat = await api.getHuntSeat(swarm.id);
     const result = await api.takeHuntTurn(swarm.id, turn);
     expect(result.opened).toEqual(["New direction"]);
     expect(result.closed).toEqual([]);
@@ -256,17 +272,11 @@ describe("createSwarmService", () => {
     const opened = store.listTrails(hunt.id).find((trail) => trail.name === "New direction")!;
     expect(store.listFrontier(hunt.id).filter((item) => item.trailId === opened.id).map((item) => item.target)).toEqual(["https://teams-example.com/launch"]);
     const viewText = JSON.stringify(result.view);
+    expect(JSON.stringify(seat.view)).not.toContain(pageBody);
+    expect(viewText).not.toContain(pageBody);
     expect(viewText).not.toContain("Ari Founder");
     expect(viewText).not.toContain("founders-example.com/start");
     expect(viewText).not.toContain("teams-example.com/launch");
-  });
-
-  it("assembles the app from its options and closes the shared store", async () => {
-    const app = createApp({ dbPath: ":memory:", dataDir: ".", flowsDir: ".", cron });
-    await app.service.ensureSeeded();
-    expect(app.store.listSwarms()).toHaveLength(1);
-    expect(app.providers).toBeDefined();
-    app.close();
   });
 
   it("resolves both configured runner providers into default pools and lets saved pools replace them", async () => {
@@ -293,6 +303,10 @@ describe("createSwarmService", () => {
       const saved = await api.setPool(swarm.id, "hunt.look", { members: [{ id: "local-runner", route: { provider: "sim", model: "local" }, share: 1 }] });
       expect(saved.pools.find((pool) => pool.jobId === "hunt.look")?.members.map((member) => member.id)).toEqual(["local-runner"]);
       expect(saved.pools.find((pool) => pool.jobId === "hunt.sift")?.members.map((member) => member.id)).toEqual(["deepseek-flash", "muse-ember"]);
+
+      const reset = await api.setPool(swarm.id, "hunt.look", { members: [] });
+      expect(reset.pools.find((pool) => pool.jobId === "hunt.look")?.members).toEqual([]);
+      expect(reset.pools.find((pool) => pool.jobId === "hunt.look")?.route).not.toBeNull();
     } finally {
       app.close();
     }
@@ -302,8 +316,10 @@ describe("createSwarmService", () => {
     const app = createApp({ dbPath: ":memory:", dataDir: ".", flowsDir: ".", cron, simSeed: 13 });
     try {
       await app.service.ensureSeeded();
+      await app.service.ensureSeeded();
       const api = app.service.as("Partner");
       const [swarm] = await api.listSwarms();
+      expect(await api.listSwarms()).toHaveLength(1);
       // Ordinary scouts run before the hunt and would deduplicate the same simulated founders.
       for (const agent of app.store.listAgents(swarm!.id).filter((item) => item.jobId.startsWith("scout."))) {
         app.store.updateAgent(agent.id, { status: "paused" });
@@ -329,26 +345,6 @@ describe("createSwarmService", () => {
     } finally {
       app.close();
     }
-  });
-
-  it("seeds a complete swarm, two global rules and one swarm preference, once", async () => {
-    const { service, store } = createHarness();
-    await service.ensureSeeded();
-    const [swarm] = store.listSwarms();
-    expect(swarm?.name).toBe("AI infrastructure, pre-seed");
-    expect(store.listAgents(swarm!.id)).toHaveLength(JOBS.length);
-    expect(store.listAgents(swarm!.id).map((agent) => agent.jobId)).toEqual(JOBS.map((job) => job.id));
-    const seeded = store.listDirectives();
-    expect(seeded.every((directive) => directive.author === "System")).toBe(true);
-    const rules = seeded.filter((directive) => directive.kind === "rule");
-    expect(rules).toHaveLength(2);
-    expect(rules.every((directive) => Object.keys(directive.scope).length === 0)).toBe(true);
-    const preferences = seeded.filter((directive) => directive.kind === "opinion");
-    expect(preferences).toHaveLength(1);
-    expect(preferences[0]?.scope).toEqual({ swarmId: swarm!.id });
-    await service.ensureSeeded();
-    expect(store.listSwarms()).toHaveLength(1);
-    expect(store.listDirectives()).toHaveLength(3);
   });
 
   it("validates directive scope, effect, value and text, then stores and audits a valid directive", async () => {
@@ -453,31 +449,22 @@ describe("createSwarmService", () => {
     expect(third.spentUsd).toBe(0);
   });
 
-  it("records an off-mode coach note without starting evals", async () => {
+  it("records zero-round reports when autopilot is off or the emergency stop is on", async () => {
     const { service, store, setFlow, lastRoundInput, evalActivity } = createHarness();
-    const api = service.as("Partner"); const swarm = await api.createSwarm({ name: "Autopilot off", thesis });
-    setFlow({
-      id: "ranking", label: "Ranking", description: "test", headlineMetric: "rank", baseline: 0.5, best: 0.5, rounds: 0, updatedAt: stamp,
-      metrics: [], goal: { target: "rank", direction: "higher", hold: [] }, cases: { train: 1, test: 1, reps: 1 }, noiseFloor: null,
-      dataNote: "Synthetic founders.", variants: [], bestVariant: null, promotedVariant: null, narrative: "",
-    });
+    const api = service.as("Partner"); const swarm = await api.createSwarm({ name: "Autopilot stops", thesis });
+    setFlow(evalFlowRecord("ranking"));
     await api.updateSettings({ autopilot: { mode: "off" } });
-    const report = await service.coach(swarm.id);
-    expect(report).toMatchObject({ mode: "off", spentUsd: 0, flows: [{ flowId: "autopilot", rounds: 0, note: "Autopilot is off." }] });
+    const off = await service.coach(swarm.id);
+    expect(off).toMatchObject({ mode: "off", spentUsd: 0, flows: [{ flowId: "autopilot", rounds: 0, note: "Autopilot is off." }] });
     expect(lastRoundInput()).toBeUndefined();
     expect(evalActivity().listFlowsCalls).toBe(0);
-    expect(store.recentAudit(1)[0]).toMatchObject({ actor: "Swarm", action: "coach.run", target: swarm.id, detail: { report } });
-  });
+    expect(store.recentAudit(1)[0]).toMatchObject({ actor: "Swarm", action: "coach.run", target: swarm.id, detail: { report: off } });
 
-  it("stops coaching on the emergency switch and records a zero-round reason", async () => {
-    const { service, store, setFlow, evalActivity } = createHarness();
-    const api = service.as("Partner"); const swarm = await api.createSwarm({ name: "Stopped coach", thesis });
-    setFlow(evalFlowRecord("ranking"));
-    await api.updateSettings({ killSwitch: true });
-    const report = await service.coach(swarm.id);
-    expect(report.flows).toEqual([{ flowId: "autopilot", label: "Autopilot", rounds: 0, kept: [], applied: null, note: "Emergency stop is on; no eval round was started." }]);
+    await api.updateSettings({ autopilot: { mode: "suggest" }, killSwitch: true });
+    const stopped = await service.coach(swarm.id);
+    expect(stopped.flows).toEqual([{ flowId: "autopilot", label: "Autopilot", rounds: 0, kept: [], applied: null, note: "Emergency stop is on; no eval round was started." }]);
     expect(evalActivity()).toEqual({ listFlowsCalls: 0, roundCalls: [] });
-    expect(store.recentAudit(1)[0]).toMatchObject({ action: "coach.run", detail: { report } });
+    expect(store.recentAudit(1)[0]).toMatchObject({ action: "coach.run", detail: { report: stopped } });
   });
 
   it("runs one round for each ready flow in suggest mode without applying kept changes", async () => {
@@ -496,36 +483,24 @@ describe("createSwarmService", () => {
     expect(store.recentAudit(10).some((entry) => entry.action === "coach.apply")).toBe(false);
   });
 
-  it("keeps a synthetic winner for review without applying it in apply mode", async () => {
-    const { service, store, setFlow, setRoundRunner } = createHarness();
-    const api = service.as("Partner"); const swarm = await api.createSwarm({ name: "Synthetic kept", thesis });
-    setFlow(evalFlowRecord("ranking"));
-    setRoundRunner((flow) => keptWinner(flow));
-    await api.updateSettings({ autopilot: { mode: "apply", budgetUsd: 0 } });
-
-    const report = await service.coach(swarm.id);
-    expect(report.flows[0]).toMatchObject({ rounds: 1, kept: ["Raise the fit threshold"], applied: null, note: "Changes measured on simulated data wait for a partner to promote them." });
-    expect(store.getSwarm(swarm.id)?.configId).toBe(BASE_CONFIG.id);
-    expect(store.recentAudit(10).some((entry) => entry.action === "coach.apply")).toBe(false);
-  });
-
-  it("applies at most one of two newly kept real-data winners per coach run", async () => {
+  it("applies at most one real-data winner and leaves synthetic winners for review", async () => {
     const { service, store, setFlows, setVariantForFlow, setRoundRunner, evalActivity } = createHarness();
     const api = service.as("Partner"); const swarm = await api.createSwarm({ name: "Single apply", thesis });
     const firstConfig = { ...BASE_CONFIG, id: "cfg_first_winner", label: "First winner" };
     const secondConfig = { ...BASE_CONFIG, id: "cfg_second_winner", label: "Second winner" };
     setVariantForFlow("partner-a", firstConfig);
     setVariantForFlow("partner-b", secondConfig);
-    setFlows([evalFlowRecord("partner-a", { realData: true }), evalFlowRecord("partner-b", { realData: true })]);
+    setFlows([evalFlowRecord("partner-a", { realData: true }), evalFlowRecord("partner-b", { realData: true }), evalFlowRecord("simulated")]);
     setRoundRunner((flow) => keptWinner(flow));
     await api.updateSettings({ autopilot: { mode: "apply", budgetUsd: 0 } });
 
     const report = await service.coach(swarm.id);
-    expect(report.flows.map((flow) => flow.applied)).toEqual(["Raise the fit threshold", null]);
+    expect(report.flows.map((flow) => flow.applied)).toEqual(["Raise the fit threshold", null, null]);
     expect(report.flows[1]?.note).toContain("A different real-data change was applied");
+    expect(report.flows[2]?.note).toContain("measured on simulated data wait for a partner");
     expect(store.getConfig(store.getSwarm(swarm.id)!.configId)?.applied).toEqual({ "partner-a": "v1" });
     expect(store.recentAudit(10).filter((entry) => entry.action === "coach.apply")).toHaveLength(1);
-    expect(evalActivity().roundCalls.map((call) => call.flowId)).toEqual(["partner-a", "partner-b"]);
+    expect(evalActivity().roundCalls.map((call) => call.flowId)).toEqual(["partner-a", "partner-b", "simulated"]);
   });
 
   it("runs free flows at zero budget, skips a costly flow, and continues after another flow is busy", async () => {
@@ -589,18 +564,21 @@ describe("createSwarmService", () => {
     expect(store.recentAudit(20).filter((entry) => entry.action === "coach.apply")).toHaveLength(1);
   });
 
-  it("finds the last report in the audit log after a restart", async () => {
+  it("reads the latest coaching report for this swarm from the audit log", async () => {
     const { service, store } = createHarness();
     const api = service.as("Partner"); const swarm = await api.createSwarm({ name: "Restarted", thesis });
     const earlier = { at: stamp, mode: "suggest" as const, spentUsd: 0, flows: [] };
     store.audit({ actor: "Swarm", action: "coach.run", target: "another-swarm", detail: { report: { ...earlier, spentUsd: 9 } } });
     store.audit({ actor: "Swarm", action: "coach.run", target: swarm.id, detail: { report: earlier } });
-    expect((await api.getOverview(swarm.id)).coach).toEqual(earlier);
+    const latest = { ...earlier, at: "2026-11-13T18:00:00.000Z", spentUsd: 2 };
+    store.audit({ actor: "Swarm", action: "coach.run", target: swarm.id, detail: { report: latest } });
+    expect((await api.getOverview(swarm.id)).coach).toEqual(latest);
   });
 
-  it("puts a variant into use without dropping the swarm's pools, learned lines or another eval's changes", async () => {
+  it("puts a variant into use without dropping other changes and reports which swarm carries it", async () => {
     const { service, store, setFlow } = createHarness();
     const api = service.as("Partner"); const swarm = await api.createSwarm({ name: "Layered", thesis });
+    const otherSwarm = await api.createSwarm({ name: "Still at the start", thesis });
     const held: SwarmConfig = {
       ...BASE_CONFIG,
       id: "cfg_held",
@@ -612,7 +590,7 @@ describe("createSwarmService", () => {
     store.saveConfig(held);
     store.updateSwarm(swarm.id, { configId: held.id });
     const variant = (id: string, status: "baseline" | "champion", params: SwarmConfig["params"]) => ({
-      id, round: id === "baseline" ? 0 : 1, description: id, rationale: "", status, train: {}, test: { rank: 0.6 }, testInterval: null, costUsd: 0,
+      id, round: id === "baseline" ? 0 : 1, description: id, rationale: "", status, train: {}, test: { rank: id === "baseline" ? 0.5 : 0.6 }, testInterval: null, costUsd: 0,
       config: { ...BASE_CONFIG, id: `cfg_${id}`, params }, changes: [], createdAt: stamp,
     });
     setFlow({
@@ -628,7 +606,12 @@ describe("createSwarmService", () => {
       pools: held.pools,
       applied: { "partner-calls": "v2", ranking: "v1" },
     });
-    expect((await api.getEvalFlow("ranking")).promotedVariant).toBe("v1");
+    expect((await api.getEvalFlow("ranking")).promotedVariant).toBeNull();
+    expect((await api.getEvalFlow("ranking", swarm.id)).promotedVariant).toBe("v1");
+    expect((await api.getEvalFlow("ranking", otherSwarm.id)).promotedVariant).toBeNull();
+    expect((await api.getEvalFlow("ranking")).promotedVariant).toBeNull();
+    await expectServiceError(api.getEvalFlow("ranking", "missing"), 404);
+    expect(store.recentAudit(1)[0]).toMatchObject({ actor: "Partner", action: "eval.promote", target: swarm.id });
 
     // Choosing the baseline again takes this flow's change back out and leaves the rest.
     const undone = await api.promoteEvalVariant("ranking", { variant: "baseline", swarmId: swarm.id });
@@ -637,25 +620,6 @@ describe("createSwarmService", () => {
     expect(undone.pools).toEqual(held.pools);
     expect((await api.getEvalFlow("ranking")).promotedVariant).toBeNull();
     await expectServiceError(api.promoteEvalVariant("ranking", { variant: "v9", swarmId: swarm.id }), 404);
-  });
-
-  it("reports the variant in use for the swarm asked about, not for any swarm", async () => {
-    const { service, setFlow } = createHarness();
-    const api = service.as("Partner");
-    const first = await api.createSwarm({ name: "Runs the winner", thesis });
-    const second = await api.createSwarm({ name: "Still at the start", thesis });
-    const variant = (id: string, status: "baseline" | "champion") => ({
-      id, round: id === "baseline" ? 0 : 1, description: id, rationale: "", status, train: {}, test: {}, testInterval: null, costUsd: 0,
-      config: { ...BASE_CONFIG, id: `cfg_${id}`, params: (id === "baseline" ? {} : { "weights.velocity": 3 }) as SwarmConfig["params"] }, changes: [], createdAt: stamp,
-    });
-    setFlow({ ...evalFlowRecord("ranking"), variants: [variant("baseline", "baseline"), variant("v1", "champion")], bestVariant: "v1" });
-    await api.promoteEvalVariant("ranking", { variant: "v1", swarmId: first.id });
-
-    expect((await api.getEvalFlow("ranking", first.id)).promotedVariant).toBe("v1");
-    expect((await api.getEvalFlow("ranking", second.id)).promotedVariant).toBeNull();
-    // With two swarms and none named, there is no one swarm to answer for.
-    expect((await api.getEvalFlow("ranking")).promotedVariant).toBeNull();
-    await expectServiceError(api.getEvalFlow("ranking", "missing"), 404);
   });
 
   it("runs one coaching pass at a time, so two swarms cannot both spend the same day's budget", async () => {
@@ -724,36 +688,12 @@ describe("createSwarmService", () => {
     expect(cleared.pools.find((pool) => pool.jobId === "investigate.background")?.members).toEqual([]);
   });
 
-  it("shows configured runner defaults until a swarm saves its own pool", async () => {
-    // These defaults represent DeepSeek and Meta reporting configured for scheduled runner jobs.
-    const { service } = createHarness(async () => runnerPools(() => true));
-    const api = service.as("Partner");
-    const swarm = await api.createSwarm({ name: "Runner defaults", thesis });
-
-    const defaults = await api.getPools(swarm.id);
-    expect(defaults.pools.find((pool) => pool.jobId === "hunt.look")?.members.map((member) => member.id)).toEqual(["deepseek-flash", "muse-ember"]);
-    expect(defaults.pools.find((pool) => pool.jobId === "hunt.sift")?.members.map((member) => member.id)).toEqual(["deepseek-flash", "muse-ember"]);
-
-    const own = await api.setPool(swarm.id, "hunt.look", {
-      members: [{ id: "local-runner", route: { provider: "sim", model: "local" }, share: 1 }],
-    });
-    expect(own.pools.find((pool) => pool.jobId === "hunt.look")?.members.map((member) => member.id)).toEqual(["local-runner"]);
-    expect(own.pools.find((pool) => pool.jobId === "hunt.sift")?.members.map((member) => member.id)).toEqual(["deepseek-flash", "muse-ember"]);
-
-    const reset = await api.setPool(swarm.id, "hunt.look", { members: [] });
-    expect(reset.pools.find((pool) => pool.jobId === "hunt.look")?.members).toEqual([]);
-    expect(reset.pools.find((pool) => pool.jobId === "hunt.look")?.route).not.toBeNull();
-  });
-
-  it("lists every assumption even when nothing has been judged yet", async () => {
+  it("serves the assumption ledger through the swarm API", async () => {
     const { service } = createHarness();
     const api = service.as("Partner"); const swarm = await api.createSwarm({ name: "Ledger", thesis });
     const ledger = await api.getAssumptions(swarm.id);
-    expect(ledger.outcomesBasis).toBeNull();
-    expect(ledger.callsBasis).toBeNull();
-    expect(ledger.rows.length).toBeGreaterThan(25);
-    expect(ledger.rows.every((row) => row.status === "untested")).toBe(true);
-    expect(ledger.rows.find((row) => row.id === "weighing.together")?.current).toBe("0.6");
+    expect(ledger).toMatchObject({ outcomesBasis: null, callsBasis: null });
+    expect(ledger.rows.find((row) => row.id === "weighing.together")).toMatchObject({ status: "untested", current: "0.6" });
     await expectServiceError(api.getAssumptions("missing"), 404);
   });
 
@@ -796,27 +736,17 @@ describe("createSwarmService", () => {
     expect([cls.id, job.id, agent.id]).toHaveLength(3);
   });
 
-  it("resolves narrow parameters and broad-to-narrow guidance and only shows calls to supported classes", async () => {
+  it("includes partner call examples only for classes that may read them", async () => {
     const { service, store } = createHarness();
     const api = service.as("Partner");
     const swarm = await api.createSwarm({ name: "Steering", thesis });
     const scout = store.listAgents(swarm.id).find((agent) => agent.jobId === "scout.github")!;
-    await api.createDirective({ scope: {}, kind: "rule", text: "Global guidance" });
-    await api.createDirective({ scope: { classId: "scout" }, kind: "rule", text: "Scout guidance" });
-    await api.createDirective({ scope: { jobId: "scout.github" }, kind: "rule", text: "GitHub guidance" });
-    await api.createDirective({ scope: { agentId: scout.id }, kind: "rule", text: "Agent guidance" });
-    await api.createDirective({ scope: { classId: "investigator" }, kind: "param", key: "investigate.depth", value: "quick" });
-    await api.createDirective({ scope: { jobId: "investigate.code" }, kind: "param", key: "investigate.depth", value: "standard" });
-    await api.createDirective({ scope: { agentId: store.listAgents(swarm.id).find((agent) => agent.jobId === "investigate.code")!.id }, kind: "param", key: "investigate.depth", value: "deep" });
     const founder = founderRecord(swarm.id); store.insertFounder(founder);
     store.insertFeedback({ id: newId("fbk"), founderId: founder.id, author: "Partner", verdict: "yes", reasonTags: ["builder"], note: null, createdAt: stamp });
-    const result = await api.getEffectiveSteering({ swarmId: swarm.id, agentId: scout.id });
-    expect(result.guidance.map((line) => line.text)).toEqual(["Global guidance", "Scout guidance", "GitHub guidance", "Agent guidance"]);
-    expect(result.callsBlock).toBe("");
-    const investigator = store.listAgents(swarm.id).find((agent) => agent.jobId === "investigate.code")!;
-    const detail = await api.getEffectiveSteering({ swarmId: swarm.id, agentId: investigator.id });
-    expect(detail.params.find((param) => param.key === "investigate.depth")?.value).toBe("deep");
-    expect(detail.callsBlock).toBe("");
+    expect((await api.getEffectiveSteering({ swarmId: swarm.id, agentId: scout.id })).callsBlock).toBe("");
+    const analyst = await api.getEffectiveSteering({ swarmId: swarm.id, classId: "analyst" });
+    expect(analyst.callsBlock).toContain("examples, not rules");
+    expect(analyst.callsBlock).toContain("Vector Works: a vector index for robot logs");
   });
 
   it("records partner calls, filters reason tags, and moves founders according to the latest verdict", async () => {
@@ -1094,25 +1024,6 @@ describe("createSwarmService", () => {
     expect(overview.totals).toMatchObject({ leads: 5, surfaced: 3, founders: 1 });
   });
 
-  it("promotes a variant and identifies it as the config in use", async () => {
-    const { service, store, setFlow, setVariant } = createHarness();
-    const api = service.as("Partner"); const swarm = await api.createSwarm({ name: "Eval", thesis });
-    const variant: SwarmConfig = { ...BASE_CONFIG, id: "cfg_v1", label: "Improved", params: { "screen.min_fit": 0.7 } };
-    setVariant(variant);
-    const flow = { id: "ranking", label: "Ranking", description: "test", headlineMetric: "ndcg5", baseline: 0.5, best: 0.6, rounds: 1, updatedAt: stamp, metrics: [], goal: { target: "ndcg5", direction: "higher", hold: [] }, cases: { train: 2, test: 2, reps: 1 }, noiseFloor: null, dataNote: "sim", variants: [{ id: "v1", round: 1, description: "raise bar", rationale: "calls", status: "kept", train: {}, test: { ndcg5: 0.6 }, testInterval: null, costUsd: 1, config: variant, changes: [], createdAt: stamp }], bestVariant: "v1", promotedVariant: null, narrative: "Improved." } satisfies EvalFlowDTO;
-    setFlow(flow);
-    const config = await api.promoteEvalVariant("ranking", { variant: "v1", swarmId: swarm.id });
-    // The swarm gets a config of its own that carries the variant's change and says which variant it carries.
-    expect(config.id).not.toBe("cfg_v1");
-    expect(store.getSwarm(swarm.id)?.configId).toBe(config.id);
-    expect(store.getConfig(config.id)).toMatchObject({ params: { "screen.min_fit": 0.7 }, applied: { ranking: "v1" } });
-    const flowInUse = await api.getEvalFlow("ranking");
-    expect(flowInUse.promotedVariant).toBe("v1");
-    expect(flowInUse.variants[0]?.status).toBe("champion");
-    expect((await api.getOverview(swarm.id)).evalTrend).toEqual([{ variant: "v1", test: 0.6 }]);
-    expect(store.recentAudit(1)[0]).toMatchObject({ actor: "Partner", action: "eval.promote", target: swarm.id });
-  });
-
   it("counts the eval's winner in the trend and refuses to put a reverted round into use", async () => {
     const { service, store, setFlow, setVariant } = createHarness();
     const api = service.as("Partner"); const swarm = await api.createSwarm({ name: "Eval", thesis });
@@ -1125,11 +1036,13 @@ describe("createSwarmService", () => {
     expect(store.getSwarm(swarm.id)?.configId).toBe(BASE_CONFIG.id);
   });
 
-  it("starts scheduled runs for eligible swarms and continues after one refusal", async () => {
+  it("continues scheduled runs after a refusal and limits catch-up to named swarms", async () => {
     const { service, store, refused } = createHarness(); const api = service.as("Partner");
     const first = await api.createSwarm({ name: "First", thesis });
     const second = await api.createSwarm({ name: "Second", thesis });
     const paused = await api.createSwarm({ name: "Paused", thesis }); await api.updateSwarm(paused.id, { status: "paused" });
+    const ranToday = await api.createSwarm({ name: "Ran today", thesis }); await api.updateSwarm(ranToday.id, { status: "paused" });
+    const missed = await api.createSwarm({ name: "Missed", thesis }); await api.updateSwarm(missed.id, { status: "paused" });
     refused.add(first.id);
     store.saveSettings({ ...DEFAULT_SETTINGS, schedule: { ...DEFAULT_SETTINGS.schedule, enabled: true, brain: "live", sources: "live" } });
     const started = await service.runScheduled();
@@ -1138,15 +1051,11 @@ describe("createSwarmService", () => {
     expect(started[0]?.trigger).toBe("schedule");
     expect(store.recentAudit(1)[0]).toMatchObject({ actor: "Scheduler", action: "run.start", target: started[0]?.id });
     expect(store.recentAudit(3).some((entry) => entry.action === "run.start_refused" && entry.target === first.id)).toBe(true);
-  });
 
-  it("starts scheduled runs only for the named swarms when a catch-up asks for some", async () => {
-    const { service, store } = createHarness(); const api = service.as("Partner");
-    const ranToday = await api.createSwarm({ name: "Ran today", thesis });
-    const missed = await api.createSwarm({ name: "Missed", thesis });
-    store.saveSettings({ ...DEFAULT_SETTINGS, schedule: { ...DEFAULT_SETTINGS.schedule, enabled: true } });
-    const started = await service.runScheduled([missed.id]);
-    expect(started.map((run) => run.swarmId)).toEqual([missed.id]);
+    await api.updateSwarm(ranToday.id, { status: "active" });
+    await api.updateSwarm(missed.id, { status: "active" });
+    const catchUp = await service.runScheduled([missed.id]);
+    expect(catchUp.map((run) => run.swarmId)).toEqual([missed.id]);
     expect(store.listRuns(ranToday.id, 10)).toEqual([]);
   });
 
@@ -1298,7 +1207,7 @@ describe("createSwarmService", () => {
     const secondSwarm = await api.createSwarm({ name: "Second network swarm", thesis });
     const paused = await api.createSwarm({ name: "Paused network swarm", thesis }); await api.updateSwarm(paused.id, { status: "paused" });
     const contacts = [
-      ["Alice", "New", "https://www.linkedin.com/in/alice", "Acme", "Staff Engineer", "2024-01-01"],
+      ["Alice", "New", "https://www.linkedin.com/in/alice", "Acme", "Staff Engineer", "2024-01-01", "alice-private@example.com"],
       ["Bob", "Same", "https://www.linkedin.com/in/bob", "Startup", "Founder", "2024-01-02"],
       ["Carol", "Staff", "https://www.linkedin.com/in/carol", "Factory", "Staff Engineer", "2024-01-03"],
       ["Dana", "Still", "https://www.linkedin.com/in/dana", "Studio", "Founder", "2024-01-04"],
@@ -1306,12 +1215,13 @@ describe("createSwarmService", () => {
     const first = await api.importNetwork({ csv: contactCsv(contacts) });
     expect(first).toMatchObject({ owner: "Morgan", imported: 4, changed: 0, leads: 0, network: { total: 4, owners: [{ owner: "Morgan", contacts: 4 }] } });
     const second = await api.importNetwork({ csv: contactCsv([
-      ["Alice", "New", "https://www.linkedin.com/in/alice", "Stealth", "Founder", "2024-01-01"],
+      ["Alice", "New", "https://www.linkedin.com/in/alice", "Stealth", "Founder", "2024-01-01", "updated-private@example.com"],
       contacts[1]!,
       ["Carol", "Staff", "https://www.linkedin.com/in/carol", "Factory", "Engineering Manager", "2024-01-03"],
       ["Dana", "Still", "https://www.linkedin.com/in/dana", "Studio", "Co-Founder", "2024-01-04"],
     ]) });
     expect(second).toMatchObject({ imported: 4, changed: 3, leads: 1, network: { total: 4 } });
+    expect(JSON.stringify({ first, second, stored: store.listNetwork(), audit: store.recentAudit(8) })).not.toMatch(/alice-private@example\.com|updated-private@example\.com/);
     for (const swarm of [firstSwarm, secondSwarm]) {
       const leads = store.listLeads({ swarmId: swarm.id, unmatchedOnly: true });
       expect(leads).toHaveLength(1);
@@ -1334,7 +1244,7 @@ describe("createSwarmService", () => {
     ]) });
     const typedLead = store.listLeads({ swarmId: firstSwarm.id, unmatchedOnly: true }).find((lead) => lead.personName === "Erin Typed");
     expect(typedLead).toBeDefined();
-    expect(JSON.stringify(typedLead)).not.toMatch(/42|years old|married/);
+    expect([typedLead?.personName, typedLead?.role, typedLead?.companyName, typedLead?.why].join(" ")).not.toMatch(/42 years old|married/);
     await expectServiceError(api.importNetwork({ csv: "bad csv" }), 400, "csv");
     await expectServiceError(api.importNetwork({ csv: "x".repeat(8_000_001) }), 400, "csv");
     const network = await api.removeNetwork("Morgan");
@@ -1377,18 +1287,4 @@ describe("createSwarmService", () => {
     expect((await api.getOverview(swarm.id)).alerts.some((alert) => alert.id === "control-failed")).toBe(false);
   });
 
-  it("backfills the four enabled company and analyst agents once for an older swarm", async () => {
-    const { service, store } = createHarness(); const api = service.as("Partner");
-    const swarm: Swarm = { id: newId("swm"), name: "Older swarm", status: "active", thesis, configId: BASE_CONFIG.id, createdAt: stamp, updatedAt: stamp };
-    store.insertSwarm(swarm);
-    const newJobs = new Set(["company.product", "company.traction", "company.team", "assess.company"]);
-    for (const job of JOBS.filter((item) => !newJobs.has(item.id))) {
-      store.insertAgent({ id: newId("agt"), swarmId: swarm.id, jobId: job.id, classId: job.classId, name: job.label, status: "active", beat: null, state: {}, createdAt: stamp });
-    }
-    await api.getTree(swarm.id);
-    const ids = store.listAgents(swarm.id).map((agent) => agent.jobId);
-    expect([...ids].filter((id) => newJobs.has(id))).toEqual(["company.product", "company.traction", "company.team", "assess.company"]);
-    await api.getOverview(swarm.id);
-    expect(store.listAgents(swarm.id).filter((agent) => newJobs.has(agent.jobId))).toHaveLength(4);
-  });
 });

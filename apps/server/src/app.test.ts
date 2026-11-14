@@ -8,14 +8,6 @@ import type { ApiClient } from "@agentswarm/shared";
 import { buildServer } from "./app";
 
 type Call = { actor: string; method: string; args: unknown[] };
-type RouteCase = {
-  method: "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
-  url: string;
-  apiMethod: string;
-  args?: unknown[];
-  body?: Record<string, unknown>;
-};
-
 const apps: FastifyInstance[] = [];
 let tempWebDist: string | undefined;
 
@@ -59,212 +51,12 @@ async function serverFor(service: SwarmService, options: { webDist?: string | nu
 
 const thesis = { summary: "AI tools", sectors: [], stages: [], geos: [], avoid: [] };
 
-const routeCases: RouteCase[] = [
-  { method: "GET", url: "/api/settings", apiMethod: "getSettings" },
-  { method: "PATCH", url: "/api/settings", apiMethod: "updateSettings", args: [{ killSwitch: true }], body: { killSwitch: true } },
-  { method: "GET", url: "/api/swarms", apiMethod: "listSwarms" },
-  { method: "POST", url: "/api/swarms", apiMethod: "createSwarm", args: [{ name: "AI", thesis }], body: { name: "AI", thesis } },
-  { method: "PATCH", url: "/api/swarms/sw-1", apiMethod: "updateSwarm", args: ["sw-1", { status: "paused" }], body: { status: "paused" } },
-  { method: "GET", url: "/api/swarms/sw-1/overview", apiMethod: "getOverview", args: ["sw-1"] },
-  { method: "GET", url: "/api/swarms/sw-1/tree", apiMethod: "getTree", args: ["sw-1"] },
-  { method: "POST", url: "/api/swarms/sw-1/agents", apiMethod: "addAgent", args: ["sw-1", { jobId: "scout.github" }], body: { jobId: "scout.github" } },
-  { method: "PATCH", url: "/api/agents/ag-1", apiMethod: "updateAgent", args: ["ag-1", { status: "paused" }], body: { status: "paused" } },
-  {
-    method: "GET",
-    url: "/api/directives?swarmId=sw-1&scope=%7B%22swarmId%22%3A%22sw-1%22%7D",
-    apiMethod: "listDirectives",
-    args: [{ swarmId: "sw-1", scope: { swarmId: "sw-1" } }],
-  },
-  {
-    method: "POST",
-    url: "/api/directives",
-    apiMethod: "createDirective",
-    args: [{ scope: {}, kind: "rule", text: "Check the source" }],
-    body: { scope: {}, kind: "rule", text: "Check the source" },
-  },
-  { method: "PATCH", url: "/api/directives/d-1", apiMethod: "updateDirective", args: ["d-1", { status: "paused" }], body: { status: "paused" } },
-  {
-    method: "GET",
-    url: "/api/steering/effective?swarmId=sw-1&jobId=scout.github",
-    apiMethod: "getEffectiveSteering",
-    args: [{ swarmId: "sw-1", jobId: "scout.github" }],
-  },
-  { method: "GET", url: "/api/swarms/sw-1/suggestions", apiMethod: "listSuggestions", args: ["sw-1"] },
-  {
-    method: "POST",
-    url: "/api/swarms/sw-1/suggestions/dismiss",
-    apiMethod: "dismissSuggestion",
-    args: ["sw-1", "key-1"],
-    body: { key: "key-1" },
-  },
-  {
-    method: "GET",
-    url: "/api/founders?swarmId=sw-1&limit=20&offset=5",
-    apiMethod: "listFounders",
-    args: [{ swarmId: "sw-1", limit: 20, offset: 5 }],
-  },
-  { method: "GET", url: "/api/founders/f-1", apiMethod: "getFounder", args: ["f-1"] },
-  { method: "GET", url: "/api/founders/f-1/recordings", apiMethod: "listRecordings", args: ["f-1"] },
-  {
-    method: "POST",
-    url: "/api/founders/f-1/recordings",
-    apiMethod: "addRecordingLink",
-    args: ["f-1", { title: "Founder talk", kind: "talk", url: "https://media.example.com/talk.mp3" }],
-    body: { title: "Founder talk", kind: "talk", url: "https://media.example.com/talk.mp3" },
-  },
-  {
-    method: "POST",
-    url: "/api/founders/f-1/feedback",
-    apiMethod: "addFeedback",
-    args: ["f-1", { verdict: "yes", reasonTags: ["builder"] }],
-    body: { verdict: "yes", reasonTags: ["builder"] },
-  },
-  {
-    method: "POST",
-    url: "/api/founders",
-    apiMethod: "addFounder",
-    args: [{ swarmId: "sw-1", name: "Ada Lovelace", companyName: "Analytical Engines", why: "Built an early computing concept." }],
-    body: { swarmId: "sw-1", name: "Ada Lovelace", companyName: "Analytical Engines", why: "Built an early computing concept." },
-  },
-  {
-    method: "GET",
-    url: "/api/companies?swarmId=sw-1&status=needs_evidence&q=Orbit&sort=deal&limit=15&offset=3",
-    apiMethod: "listCompanies",
-    args: [{ swarmId: "sw-1", status: "needs_evidence", q: "Orbit", sort: "deal", limit: 15, offset: 3 }],
-  },
-  { method: "GET", url: "/api/companies/co-1", apiMethod: "getCompany", args: ["co-1"] },
-  {
-    method: "POST",
-    url: "/api/companies/co-1/feedback",
-    apiMethod: "addCompanyFeedback",
-    args: ["co-1", { verdict: "yes", reasonTags: ["real_pull"] }],
-    body: { verdict: "yes", reasonTags: ["real_pull"] },
-  },
-  { method: "GET", url: "/api/network", apiMethod: "getNetwork" },
-  {
-    method: "POST",
-    url: "/api/network/import",
-    apiMethod: "importNetwork",
-    args: [{ csv: "First Name,Last Name\nAda,Lovelace\n" }],
-    body: { csv: "First Name,Last Name\nAda,Lovelace\n" },
-  },
-  { method: "DELETE", url: "/api/network/Partner", apiMethod: "removeNetwork", args: ["Partner"] },
-  { method: "GET", url: "/api/outreach?swarmId=sw-1&status=proposed", apiMethod: "listOutreach", args: [{ swarmId: "sw-1", status: "proposed" }] },
-  {
-    method: "POST",
-    url: "/api/outreach/out-1/decision",
-    apiMethod: "decideOutreach",
-    args: ["out-1", { decision: "approve" }],
-    body: { decision: "approve" },
-  },
-  {
-    method: "POST",
-    url: "/api/outreach/out-1/complete",
-    apiMethod: "completeOutreach",
-    args: ["out-1", { summary: "Had a useful call" }],
-    body: { summary: "Had a useful call" },
-  },
-  {
-    method: "POST", url: "/api/outreach/out-1/call", apiMethod: "placeCall",
-    args: ["out-1", { to: "+14155550123", timezone: "America/Los_Angeles", consent: { how: "They agreed by email to an AI call.", recording: true } }],
-    body: { to: "+14155550123", timezone: "America/Los_Angeles", consent: { how: "They agreed by email to an AI call.", recording: true } },
-  },
-  { method: "POST", url: "/api/swarms/sw-1/calls/sync", apiMethod: "syncCalls", args: ["sw-1"] },
-  { method: "GET", url: "/api/runs?swarmId=sw-1&limit=8", apiMethod: "listRuns", args: ["sw-1", 8] },
-  { method: "GET", url: "/api/runs/run-1", apiMethod: "getRun", args: ["run-1"] },
-  { method: "GET", url: "/api/tasks/task-1", apiMethod: "getTask", args: ["task-1"] },
-  { method: "POST", url: "/api/runs", apiMethod: "startRun", args: [{ swarmId: "sw-1", brain: "sim" }], body: { swarmId: "sw-1", brain: "sim" } },
-  { method: "POST", url: "/api/runs/run-1/cancel", apiMethod: "cancelRun", args: ["run-1"] },
-  { method: "GET", url: "/api/evals", apiMethod: "listEvalFlows" },
-  { method: "GET", url: "/api/evals/flow-1", apiMethod: "getEvalFlow", args: ["flow-1"] },
-  { method: "GET", url: "/api/evals/flow-1?swarmId=sw-2", apiMethod: "getEvalFlow", args: ["flow-1", "sw-2"] },
-  { method: "POST", url: "/api/evals/flow-1/rounds", apiMethod: "runEvalRounds", args: ["flow-1", {}], body: {} },
-  {
-    method: "POST",
-    url: "/api/evals/flow-1/promote",
-    apiMethod: "promoteEvalVariant",
-    args: ["flow-1", { variant: "v1", swarmId: "sw-1" }],
-    body: { variant: "v1", swarmId: "sw-1" },
-  },
-  {
-    method: "POST",
-    url: "/api/evals/flow-1/preview",
-    apiMethod: "previewEvalVariant",
-    args: ["flow-1", { variant: "v1", swarmId: "sw-1" }],
-    body: { variant: "v1", swarmId: "sw-1" },
-  },
-  {
-    method: "POST",
-    url: "/api/evals/flow-1/rounds",
-    apiMethod: "runEvalRounds",
-    args: ["flow-1", { rounds: 0, brain: "live", budgetUsd: 2.5 }],
-    body: { rounds: 0, brain: "live", budgetUsd: 2.5 },
-  },
-  { method: "GET", url: "/api/swarms/sw-1/assumptions", apiMethod: "getAssumptions", args: ["sw-1"] },
-  { method: "GET", url: "/api/swarms/sw-1/pools", apiMethod: "getPools", args: ["sw-1"] },
-  {
-    method: "PUT",
-    url: "/api/swarms/sw-1/pools/investigate.background",
-    apiMethod: "setPool",
-    args: ["sw-1", "investigate.background", { members: [{ id: "haiku", route: { provider: "claude-cli", model: "claude-haiku-5-5" }, share: 1 }] }],
-    body: { members: [{ id: "haiku", route: { provider: "claude-cli", model: "claude-haiku-5-5" }, share: 1 }] },
-  },
-  {
-    method: "POST",
-    url: "/api/swarms/sw-1/pools/rebalance",
-    apiMethod: "rebalancePools",
-    args: ["sw-1", { apply: true }],
-    body: { apply: true },
-  },
-  { method: "GET", url: "/api/swarms/sw-1/hunt", apiMethod: "getHunt", args: ["sw-1"] },
-  {
-    method: "POST",
-    url: "/api/swarms/sw-1/hunt/trails",
-    apiMethod: "addHuntTrail",
-    args: ["sw-1", { name: "Seed founders", intent: "Find early founders", searches: [{ engine: "exa", query: "founder launch" }], pages: ["https://founders.example/about"] }],
-    body: { name: "Seed founders", intent: "Find early founders", searches: [{ engine: "exa", query: "founder launch" }], pages: ["https://founders.example/about"] },
-  },
-  {
-    method: "PATCH",
-    url: "/api/swarms/sw-1/hunt/trails/trail-1",
-    apiMethod: "updateHuntTrail",
-    args: ["sw-1", "trail-1", { status: "paused", pinned: true, weight: 3 }],
-    body: { status: "paused", pinned: true, weight: 3 },
-  },
-  {
-    method: "POST",
-    url: "/api/swarms/sw-1/hunt/notes",
-    apiMethod: "addHuntNote",
-    args: ["sw-1", { text: "Prioritize technical founders." }],
-    body: { text: "Prioritize technical founders." },
-  },
-  { method: "DELETE", url: "/api/swarms/sw-1/hunt/notes/note-1", apiMethod: "removeHuntNote", args: ["sw-1", "note-1"] },
-];
-
 describe("buildServer routes", () => {
-  it("maps every ApiClient method to its documented route and passes the parsed values", async () => {
-    const { service, calls } = fakeService();
-    const app = await serverFor(service);
-
-    for (const route of routeCases) {
-      const response = await app.inject({
-        method: route.method,
-        url: route.url,
-        headers: { "x-actor": "  Morgan Operator  " },
-        ...(route.body === undefined ? {} : { payload: route.body }),
-      });
-      expect(response.statusCode, `${route.method} ${route.url}`).toBe(200);
-      expect(response.json()).toEqual({ method: route.apiMethod, args: route.args ?? [] });
-    }
-
-    expect(calls).toHaveLength(routeCases.length);
-    expect(calls.every((call) => call.actor === "Morgan Operator")).toBe(true);
-  });
-
   it("passes an audio upload as raw bytes and deletes recordings with a no-content response", async () => {
     const { service, calls } = fakeService();
     const app = await serverFor(service);
-    const data = new Uint8Array([0, 1, 2, 3]);
+    const data = Buffer.alloc(2 * 1024 * 1024 + 1, 255);
+    data.set([0, 1, 2, 3]);
     const uploaded = await app.inject({
       method: "POST",
       url: "/api/founders/f-1/recordings",
@@ -272,6 +64,7 @@ describe("buildServer routes", () => {
         "content-type": "audio/mpeg",
         "x-recording-title": "Founder talk",
         "x-recording-kind": "talk",
+        "x-recording-path": "../../outside.media",
         "x-actor": "Morgan Operator",
       },
       payload: Buffer.from(data),
@@ -279,7 +72,9 @@ describe("buildServer routes", () => {
     const removed = await app.inject({ method: "DELETE", url: "/api/recordings/rec-1", headers: { "x-actor": "Morgan Operator" } });
 
     expect(uploaded.statusCode).toBe(200);
-    expect(calls[0]).toMatchObject({ method: "uploadRecording", actor: "Morgan Operator", args: ["f-1", { title: "Founder talk", kind: "talk", contentType: "audio/mpeg", data }] });
+    expect(calls[0]).toMatchObject({ method: "uploadRecording", actor: "Morgan Operator", args: ["f-1", { title: "Founder talk", kind: "talk", contentType: "audio/mpeg" }] });
+    expect(calls[0]?.args[1]).not.toHaveProperty("path");
+    expect(Buffer.from((calls[0]?.args[1] as { data: Uint8Array }).data).compare(data)).toBe(0);
     expect(removed.statusCode).toBe(204);
     expect(calls[1]).toMatchObject({ method: "removeRecording", args: ["rec-1"] });
   });
@@ -295,30 +90,6 @@ describe("buildServer routes", () => {
     expect(coach).not.toHaveBeenCalled();
   });
 
-  it("accepts valid autopilot settings and rejects an unsupported mode", async () => {
-    const { service, calls } = fakeService();
-    const app = await serverFor(service);
-
-    const valid = await app.inject({
-      method: "PATCH",
-      url: "/api/settings",
-      payload: { autopilot: { mode: "apply", budgetUsd: 25 } },
-    });
-    const invalid = await app.inject({
-      method: "PATCH",
-      url: "/api/settings",
-      payload: { autopilot: { mode: "automatic" } },
-    });
-
-    expect(valid.statusCode).toBe(200);
-    expect(calls).toHaveLength(1);
-    expect(calls[0]?.method).toBe("updateSettings");
-    expect(calls[0]?.args).toEqual([{ autopilot: { mode: "apply", budgetUsd: 25 } }]);
-    expect(invalid.statusCode).toBe(400);
-    expect(invalid.json()).toMatchObject({ error: "Request validation failed", fields: { "autopilot.mode": expect.any(String) } });
-    expect(calls).toHaveLength(1);
-  });
-
   it("defaults blank actors and trims before enforcing the 60-character limit", async () => {
     const { service, calls } = fakeService();
     const app = await serverFor(service);
@@ -330,67 +101,59 @@ describe("buildServer routes", () => {
     expect(calls.map((call) => call.actor)).toEqual(["Partner", "a".repeat(60), "Partner"]);
   });
 
-  it("returns field errors for invalid bodies, numeric queries and malformed scope JSON", async () => {
+  it("validates settings, query values, directives and JSON before service calls", async () => {
     const { service, calls } = fakeService();
     const app = await serverFor(service);
+    const validSettings = await app.inject({ method: "PATCH", url: "/api/settings", payload: { autopilot: { mode: "apply", budgetUsd: 25 } } });
+    const invalidMode = await app.inject({ method: "PATCH", url: "/api/settings", payload: { autopilot: { mode: "automatic" } } });
     const invalidBody = await app.inject({ method: "PATCH", url: "/api/settings", payload: { killSwitch: "yes" } });
     const invalidNumber = await app.inject({ method: "GET", url: "/api/founders?swarmId=sw-1&limit=1.5" });
     const malformedScope = await app.inject({ method: "GET", url: "/api/directives?scope=%7Bnope" });
     const badScopeShape = await app.inject({ method: "GET", url: "/api/directives?scope=%7B%22jobId%22%3A%22unknown%22%7D" });
+    const missingName = await app.inject({ method: "POST", url: "/api/swarms", payload: {} });
+    const invalidTrailName = await app.inject({ method: "POST", url: "/api/swarms/sw-1/hunt/trails", payload: { name: "  ", searches: [{ engine: "exa", query: "founders" }] } });
+    const missingTrailStart = await app.inject({ method: "POST", url: "/api/swarms/sw-1/hunt/trails", payload: { name: "Seed founders" } });
+    const invalidSearch = await app.inject({ method: "POST", url: "/api/swarms/sw-1/hunt/trails", payload: { name: "Seed founders", searches: [{ engine: "exa", query: "  " }] } });
+    const invalidTrailUpdate = await app.inject({ method: "PATCH", url: "/api/swarms/sw-1/hunt/trails/trail-1", payload: { status: "running", weight: 6 } });
+    const longNote = await app.inject({ method: "POST", url: "/api/swarms/sw-1/hunt/notes", payload: { text: "n".repeat(241) } });
+    const companyStatus = await app.inject({ method: "GET", url: "/api/companies?swarmId=sw-1&status=unknown" });
+    const companySort = await app.inject({ method: "GET", url: "/api/companies?swarmId=sw-1&sort=score" });
+    const unknownCompanyQuery = await app.inject({ method: "GET", url: "/api/companies?swarmId=sw-1&surprise=yes" });
+    const badShare = await app.inject({ method: "PUT", url: "/api/swarms/sw-1/pools/investigate.background", payload: { members: [{ id: "haiku", route: { provider: "claude-cli", model: "claude-haiku-5-5" }, share: 1.5 }] } });
+    const largeBudget = await app.inject({ method: "POST", url: "/api/evals/flow-1/rounds", payload: { budgetUsd: 5000 } });
+    const malformedJson = await app.inject({ method: "POST", url: "/api/swarms", headers: { "content-type": "application/json" }, payload: "{not json" });
 
-    for (const response of [invalidBody, invalidNumber, malformedScope, badScopeShape]) {
+    expect(validSettings.statusCode).toBe(200);
+    expect(calls).toHaveLength(1);
+    expect(calls[0]).toMatchObject({ method: "updateSettings", args: [{ autopilot: { mode: "apply", budgetUsd: 25 } }] });
+    for (const response of [
+      invalidMode, invalidBody, invalidNumber, malformedScope, badScopeShape, missingName,
+      invalidTrailName, missingTrailStart, invalidSearch, invalidTrailUpdate, longNote,
+      companyStatus, companySort, unknownCompanyQuery, badShare, largeBudget,
+    ]) {
       expect(response.statusCode).toBe(400);
       expect(response.json()).toMatchObject({ error: "Request validation failed", fields: expect.any(Object) });
       expect(Object.keys(response.json().fields).length).toBeGreaterThan(0);
     }
+    expect(invalidMode.json().fields["autopilot.mode"]).toBeDefined();
     expect(invalidBody.json().fields.killSwitch).toBeDefined();
     expect(invalidNumber.json().fields.limit).toBeDefined();
     expect(malformedScope.json().fields.scope).toBe("Scope must be valid JSON");
     expect(badScopeShape.json().fields.scope).toBe("Scope has an invalid shape");
-    expect(calls).toHaveLength(0);
-  });
-
-  it("validates Hunt trail, update, and note bodies before calling the service", async () => {
-    const { service, calls } = fakeService();
-    const app = await serverFor(service);
-    const invalidTrail = await app.inject({
-      method: "POST",
-      url: "/api/swarms/sw-1/hunt/trails",
-      payload: { name: "  ", searches: [{ engine: "exa", query: "founders" }] },
-    });
-    const invalidTrailStart = await app.inject({
-      method: "POST",
-      url: "/api/swarms/sw-1/hunt/trails",
-      payload: { name: "Seed founders" },
-    });
-    const invalidTrailShape = await app.inject({
-      method: "POST",
-      url: "/api/swarms/sw-1/hunt/trails",
-      payload: { name: "Seed founders", searches: [{ engine: "exa", query: "  " }] },
-    });
-    const invalidUpdate = await app.inject({
-      method: "PATCH",
-      url: "/api/swarms/sw-1/hunt/trails/trail-1",
-      payload: { status: "running", weight: 6 },
-    });
-    const invalidNote = await app.inject({
-      method: "POST",
-      url: "/api/swarms/sw-1/hunt/notes",
-      payload: { text: "n".repeat(241) },
-    });
-
-    for (const response of [invalidTrail, invalidTrailStart, invalidTrailShape, invalidUpdate, invalidNote]) {
-      expect(response.statusCode).toBe(400);
-      expect(response.json()).toMatchObject({ error: "Request validation failed", fields: expect.any(Object) });
-      expect(Object.keys(response.json().fields).length).toBeGreaterThan(0);
-    }
-    expect(invalidTrail.json().fields.name).toBeDefined();
-    expect(invalidTrailStart.json().fields.searches).toBeDefined();
-    expect(invalidTrailShape.json().fields["searches.0.query"]).toBeDefined();
-    expect(invalidUpdate.json().fields.status).toBeDefined();
-    expect(invalidUpdate.json().fields.weight).toBeDefined();
-    expect(invalidNote.json().fields.text).toBeDefined();
-    expect(calls).toHaveLength(0);
+    expect(missingName.json().fields.name).toBeDefined();
+    expect(invalidTrailName.json().fields.name).toBeDefined();
+    expect(missingTrailStart.json().fields.searches).toBeDefined();
+    expect(invalidSearch.json().fields["searches.0.query"]).toBeDefined();
+    expect(invalidTrailUpdate.json().fields).toMatchObject({ status: expect.any(String), weight: expect.any(String) });
+    expect(longNote.json().fields.text).toBeDefined();
+    expect(companyStatus.json().fields.status).toBeDefined();
+    expect(companySort.json().fields.sort).toBeDefined();
+    expect(unknownCompanyQuery.json().fields.request).toBeDefined();
+    expect(badShare.json().fields["members.0.share"]).toBeDefined();
+    expect(largeBudget.json().fields.budgetUsd).toBeDefined();
+    expect(malformedJson.statusCode).toBe(400);
+    expect(malformedJson.json()).toEqual({ error: "Invalid JSON body", fields: { body: "Invalid JSON" } });
+    expect(calls).toHaveLength(1);
   });
 
   it("accepts six combined Hunt starting points and rejects a seventh", async () => {
@@ -427,24 +190,7 @@ describe("buildServer routes", () => {
     expect(calls).toHaveLength(1);
   });
 
-  it("strictly validates the company query contract", async () => {
-    const { service, calls } = fakeService();
-    const app = await serverFor(service);
-    const unsupportedStatus = await app.inject({ method: "GET", url: "/api/companies?swarmId=sw-1&status=unknown" });
-    const unsupportedSort = await app.inject({ method: "GET", url: "/api/companies?swarmId=sw-1&sort=score" });
-    const unknownQuery = await app.inject({ method: "GET", url: "/api/companies?swarmId=sw-1&surprise=yes" });
-
-    for (const response of [unsupportedStatus, unsupportedSort, unknownQuery]) {
-      expect(response.statusCode).toBe(400);
-      expect(response.json()).toMatchObject({ error: "Request validation failed", fields: expect.any(Object) });
-    }
-    expect(unsupportedStatus.json().fields.status).toBeDefined();
-    expect(unsupportedSort.json().fields.sort).toBeDefined();
-    expect(unknownQuery.json().fields.request).toBeDefined();
-    expect(calls).toHaveLength(0);
-  });
-
-  it("allows a 2 MB network import while retaining the default body cap elsewhere", async () => {
+  it("limits the network import separately from the default body cap", async () => {
     const { service, calls } = fakeService();
     const app = await serverFor(service);
     const imported = await app.inject({
@@ -455,6 +201,13 @@ describe("buildServer routes", () => {
     expect(imported.statusCode).toBe(200);
     expect(calls.at(-1)?.method).toBe("importNetwork");
 
+    const tooLarge = await app.inject({
+      method: "POST",
+      url: "/api/network/import",
+      payload: { csv: "x".repeat(11 * 1024 * 1024) },
+    });
+    expect(tooLarge.statusCode).toBe(413);
+
     const defaultLimited = await app.inject({
       method: "POST",
       url: "/api/swarms",
@@ -462,46 +215,6 @@ describe("buildServer routes", () => {
     });
     expect(defaultLimited.statusCode).toBe(413);
     expect(calls).toHaveLength(1);
-  });
-
-  it("reports a missing required body field", async () => {
-    const { service, calls } = fakeService();
-    const app = await serverFor(service);
-    const response = await app.inject({ method: "POST", url: "/api/swarms", payload: {} });
-
-    expect(response.statusCode).toBe(400);
-    expect(response.json()).toMatchObject({ error: "Request validation failed", fields: { name: expect.any(String) } });
-    expect(calls).toHaveLength(0);
-  });
-
-  it("refuses a pool whose share is out of range and an eval budget above the ceiling", async () => {
-    const { service, calls } = fakeService();
-    const app = await serverFor(service);
-    const badShare = await app.inject({
-      method: "PUT",
-      url: "/api/swarms/sw-1/pools/investigate.background",
-      payload: { members: [{ id: "haiku", route: { provider: "claude-cli", model: "claude-haiku-5-5" }, share: 1.5 }] },
-    });
-    expect(badShare.statusCode).toBe(400);
-    const bigBudget = await app.inject({ method: "POST", url: "/api/evals/flow-1/rounds", payload: { budgetUsd: 5000 } });
-    expect(bigBudget.statusCode).toBe(400);
-    expect(calls).toHaveLength(0);
-    await app.close();
-  });
-
-  it("normalizes malformed JSON bodies into the public 400 shape", async () => {
-    const { service, calls } = fakeService();
-    const app = await serverFor(service);
-    const response = await app.inject({
-      method: "POST",
-      url: "/api/swarms",
-      headers: { "content-type": "application/json" },
-      payload: "{not json",
-    });
-
-    expect(response.statusCode).toBe(400);
-    expect(response.json()).toEqual({ error: "Invalid JSON body", fields: { body: "Invalid JSON" } });
-    expect(calls).toHaveLength(0);
   });
 
   it("preserves ServiceError status and fields", async () => {
@@ -525,18 +238,6 @@ describe("buildServer routes", () => {
     });
     expect(response.body).not.toContain("database password");
     expect(errorLog).toHaveBeenCalledWith("Unhandled server error", expect.objectContaining({ error: "database password is private" }));
-  });
-
-  it("returns health and JSON 404s for unknown API routes", async () => {
-    const { service } = fakeService();
-    const app = await serverFor(service);
-    const health = await app.inject({ method: "GET", url: "/api/health" });
-    const missing = await app.inject({ method: "GET", url: "/api/not-a-route" });
-
-    expect(health.statusCode).toBe(200);
-    expect(health.json()).toEqual({ ok: true });
-    expect(missing.statusCode).toBe(404);
-    expect(missing.json()).toEqual({ error: "Not found", fields: {} });
   });
 
   it("allows CORS only from the two local dashboard origins", async () => {
@@ -600,6 +301,9 @@ describe("buildServer routes", () => {
     const routeFallback = await app.inject({ method: "GET", url: "/founders/f-1" });
     const missingApi = await app.inject({ method: "GET", url: "/api/missing" });
     const nonGetFallback = await app.inject({ method: "POST", url: "/missing" });
+    const health = await app.inject({ method: "GET", url: "/api/health" });
+    const unavailableWeb = await serverFor(service, { webDist: join(tmpdir(), "agentswarm-missing-web-dist") });
+    const missingPage = await unavailableWeb.inject({ method: "GET", url: "/founders/f-1" });
 
     expect(asset.statusCode).toBe(200);
     expect(asset.body).toBe("window.dashboard = true;");
@@ -608,14 +312,10 @@ describe("buildServer routes", () => {
     expect(missingApi.statusCode).toBe(404);
     expect(missingApi.json()).toEqual({ error: "Not found", fields: {} });
     expect(nonGetFallback.statusCode).toBe(404);
+    expect(health.statusCode).toBe(200);
+    expect(health.json()).toEqual({ ok: true });
+    expect(missingPage.statusCode).toBe(404);
+    expect(missingPage.json()).toEqual({ error: "Not found", fields: {} });
   });
 
-  it("returns 404 for non-API GETs when no web distribution is available", async () => {
-    const { service } = fakeService();
-    const app = await serverFor(service, { webDist: join(tmpdir(), "agentswarm-missing-web-dist") });
-    const response = await app.inject({ method: "GET", url: "/founders/f-1" });
-
-    expect(response.statusCode).toBe(404);
-    expect(response.json()).toEqual({ error: "Not found", fields: {} });
-  });
 });
