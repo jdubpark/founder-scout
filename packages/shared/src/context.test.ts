@@ -24,7 +24,7 @@ describe("pools of context", () => {
   it("allows contributor models only for jobs whose inputs are permitted", () => {
     expect(MODEL_JOB_IDS.filter(mayUseContributorModel)).toEqual([
       "scout.hackernews", "scout.github", "scout.research", "scout.talent",
-      "hunt.search", "hunt.look", "hunt.sift",
+      "hunt.navigate", "hunt.search", "hunt.look", "hunt.sift",
     ]);
   });
 
@@ -46,7 +46,7 @@ describe("pools of context", () => {
   it("hands a score to the memo writer only, and partner calls only to the classes that are shown them", () => {
     expect(MODEL_JOB_IDS.filter((job) => poolsReadBy(job).includes("decision"))).toEqual(["assess.memo"]);
     expect(poolsReadBy("verify.claims")).not.toContain("calls");
-    expect(poolsReadBy("scout.github")).not.toContain("calls");
+    expect(poolsReadBy("scout.github")).toContain("calls");
   });
 
   it("lets the fact-checker read the items under check and nothing else about the subject", () => {

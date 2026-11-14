@@ -1494,8 +1494,22 @@ describe("run engine", () => {
 
     expect(scout).toBeDefined();
     expect(investigator).toBeDefined();
-    expect(scout!.steering.block).not.toContain(calls);
+    expect(scout!.steering.block).toContain(calls);
     expect(scout!.steering.block).not.toContain("NO: ");
+
+    // The same scout sent to a model that trains on what it is sent is not shown the calls.
+    const training = makeHarness({
+      simWorld: world,
+      simSources,
+      agentJobs: ["scout.github"],
+      config: { pools: { "scout.github": [{ id: "training", route: { provider: "meta-api", model: "muse-spark-1.3-contributor" }, share: 1, status: "active", note: null }] } },
+    });
+    training.store.insertFounder(founder);
+    training.store.insertFeedback(makeFeedback("fbk_training_context", founder.id, "yes", "2026-11-11T10:00:00.000Z", { reasonTags: ["builder"], note: "Strong personal contribution." }));
+    const trainingRun = await training.controller.wait((await training.controller.start({ swarmId: SWARM_ID, trigger: "manual", brain: "sim", sources: "sim" })).id);
+    const trainingScout = training.store.listTasks({ runId: trainingRun.id }).find((task) => task.jobId === "scout.github" && task.status === "succeeded");
+    expect(trainingScout?.model).toBe("muse-spark-1.3-contributor");
+    expect(trainingScout?.steering.block).not.toContain("Recent calls by the partners");
     expect(investigator!.steering.block).not.toContain("Recent calls by the partners");
     expect(harness.providerCallCount()).toBe(0);
   });

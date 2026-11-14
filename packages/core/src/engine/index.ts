@@ -1,6 +1,7 @@
 import {
   BASE_CONFIG,
   CLASSES_SHOWN_CALLS,
+  isContributorModel,
   ZERO_STATS,
   getJob,
   getParamDef,
@@ -155,12 +156,15 @@ export function createRunController(deps: EngineDeps): RunController {
       jobId: agent.jobId,
       agentId: agent.id,
     }, now());
-    const steeringBlockForTask = (agent: Agent, steering: ReturnType<typeof steeringForTask>): string => {
+    const steeringBlockForTask = (agent: Agent, steering: ReturnType<typeof steeringForTask>, model: string | null = null): string => {
       const block = renderSteeringBlock(steering, {
         swarms: { [run.swarmId]: currentSwarm.name },
         agents: { [agent.id]: agent.name },
       });
       if (!CLASSES_SHOWN_CALLS.includes(agent.classId)) return block;
+      // The partners' calls name companies and say what the fund thought of them. A model whose
+      // vendor trains on what it is sent is not shown them.
+      if (model !== null && isContributorModel(model)) return block;
       const examples = [...latestCalls(deps.store.allFeedback(run.swarmId)).values()].map((feedback) => {
         const founder = deps.store.getFounder(feedback.founderId);
         const details = founder?.company.oneLiner ?? founder?.headline;
@@ -244,7 +248,7 @@ export function createRunController(deps: EngineDeps): RunController {
       const snapshot = {
         directiveIds: [...agentSteering.directiveIds],
         params: Object.fromEntries(Object.entries(agentSteering.params).map(([key, value]) => [key, value.value])),
-        block: [steeringBlockForTask(input.agent, agentSteering), selected?.reason].filter(Boolean).join("\n\n"),
+        block: [steeringBlockForTask(input.agent, agentSteering, selected?.route.model ?? null), selected?.reason].filter(Boolean).join("\n\n"),
       };
       return makeRecord({
         agentId: input.agent.id,
@@ -309,7 +313,7 @@ export function createRunController(deps: EngineDeps): RunController {
         const steering = steeringForTask(agent);
         const selected = routeFor(jobId, steering, agent, founderId, companyId, routeKey);
         const route = selected.route;
-        const steeringBlock = steeringBlockForTask(agent, steering);
+        const steeringBlock = steeringBlockForTask(agent, steering, route.model);
         // A stage that shares out its own allowance between calls may give this one less than the per-task cap.
         const taskBudgetUsd = Math.min(numberParam("budget.task_usd", steering, config), args.maxBudgetUsd ?? Number.POSITIVE_INFINITY);
         const timestamp = iso(now());

@@ -125,11 +125,18 @@ export function poolsReadBy(jobId: ModelJobId): PoolId[] {
   return CONTEXT_POOLS.map((pool) => pool.id).filter((id) => read.has(id));
 }
 
-/** Contributor models may see only public material and the fund's own instructions. */
+/**
+ * Whether a job may be sent to a model whose vendor trains on what it is sent (a "contributor"
+ * model). Only a job whose every input is a public page or feed item, or the fund's own words:
+ * the thesis, steering, the hunt notebook, learned lines and skills. Never a job that reads a
+ * named person's lead, a founder's or company's file, a transcript or a contact list. A lead is
+ * left out on purpose: it can come from a partner's own contact list or from a note a partner
+ * typed. The partners' calls are not an input field: the engine leaves them out of any task
+ * that is sent to such a model.
+ */
 export function mayUseContributorModel(jobId: ModelJobId): boolean {
-  // Skills are the project's own reviewed notes, like the fund's instructions.
-  const allowed = new Set<PoolId>(["objective", "steering", "lessons", "skills", "sources", "hunt", "lead"]);
-  return poolsReadBy(jobId).every((pool) => allowed.has(pool));
+  const allowed = new Set<PoolId>(["objective", "steering", "lessons", "skills", "sources", "hunt"]);
+  return (Object.values(JOB_INPUT_POOLS[jobId]) as Reads[]).flat().every((pool) => allowed.has(pool));
 }
 
 export interface Crossing {

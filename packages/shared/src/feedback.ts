@@ -74,8 +74,12 @@ export function latestCalls(feedback: readonly Feedback[]): Map<string, Feedback
 /* Recent calls as examples for the agents                              */
 /* ------------------------------------------------------------------ */
 
-/** Agent classes that are shown recent partner calls. */
-export const CLASSES_SHOWN_CALLS: readonly ClassId[] = ["navigator", "screener", "analyst"];
+/**
+ * Agent classes that are shown recent partner calls, so the partners' Yes and No reach the
+ * agents that choose who to look at. A task sent to a model that trains on what it is sent is
+ * not shown them: see `mayUseContributorModel`.
+ */
+export const CLASSES_SHOWN_CALLS: readonly ClassId[] = ["navigator", "scout", "screener", "analyst"];
 
 export interface CallExample {
   verdict: FeedbackVerdict;
