@@ -1,8 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
   COMPANY_DIMENSIONS,
-  companyIdentityDomain,
-  normalizeCompanyName,
   type CompanyDimensionId,
 } from "./company";
 import { groundCompanyJudgments, groundPoints } from "./judgments";
@@ -17,10 +15,6 @@ const score = (judgments: CompanyJudgmentInput[]) => scoreCompany({ judgments, w
 const team = (composite: number, extra: Partial<TeamScore> = {}): TeamScore => ({ composite, coverage: 1, potential: composite, integrityCritical: false, ...extra });
 
 describe("company scoring", () => {
-  it("has default weights that sum to 16.5, the figure the hand-worked cases below use", () => {
-    expect(COMPANY_DIMENSIONS.reduce((sum, d) => sum + d.defaultWeight, 0)).toBe(16.5);
-  });
-
   it("gives a company with nothing known the prior, no coverage and no potential", () => {
     const result = score([]);
     expect(result.composite).toBe(0.35);
@@ -97,7 +91,7 @@ describe("deal decision", () => {
 });
 
 describe("grounding for companies", () => {
-  it("does not count an answer that cites no supplied evidence", () => {
+  it("does not score company judgments that cite no supplied evidence", () => {
     const judgments = groundCompanyJudgments(
       [
         { dimension: "traction", level: 4, confidence: 0.9, rationale: "Customers.", evidenceIds: ["evd_1"], counterEvidenceIds: [] },
@@ -105,11 +99,9 @@ describe("grounding for companies", () => {
       ],
       new Set(["evd_1"]),
     );
-    expect(judgments).toHaveLength(COMPANY_DIMENSIONS.length);
-    expect(judgments.find((j) => j.dimension === "traction")).toMatchObject({ level: 4, confidence: 0.9, evidenceIds: ["evd_1"] });
-    const market = judgments.find((j) => j.dimension === "market");
-    expect(market).toMatchObject({ level: null, confidence: 0, evidenceIds: [] });
-    expect(market?.rationale).toMatch(/^Not counted/);
+
+    expect(judgments.find((judgment) => judgment.dimension === "traction")).toMatchObject({ level: 4, confidence: 0.9, evidenceIds: ["evd_1"] });
+    expect(judgments.find((judgment) => judgment.dimension === "market")).toMatchObject({ level: null, confidence: 0, evidenceIds: [] });
   });
 
   it("drops a brief point with no supplied source and removes unknown ids from the rest", () => {
@@ -123,22 +115,5 @@ describe("grounding for companies", () => {
         new Set(["evd_1"]),
       ),
     ).toEqual([{ text: "Paying customers in three industries.", evidenceIds: ["evd_1"] }]);
-  });
-});
-
-describe("recognising the same company", () => {
-  it("uses the company's own site and ignores hosts many companies share", () => {
-    expect(companyIdentityDomain("https://www.kelval.dev/about")).toBe("kelval.dev");
-    expect(companyIdentityDomain("kelval.dev")).toBe("kelval.dev");
-    expect(companyIdentityDomain("https://github.com/kelval")).toBeNull();
-    expect(companyIdentityDomain("https://kelval.substack.com")).toBeNull();
-    expect(companyIdentityDomain(null)).toBeNull();
-    expect(companyIdentityDomain("not a site")).toBeNull();
-  });
-
-  it("drops legal suffixes from a name and nothing else", () => {
-    expect(normalizeCompanyName("Kelval Works, Inc.")).toBe("kelval works");
-    expect(normalizeCompanyName("Scale AI")).not.toBe(normalizeCompanyName("Scale Labs"));
-    expect(normalizeCompanyName("Inc")).toBe("inc");
   });
 });

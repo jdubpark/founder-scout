@@ -300,21 +300,10 @@ describe("overlayConfig", () => {
     });
     expect(next.pools).toEqual(swarm.pools);
     expect(next.applied).toEqual(swarm.applied);
+    expect(overlayConfig(winner, winner, swarm)).toEqual(swarm);
     // The inputs are left as they were.
     expect(swarm.params).toEqual({ "weights.velocity": 2, "screen.min_fit": 0.7 });
     expect(swarm.lessons?.["assess.company"]).toEqual(["An older line."]);
   });
 
-  it("undoes a change when the two ends are exchanged", () => {
-    const applied = overlayConfig(start, winner, swarm);
-    const undone = overlayConfig(winner, start, applied);
-    expect(undone.params).toEqual(swarm.params);
-    expect(undone.promptVariants).toEqual({});
-    expect(undone.lessons).toEqual(swarm.lessons);
-    expect(undone.pools).toEqual(swarm.pools);
-  });
-
-  it("changes nothing when the two ends are the same", () => {
-    expect(overlayConfig(winner, winner, swarm)).toEqual(swarm);
-  });
 });

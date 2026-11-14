@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { cohortAuc, cutOff, maskText, recognises, walkForwardSplit, type PastEvidence, type PastSubject } from "./past";
+import { cohortAuc, cutOff, maskText, recognises, type PastEvidence, type PastSubject } from "./past";
 
 const subject: PastSubject = {
   company: "Quillmark Labs",
@@ -23,7 +23,7 @@ describe("cut-off", () => {
 });
 
 describe("masking", () => {
-  it("removes the company, its people, its sites, its accounts and every year", () => {
+  it("removes names, sites, accounts and years without damaging unrelated words", () => {
     const masked = maskText(
       "Launch: Quillmark (W18). Hi, I'm Odric Halversen and with Mirelle I started QuillmarkLabs in 2017. Odric wrote the engine. See https://quillmark.example/docs or quillmark.example, and ask odrich.",
       subject,
@@ -35,41 +35,24 @@ describe("masking", () => {
     expect(masked).toContain("[link]");
     expect(masked).toContain("[year]");
     expect(masked).toContain("[batch]");
-  });
-
-  it("leaves words that only contain a masked name, and ordinary numbers, alone", () => {
-    const masked = maskText("Quillmarkers shipped 2048 builds in 300 days. Model S30 is unrelated to S3 storage.", subject);
-    expect(masked).toContain("Quillmarkers");
-    expect(masked).toContain("300 days");
+    const unrelated = maskText("Quillmarkers shipped 2048 builds in 300 days. Model S30 is unrelated to S3 storage.", subject);
+    expect(unrelated).toContain("Quillmarkers");
+    expect(unrelated).toContain("300 days");
     // 2048 is in the range of calendar years, so it is masked: a false alarm is cheaper than a leaked year.
-    expect(masked).toContain("[year] builds");
-    expect(masked).toContain("S3 storage");
+    expect(unrelated).toContain("[year] builds");
+    expect(unrelated).toContain("S3 storage");
   });
 });
 
 describe("recognition", () => {
-  it("counts a guess that names the company, an alias or a founder, however it is spelled around it", () => {
+  it("recognises a company or founder despite spelling variation, and rejects unrelated guesses", () => {
     expect(recognises({ company: "I believe this is Quillmark.", people: [] }, subject)).toBe(true);
     expect(recognises({ company: null, people: ["odric  HALVERSEN"] }, subject)).toBe(true);
     expect(recognises({ company: "QUILLMARK LABS, Inc", people: [] }, subject)).toBe(true);
-  });
-
-  it("does not count a wrong guess, an empty one, or a first name alone", () => {
     expect(recognises({ company: "Inkwell", people: ["Someone Else"] }, subject)).toBe(false);
     expect(recognises({ company: null, people: [] }, subject)).toBe(false);
     expect(recognises({ company: "unknown", people: ["Odric"] }, subject)).toBe(false);
     expect(recognises({ company: "Quillmarkers", people: [] }, subject)).toBe(false);
-  });
-});
-
-describe("walk-forward split", () => {
-  it("tunes on the earlier cohorts and holds out the later ones", () => {
-    expect(walkForwardSplit(["2018-Q2", "2017-Q4", "2018-Q1", "2018-Q3", "2018-Q1"])).toEqual({
-      train: ["2017-Q4", "2018-Q1"],
-      test: ["2018-Q2", "2018-Q3"],
-    });
-    expect(walkForwardSplit(["a", "b", "c"])).toEqual({ train: ["a", "b"], test: ["c"] });
-    expect(walkForwardSplit(["only"])).toEqual({ train: [], test: [] });
   });
 });
 

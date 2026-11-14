@@ -46,11 +46,8 @@ describe("Improve run budget", () => {
 });
 
 describe("Improve range fact", () => {
-  it("shows the interval with two decimals and an en dash", () => {
+  it("formats known intervals and leaves unknown ones blank", () => {
     expect(rangeLabel([0.47, 0.74])).toBe("0.47–0.74");
-  });
-
-  it("shows a dash when no interval is known", () => {
     expect(rangeLabel(null)).toBe("—");
     expect(rangeLabel(undefined)).toBe("—");
   });

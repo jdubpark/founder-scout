@@ -14,13 +14,14 @@ describe("never-fetch hosts", () => {
     expect(isNeverFetchUrl("not an address")).toBe(false);
   });
 
-  it("gives the research agent a bare rule and a wildcard rule for every host", () => {
+  it("gives the research agent bare and wildcard deny rules for every never-fetch host", () => {
     const rules = claudeFetchDenyRules();
     for (const host of NEVER_FETCH_HOSTS) {
       expect(rules).toContain(`WebFetch(domain:${host})`);
       expect(rules).toContain(`WebFetch(domain:*.${host})`);
     }
   });
+
 });
 
 describe("sites whose terms bar automated reading", () => {

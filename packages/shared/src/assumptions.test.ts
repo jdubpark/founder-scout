@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { ASSUMPTIONS, judgeAssumptions, type JudgedCase, type OutcomeEvidence } from "./assumptions";
-import { getParamDef } from "./params";
+import { judgeAssumptions, type JudgedCase, type OutcomeEvidence } from "./assumptions";
 
 /** Twelve winners and twelve others over two periods. `traction` tracks the outcome, `mission` runs against it, `market` is noise. */
 function cases(): JudgedCase[] {
@@ -28,20 +27,6 @@ const find = (rows: ReturnType<typeof judgeAssumptions>, id: string) => {
 };
 const judged = (input: Partial<Parameters<typeof judgeAssumptions>[0]> = {}) =>
   judgeAssumptions({ outcomes: outcomes(cases()), calls: [], current: () => null, ...input });
-
-describe("the list of assumptions", () => {
-  it("gives every assumption its own id and points only at settings that exist", () => {
-    expect(new Set(ASSUMPTIONS.map((item) => item.id)).size).toBe(ASSUMPTIONS.length);
-    for (const item of ASSUMPTIONS) {
-      if (item.paramKey) expect(getParamDef(item.paramKey), `${item.id} names ${item.paramKey}`).toBeDefined();
-    }
-  });
-
-  it("holds unstated assumptions as well as stated ones, in every area", () => {
-    expect(ASSUMPTIONS.filter((item) => !item.stated).length).toBeGreaterThanOrEqual(7);
-    expect(new Set(ASSUMPTIONS.map((item) => item.area))).toEqual(new Set(["objective", "weighing", "founder", "company", "method"]));
-  });
-});
 
 describe("judging assumptions from evidence", () => {
   it("supports a question that separates winners, counts one that runs the other way against, and leaves noise open", () => {

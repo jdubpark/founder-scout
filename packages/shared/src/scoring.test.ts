@@ -171,14 +171,6 @@ describe("scoreFounder", () => {
     expect(sum).toBeCloseTo(r.composite, 2);
   });
 
-  it("uses the last judgment when a dimension is answered twice", () => {
-    const r = score([
-      { dimension: "velocity", level: 0, confidence: 1 },
-      { dimension: "velocity", level: 4, confidence: 1 },
-    ]);
-    expect(r.breakdown.find((b) => b.dimension === "velocity")!.level).toBe(4);
-  });
-
   it("separates the engineering score from the founder score", () => {
     const engineer: JudgmentInput[] = DIMENSIONS.map((d) => ({
       dimension: d.id,
@@ -188,5 +180,14 @@ describe("scoreFounder", () => {
     const r = score(engineer);
     expect(r.cracked).toBe(1);
     expect(r.founder).toBe(0.25);
+  });
+
+  it("uses the last judgment when a dimension is answered twice", () => {
+    const result = score([
+      { dimension: "velocity", level: 0, confidence: 1 },
+      { dimension: "velocity", level: 4, confidence: 1 },
+    ]);
+
+    expect(result.breakdown.find((item) => item.dimension === "velocity")?.level).toBe(4);
   });
 });

@@ -6,13 +6,10 @@ const flips = (count: number): DecisionFlip[] =>
   Array.from({ length: count }, (_, i) => ({ id: `f${i}`, name: `Founder ${i}`, from: "watch", to: "surface", scoreFrom: 0.5, scoreTo: 0.6 }));
 
 describe("preview flips", () => {
-  it("lists up to eight and counts the rest", () => {
+  it("shows at most eight flips and counts the rest", () => {
     const { shown, more } = cutFlips(flips(11));
     expect(shown).toHaveLength(FLIP_LIMIT);
     expect(more).toBe(3);
-  });
-
-  it("lists everything and counts nothing when there are eight or fewer", () => {
     expect(cutFlips(flips(8))).toEqual({ shown: flips(8), more: 0 });
     expect(cutFlips([])).toEqual({ shown: [], more: 0 });
   });

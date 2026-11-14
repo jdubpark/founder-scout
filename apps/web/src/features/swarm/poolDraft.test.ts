@@ -21,29 +21,23 @@ const draft = (over: Partial<MemberDraft>): MemberDraft => ({
 });
 
 describe("turning the form into a SetPoolInput", () => {
-  it("converts percentages to fractions", () => {
+  it("converts percentages without normalizing shares the server must reject", () => {
     const input = toSetPoolInput([draft({ share: "33.3" }), draft({ id: "haiku", share: "60", status: "active" })]);
     expect(input.members.map((m) => m.share)).toEqual([0.333, 0.6]);
-  });
-
-  it("sends shares that do not add up as they are, for the server to refuse", () => {
-    const input = toSetPoolInput([draft({ share: "50" }), draft({ id: "haiku", share: "30" })]);
-    expect(input.members.map((m) => m.share)).toEqual([0.5, 0.3]);
+    const uneven = toSetPoolInput([draft({ share: "50" }), draft({ id: "haiku", share: "30" })]);
+    expect(uneven.members.map((m) => m.share)).toEqual([0.5, 0.3]);
   });
 
   it("sends an empty list when the form has no rows, which removes the pool", () => {
     expect(toSetPoolInput([])).toEqual({ members: [] });
   });
 
-  it("keeps the status and leaves out effort when none was set", () => {
-    const [member] = toSetPoolInput([draft({ status: "benched" })]).members;
-    expect(member?.status).toBe("benched");
-    expect(member?.route).toEqual({ provider: "claude-cli", model: "claude-sonnet-5-5" });
-  });
-
-  it("keeps an effort the member already had", () => {
-    const [member] = toSetPoolInput([draft({ effort: "high" })]).members;
-    expect(member?.route).toEqual({ provider: "claude-cli", model: "claude-sonnet-5-5", effort: "high" });
+  it("keeps member status and preserves an explicitly selected effort", () => {
+    const [benched] = toSetPoolInput([draft({ status: "benched" })]).members;
+    expect(benched?.status).toBe("benched");
+    expect(benched?.route).toEqual({ provider: "claude-cli", model: "claude-sonnet-5-5" });
+    const [withEffort] = toSetPoolInput([draft({ effort: "high" })]).members;
+    expect(withEffort?.route).toEqual({ provider: "claude-cli", model: "claude-sonnet-5-5", effort: "high" });
   });
 
   it("reads a blank or non-numeric share as zero, so the server refuses it", () => {
@@ -74,11 +68,8 @@ describe("opening the form", () => {
 });
 
 describe("member names", () => {
-  it("makes a readable name from a label", () => {
+  it("makes a readable unique name from a label", () => {
     expect(memberIdFor("Claude Sonnet 5.5", [])).toBe("claude-sonnet-5-5");
-  });
-
-  it("adds a number when the name is taken", () => {
     expect(memberIdFor("Haiku", ["haiku"])).toBe("haiku-2");
     expect(memberIdFor("Haiku", ["haiku", "haiku-2"])).toBe("haiku-3");
   });

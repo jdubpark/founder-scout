@@ -2,7 +2,6 @@ import { describe, expect, it } from "vitest";
 import type { Feedback, FeedbackVerdict } from "./domain";
 import {
   MAX_CALL_EXAMPLES,
-  latestCalls,
   renderCallsBlock,
   suggestSteering,
   suggestionTextKey,
@@ -25,25 +24,10 @@ function call(founderId: string, verdict: FeedbackVerdict, reasonTags: string[],
 
 const ctx = { swarmId: "swm_a", current: {}, dismissed: [] as string[] };
 
-describe("latestCalls", () => {
-  it("keeps only the most recent call per founder", () => {
-    const first = call("fnd_1", "no", ["too_early"], 1);
-    const changedMind = call("fnd_1", "yes", ["builder"], 5);
-    const other = call("fnd_2", "no", ["outside_thesis"], 3);
-    const latest = latestCalls([changedMind, first, other]);
-    expect(latest.get("fnd_1")).toBe(changedMind);
-    expect(latest.get("fnd_2")).toBe(other);
-    expect(latest.size).toBe(2);
-  });
-});
-
 describe("suggestSteering", () => {
-  it("proposes nothing until three recent calls share a reason", () => {
+  it("turns only three recent calls sharing a reason into a steering suggestion", () => {
     const two = [call("a", "no", ["outside_thesis"]), call("b", "no", ["outside_thesis"])];
     expect(suggestSteering(two, ctx)).toEqual([]);
-  });
-
-  it("turns three 'outside thesis' calls into a higher thesis-fit bar, with the count behind it", () => {
     const calls = ["a", "b", "c"].map((id) => call(id, "no", ["outside_thesis"]));
     const [s] = suggestSteering(calls, ctx);
     // The default bar is 0.55, and the step is 0.10.

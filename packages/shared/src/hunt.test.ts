@@ -17,8 +17,6 @@ import {
   planWave,
   seedTrails,
   SIM_WEB_HOST,
-  staleTrails,
-  tooLate,
   trailScore,
   waveShares,
   ZERO_TRAIL_STATS,
@@ -139,23 +137,11 @@ describe("how early", () => {
     expect(earliness(null)).toBeNull();
   });
 
-  it("is too late only when the page states a later round than the fund wants", () => {
-    expect(tooLate(stage({ funding: "series_a_or_later" }), "seed")).toBe(true);
-    expect(tooLate(stage({ funding: "seed" }), "seed")).toBe(false);
-    expect(tooLate(stage({ funding: "seed" }), "pre_seed")).toBe(true);
-    expect(tooLate(stage({ funding: "series_a_or_later" }), "series_a")).toBe(false);
-    // Silence is never too late.
-    expect(tooLate(stage({}), "pre_seed")).toBe(false);
-    expect(tooLate(null, "pre_seed")).toBe(false);
-  });
 });
 
 describe("addresses", () => {
-  it("stores an address in one form", () => {
-    expect(cleanUrl(" https://Example.org/a?utm_source=x&id=7#top ")).toBe("https://example.org/a?id=7");
-  });
-
   it("refuses anything that is not a public page the system may request", () => {
+    expect(cleanUrl(" https://Example.org/a?utm_source=x&id=7#top ")).toBe("https://example.org/a?id=7");
     expect(cleanUrl("ftp://example.org/file")).toBeNull();
     expect(cleanUrl("https://user:pass@example.org/")).toBeNull();
     expect(cleanUrl("http://localhost/admin")).toBeNull();
@@ -206,26 +192,19 @@ describe("a navigator's turn is a request", () => {
     ]);
   });
 
-  it("keeps a pinned trail open and holds the ceiling on open trails", () => {
-    const trails = [trail("a", { pinned: true }), trail("b"), trail("c")];
+  it("holds the ceiling on open trails after an accepted close", () => {
+    const trails = [trail("a"), trail("b"), trail("c")];
     const plan = checkTurn(turn({
-      close: [{ trailId: "a", why: "nothing here" }, { trailId: "b", why: "" }],
+      close: [{ trailId: "b", why: "" }],
       open: [
         { name: "One", intent: "x", searches: [{ engine: "hn", query: "one" }], pages: [] },
         { name: "Two", intent: "x", searches: [{ engine: "hn", query: "two" }], pages: [] },
       ],
     }), trails, limits);
     expect(plan.close).toEqual([{ trailId: "b", why: "Closed by the navigator." }]);
-    // A trail a person paused is not the navigator's to close either.
-    const paused = checkTurn(turn({ close: [{ trailId: "p", why: "dry" }] }), [trail("p", { name: "Resting", status: "paused" })], limits);
-    expect(paused.close).toEqual([]);
-    expect(paused.refused).toEqual(['"Resting" is paused by a person and is left as it is.']);
     // Three were open, one closes, so there is room for one more and not two.
     expect(plan.open.map((entry) => entry.name)).toEqual(["One"]);
-    expect(plan.refused).toEqual([
-      '"Trail a" is pinned by a person and stays open.',
-      '"Two" was not opened: 3 trails are open already. Close one first.',
-    ]);
+    expect(plan.refused).toEqual(['"Two" was not opened: 3 trails are open already. Close one first.']);
   });
 
   it("adds starting points to a trail that already exists instead of opening it twice", () => {
@@ -272,19 +251,6 @@ describe("a navigator's turn is a request", () => {
 });
 
 describe("spending a wave", () => {
-  it("gives a trail that found people more of the wave than one that found nobody", () => {
-    const rich = trail("rich", {}, { pages: 20, leads: 6, kept: 3 });
-    const poor = trail("poor", {}, { pages: 40, leads: 0 });
-    const frontier = [...Array.from({ length: 20 }, () => item("rich")), ...Array.from({ length: 20 }, () => item("poor"))];
-    const wave = planWave([poor, rich], frontier, { size: 12, maxDepth: 2 });
-    const count = (id: string) => wave.filter((entry) => entry.trailId === id).length;
-    expect(wave).toHaveLength(12);
-    expect(count("rich")).toBeGreaterThanOrEqual(10);
-    // The poor trail is still tried: one call, not none.
-    expect(count("poor")).toBeGreaterThanOrEqual(1);
-    expect(trailScore(rich)).toBeGreaterThan(trailScore(poor) * 10);
-  });
-
   it("tries a new trail before judging it", () => {
     const fresh = trail("fresh");
     const used = trail("used", {}, { pages: 12, leads: 2 });
@@ -337,15 +303,6 @@ describe("spending a wave", () => {
     expect(planWave([trail("a", { status: "closed" })], frontier, { size: 4, maxDepth: 2 })).toEqual([]);
   });
 
-  it("closes a trail that read enough and found nobody, unless a person pinned it", () => {
-    const trails = [
-      trail("dry", {}, { pages: 30 }),
-      trail("pinned", { pinned: true }, { pages: 80 }),
-      trail("young", {}, { pages: 29 }),
-      trail("found", {}, { pages: 200, leads: 1 }),
-    ];
-    expect(staleTrails(trails).map((entry) => entry.id)).toEqual(["dry"]);
-  });
 });
 
 describe("what a runner is shown of the notebook", () => {

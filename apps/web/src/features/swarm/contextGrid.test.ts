@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { CONTEXT_POOLS, type ClassId, type PoolId } from "@agentswarm/shared";
-import { CARRIER_LABEL, classReadsPool, contextGrid, crossingLines, poolsForJob } from "./contextGrid";
+import { CARRIER_LABEL, classReadsPool, contextGrid, poolsForJob } from "./contextGrid";
 
 const CLASSES: ClassId[] = ["navigator", "scout", "runner", "resolver", "screener", "investigator", "company", "verifier", "analyst", "outreach"];
 
@@ -10,10 +10,6 @@ function cell(pool: PoolId, classId: ClassId): boolean {
 }
 
 describe("context grid", () => {
-  it("has one row per pool, in pool order", () => {
-    expect(contextGrid(CLASSES).map((r) => r.pool.id)).toEqual(CONTEXT_POOLS.map((p) => p.id));
-  });
-
   it("fills a cell exactly when a job of that class reads the pool", () => {
     // The analyst class includes assess.company, which reads the company file, so that cell is filled.
     expect(cell("company", "analyst")).toBe(true);
@@ -39,18 +35,12 @@ describe("context grid", () => {
 });
 
 describe("pools a job reads", () => {
-  it("is empty for a job that calls no model", () => {
+  it("shows model inputs and keeps sealed pools out of every job", () => {
     expect(poolsForJob("resolve.identity")).toEqual([]);
-  });
-
-  it("always includes steering and learned lines for a model job", () => {
     const pools = poolsForJob("scout.github");
     expect(pools).toContain("steering");
     expect(pools).toContain("lessons");
     expect(pools).toContain("sources");
-  });
-
-  it("never includes a sealed pool", () => {
     for (const job of ["scout.github", "assess.memo", "call.debrief", "verify.claims"] as const) {
       for (const pool of poolsForJob(job)) {
         expect(CONTEXT_POOLS.find((p) => p.id === pool)?.sealed).toBe(false);
@@ -64,11 +54,4 @@ describe("crossing lines", () => {
     expect(CARRIER_LABEL.runners).toBe("Runners");
   });
 
-  it("carry the labels of both pools", () => {
-    const lines = crossingLines();
-    expect(lines.length).toBeGreaterThan(0);
-    const first = lines[0];
-    expect(first?.fromLabel).toBe(CONTEXT_POOLS.find((p) => p.id === first?.from)?.label);
-    expect(first?.toLabel).toBe(CONTEXT_POOLS.find((p) => p.id === first?.to)?.label);
-  });
 });

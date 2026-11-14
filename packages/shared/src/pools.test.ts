@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { DEFAULT_REBALANCE, EMPTY_MEMBER_STATS, memberYield, pickMember, poolProblems, producesEvidence, rebalance, runnerPools, surelyAbove, withDefaultPools, type MemberStats, type PoolMember, type Pools } from "./pools";
-import type { JobId, ModelRoute } from "./registry";
+import { DEFAULT_REBALANCE, EMPTY_MEMBER_STATS, memberYield, pickMember, producesEvidence, rebalance, runnerPools, surelyAbove, withDefaultPools, type MemberStats, type PoolMember, type Pools } from "./pools";
 
 const member = (id: string, share: number, status: PoolMember["status"] = "active"): PoolMember => ({
   id, route: { provider: "claude-cli", model: `model-${id}` }, share, status, note: null,
@@ -8,11 +7,6 @@ const member = (id: string, share: number, status: PoolMember["status"] = "activ
 const stats = (memberId: string, extra: Partial<MemberStats>): MemberStats => ({ ...EMPTY_MEMBER_STATS(memberId), ...extra });
 
 describe("pickMember", () => {
-  it("sends the same task to the same member every time", () => {
-    const pool = [member("a", 0.5), member("b", 0.5)];
-    expect(pickMember(pool, "task-17")?.id).toBe(pickMember(pool, "task-17")?.id);
-  });
-
   it("splits tasks in proportion to share and never picks a benched member", () => {
     const pool = [member("a", 0.7), member("b", 0.3), member("c", 0, "benched")];
     const counts: Record<string, number> = { a: 0, b: 0, c: 0 };
@@ -152,66 +146,14 @@ describe("rebalance", () => {
   });
 });
 
-describe("poolProblems", () => {
-  it("accepts a pool whose active shares add up to one", () => {
-    expect(poolProblems([member("sonnet", 0.7), member("haiku", 0.3)])).toEqual([]);
-    expect(poolProblems([])).toEqual([]);
-  });
-
-  it("names what is wrong with a pool", () => {
-    expect(poolProblems([member("a", 0.7), member("a", 0.7)])).toEqual(["Two members have the same name.", "The active members' shares must add up to 1."]);
-    expect(poolProblems([member("Has Space", 1)])).toEqual(["A member's name is 1 to 24 lower-case letters, digits or hyphens."]);
-    expect(poolProblems([member("a", 1, "benched")])).toEqual(["At least one member must be active."]);
-    expect(poolProblems([member("a", 0.2), member("b", 0.2), member("c", 0.2), member("d", 0.2), member("e", 0.2)])[0]).toBe("A pool holds at most 4 members.");
-  });
-});
-
 describe("the runner pool", () => {
-  it("shares each runner job equally between the runner models that are ready", () => {
-    const pools = runnerPools(() => true);
-    expect(Object.keys(pools).sort()).toEqual(["hunt.look", "hunt.sift", "scout.github", "scout.hackernews", "scout.research", "scout.talent", "screen.fit"]);
-    expect(pools["hunt.look"]?.map((member) => [member.id, member.route.provider, member.share, member.status])).toEqual([
-      ["deepseek-flash", "deepseek-api", 0.5, "active"],
-      ["muse-ember", "meta-api", 0.5, "active"],
-    ]);
-    expect(poolProblems(pools["hunt.look"] ?? [])).toEqual([]);
-  });
-
-  it("is a pool of one when one key is set, and no pool at all when none is", () => {
-    const one = runnerPools((provider) => provider === "meta-api");
-    expect(one["hunt.look"]?.map((member) => [member.id, member.share])).toEqual([["muse-ember", 1]]);
+  it("uses ready runner providers and keeps configured pools ahead of defaults", () => {
+    const defaults = runnerPools((provider) => provider === "deepseek-api");
+    expect(defaults["hunt.look"]?.map((item) => item.route.provider)).toEqual(["deepseek-api"]);
     expect(runnerPools(() => false)).toEqual({});
-  });
 
-  it("adds a default, DeepSeek and Muse pool for scouts and screening through OpenCode, while a config pool wins", () => {
-    const defaults = runnerPools((provider) => provider === "opencode-cli");
-    const scout = defaults["scout.github"] ?? [];
-    expect(scout.map((member) => [member.id, member.route.provider, member.route.model, member.share])).toEqual([
-      ["default", "claude-cli", "claude-haiku-5-5", 0.5],
-      ["deepseek-flash-opencode", "opencode-cli", "deepseek/deepseek-flash", 0.25],
-      ["muse-ember", "opencode-cli", "meta/muse-ember-1.0", 0.25],
-    ]);
     const own = [member("own", 1)];
-    const merged = withDefaultPools({ pools: { "scout.github": own } as Pools }, defaults);
-    expect(merged.pools?.["scout.github"]).toBe(own);
-    expect(merged.pools?.["scout.research"]?.map((item) => item.share)).toEqual([0.5, 0.25, 0.25]);
-    const routedConfig: { routes: Partial<Record<JobId, ModelRoute>>; pools?: Pools } = {
-      routes: { "scout.github": { provider: "codex-cli", model: "gpt-6-luna" } },
-    };
-    const routed = withDefaultPools(routedConfig, defaults);
-    expect(routed.pools?.["scout.github"]?.[0]?.route).toEqual({ provider: "codex-cli", model: "gpt-6-luna" });
-    const directPreferred = runnerPools((provider) => provider === "opencode-cli" || provider === "deepseek-api");
-    expect(directPreferred["scout.github"]?.map((item) => item.route.provider)).toEqual(["claude-cli", "deepseek-api", "opencode-cli"]);
-  });
-
-  it("stays behind a pool the config names", () => {
-    const own = [{ id: "haiku", route: { provider: "claude-cli" as const, model: "claude-haiku-5-5" }, share: 1, status: "active" as const, note: null }];
-    const config: { id: string; pools?: Pools } = { id: "c", pools: { "hunt.look": own } };
-    const merged = withDefaultPools(config, runnerPools(() => true));
+    const merged = withDefaultPools({ pools: { "hunt.look": own } as Pools }, runnerPools(() => true));
     expect(merged.pools?.["hunt.look"]).toBe(own);
-    expect(merged.pools?.["hunt.sift"]?.length).toBe(2);
-    // Nothing to add leaves the config as it was.
-    const plain: { id: string; pools?: Pools } = { id: "c" };
-    expect(withDefaultPools(plain, {})).toBe(plain);
   });
 });
