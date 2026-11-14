@@ -1,6 +1,6 @@
 import { dirname, isAbsolute, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import type { ModelRoute } from "@agentswarm/shared";
+import { isContributorModel, type ModelRoute } from "@agentswarm/shared";
 
 export interface ServerConfig {
   repositoryRoot: string;
@@ -56,6 +56,10 @@ function judgeFromEnv(env: NodeJS.ProcessEnv): ModelRoute | null {
   const validEffort = effort === undefined || (EFFORTS as readonly string[]).includes(effort);
   if (!provider || !model || rest.length > 0 || !validEffort) {
     throw new RangeError('EVAL_JUDGE must look like "provider:model" or "provider:model:effort", with effort low, medium or high');
+  }
+  if (isContributorModel(model)) {
+    const standardModel = model.replace(/-contributor$/, "");
+    throw new RangeError(`EVAL_JUDGE cannot use ${model} because its vendor may train on private deal notes; use ${standardModel}, the same model without the contributor tier.`);
   }
   return { provider, model, ...(effort ? { effort } : {}) } as ModelRoute;
 }

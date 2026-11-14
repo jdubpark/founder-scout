@@ -1,6 +1,6 @@
-import { mkdir, readFile } from "node:fs/promises";
+import { access, mkdir, readFile, rename } from "node:fs/promises";
 import path from "node:path";
-import { BASE_CONFIG, getParamDef, type Brain, type EvalFlowDTO, type EvalMetricDef, type EvalVariant, type PromoteVariantInput, type RunEvalRoundInput, type SwarmConfig } from "@agentswarm/shared";
+import { BASE_CONFIG, EMPTY_STEERING, getParamDef, numberParam, type Brain, type EvalFlowDTO, type EvalMetricDef, type EvalVariant, type PromoteVariantInput, type RunEvalRoundInput, type SwarmConfig } from "@agentswarm/shared";
 import type { EvalDeps, EvalFlowSummary, HuntTrialResult } from "../contracts";
 import { ServiceError } from "../contracts";
 import { createRng, hashSeed } from "../sim";
@@ -9,6 +9,8 @@ import { writeAtomicFile } from "./persistence";
 
 export const HUNT_YIELD_FLOW_ID = "hunt-yield";
 export const HUNT_YIELD_LABEL = "Hunt yield";
+/** Raise whenever the metric, worlds, trial days, or trial budget changes. */
+export const HUNT_YIELD_STATE_VERSION = 1;
 const DESCRIPTION = "With the same allowance of runner calls on a simulated web, does the hunt find more strong early founders?";
 const DATA_NOTE = "This is a simulated web. It tunes how the hunt spends its calls and compares models on equal footing. It says nothing about real founders.";
 const PARAMETERS = ["hunt.pages_per_search", "hunt.stale_after", "hunt.max_depth"] as const;
@@ -37,9 +39,9 @@ const round3 = (value: number) => Math.round(value * 1000) / 1000;
 const avg = (values: number[]) => values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : 0;
 const clone = <T>(value: T): T => JSON.parse(JSON.stringify(value)) as T;
 type Metrics = Record<string, number>;
-interface CaseResult { id: string; seed: number; metrics: Metrics; result: HuntTrialResult }
+interface CaseResult { id: string; seed: number; metrics: Metrics; result?: HuntTrialResult; error?: string }
 interface Variant { id: string; round: number; description: string; rationale: string; status: "baseline" | "kept" | "reverted"; config: SwarmConfig; createdAt: string; cases: CaseResult[] }
-interface State { baselineConfig: SwarmConfig; variants: Variant[]; bestVariant: string; currentRound: number; tried: string[]; updatedAt: string; lastBrain: Brain; noiseFloor: number }
+interface State { version: number; baselineConfig: SwarmConfig; variants: Variant[]; bestVariant: string; currentRound: number; tried: string[]; updatedAt: string; lastBrain: Brain; noiseFloor: number }
 
 export interface HuntEvalOptions {
   decideCandidate(current: Record<string, number>, candidate: Record<string, number>, floors: Readonly<Record<string, number>>, complete: boolean, baseline?: Record<string, number>, goal?: { target: string; hold: readonly string[]; labels?: Readonly<Record<string, string>> }): { keep: boolean; rationale: string; rule: string };
@@ -57,6 +59,13 @@ function stageRank(stage: string): number {
 }
 function latestStageRank(config: SwarmConfig): number {
   return stageRank(String(config.params["hunt.latest_stage"] ?? "seed"));
+}
+function effectiveCallSetting(config: SwarmConfig, key: "hunt.turns" | "hunt.wave_size"): number {
+  return numberParam(key, EMPTY_STEERING, config);
+}
+function changesCallAllowance(current: SwarmConfig, candidate: SwarmConfig): boolean {
+  return effectiveCallSetting(current, "hunt.turns") !== effectiveCallSetting(candidate, "hunt.turns")
+    || effectiveCallSetting(current, "hunt.wave_size") !== effectiveCallSetting(candidate, "hunt.wave_size");
 }
 function caseMetrics(result: HuntTrialResult, config: SwarmConfig): Metrics {
   const people = result.found;
@@ -79,7 +88,8 @@ function caseMetrics(result: HuntTrialResult, config: SwarmConfig): Metrics {
 }
 function means(rows: readonly CaseResult[]): Metrics {
   const ids = [...METRICS.map((metric) => metric.id), ...REPORT_METRICS];
-  return Object.fromEntries(ids.map((id) => [id, round3(avg(rows.map((row) => row.metrics[id] ?? 0)))]));
+  const complete = rows.filter((row) => row.error === undefined);
+  return Object.fromEntries(ids.map((id) => [id, round3(avg(complete.map((row) => row.metrics[id] ?? 0)))]));
 }
 /**
  * How far the mean of these values would move if other worlds had been drawn: 1.96 standard
@@ -104,7 +114,10 @@ const HOLD = ["late_found", "weak_found", "planted_failed"] as const;
  */
 function pairedFloors(current: readonly CaseResult[], candidate: readonly CaseResult[]): Record<string, number> {
   const before = new Map(current.map((row) => [row.id, row]));
-  const pairs = candidate.flatMap((row) => { const other = before.get(row.id); return other ? [{ row, other }] : []; });
+  const pairs = candidate.flatMap((row) => {
+    const other = before.get(row.id);
+    return other && row.error === undefined && other.error === undefined ? [{ row, other }] : [];
+  });
   return Object.fromEntries([HEADLINE, ...HOLD].map((metric) => [
     metric,
     bootstrapNoise(pairs.map(({ row, other }) => (row.metrics[metric] ?? 0) - (other.metrics[metric] ?? 0)), textSeedOf(metric)),
@@ -139,7 +152,7 @@ function candidates(config: SwarmConfig, tried: string[]): Array<{ key: string; 
 function summarize(variants: readonly EvalVariant[], state: State | null): EvalFlowSummary {
   const baseline = variants.find((variant) => variant.id === "baseline");
   const best = variants.find((variant) => variant.id === state?.bestVariant);
-  const baselineRows = state?.variants.find((variant) => variant.id === "baseline")?.cases ?? [];
+  const baselineRows = (state?.variants.find((variant) => variant.id === "baseline")?.cases ?? []).filter((row) => row.error === undefined);
   const baselineAll = baselineRows.length ? avg(baselineRows.map((row) => row.metrics[HEADLINE] ?? 0)) : null;
   return { id: HUNT_YIELD_FLOW_ID, label: HUNT_YIELD_LABEL, description: DESCRIPTION, headlineMetric: HEADLINE, baseline: baselineAll, best: best?.test[HEADLINE] ?? null, rounds: state?.currentRound ?? 0, updatedAt: state?.updatedAt ?? null, realData: false };
 }
@@ -148,8 +161,41 @@ export function createHuntEval(deps: EvalDeps, options: HuntEvalOptions) {
   const root = path.join(deps.flowsDir, HUNT_YIELD_FLOW_ID);
   const lockKey = path.resolve(root);
   const stateFile = reportPath(root);
+  const readStoredState = async (): Promise<{ value: unknown } | null> => {
+    try {
+      const raw = await readFile(stateFile, "utf8");
+      try { return { value: JSON.parse(raw) as unknown }; } catch { return { value: null }; }
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+      throw error;
+    }
+  };
+  const isCurrentState = (value: unknown): value is State => typeof value === "object" && value !== null
+    && "version" in value && value.version === HUNT_YIELD_STATE_VERSION;
   const readState = async (): Promise<State | null> => {
-    try { return JSON.parse(await readFile(stateFile, "utf8")) as State; } catch { return null; }
+    const stored = await readStoredState();
+    return stored && isCurrentState(stored.value) ? stored.value : null;
+  };
+  const archiveStaleState = async (stored: { value: unknown }): Promise<void> => {
+    if (isCurrentState(stored.value)) return;
+    const oldVersion = typeof stored.value === "object" && stored.value !== null && "version" in stored.value
+      ? stored.value.version
+      : undefined;
+    const label = typeof oldVersion === "number" || typeof oldVersion === "string"
+      ? `v${String(oldVersion).replace(/[^a-zA-Z0-9_-]/g, "_")}`
+      : "unversioned";
+    let suffix = 0;
+    while (true) {
+      const archived = `${stateFile}.archived-${label}${suffix ? `-${suffix}` : ""}`;
+      try {
+        await access(archived);
+        suffix += 1;
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+        await rename(stateFile, archived);
+        return;
+      }
+    }
   };
   const writeState = (state: State) => writeAtomicFile(stateFile, JSON.stringify(state, null, 2) + "\n");
   const evaluate = async (config: SwarmConfig, ids: readonly string[], brain: Brain, budgetUsd: number): Promise<CaseResult[]> => {
@@ -161,22 +207,26 @@ export function createHuntEval(deps: EvalDeps, options: HuntEvalOptions) {
       // few dollars split over sixteen worlds and three days, the hunt could not afford one
       // navigator turn and every variant scored zero. Real money still limits a live measurement.
       const trialBudgetUsd = brain === "sim" ? SIM_TRIAL_BUDGET_USD : budgetUsd / ids.length;
-      const result = await deps.huntTrial!({ seed, days: TRIAL_DAYS, config, brain, budgetUsd: trialBudgetUsd });
-      return { id, seed, metrics: caseMetrics(result, config), result };
+      try {
+        const result = await deps.huntTrial!({ seed, days: TRIAL_DAYS, config, brain, budgetUsd: trialBudgetUsd });
+        return { id, seed, metrics: caseMetrics(result, config), result };
+      } catch (error) {
+        return { id, seed, metrics: {}, error: error instanceof Error ? error.message : String(error) };
+      }
     }));
   };
   const dto = (state: State | null): EvalFlowDTO => {
     const variants: EvalVariant[] = (state?.variants ?? []).map((variant) => {
-      const test = variant.cases.filter((row) => Number(row.id.slice(5)) >= 929);
-      const train = variant.cases.filter((row) => Number(row.id.slice(5)) < 929);
+      const test = variant.cases.filter((row) => row.error === undefined && Number(row.id.slice(5)) >= 929);
+      const train = variant.cases.filter((row) => row.error === undefined && Number(row.id.slice(5)) < 929);
       const testValues = test.map((row) => row.metrics[HEADLINE] ?? 0);
       const interval = bootstrapInterval(testValues, hashSeed(929, variant.id));
       const previous = state!.variants.filter((item) => item.round < variant.round && item.status !== "reverted").sort((a, b) => b.round - a.round)[0];
       const changes = variant.id === "baseline" ? [] : PARAMETERS.filter((key) => previous?.config.params[key] !== variant.config.params[key]).map((key) => `${key}: ${previous?.config.params[key]} → ${variant.config.params[key]}`);
-      return { id: variant.id, round: variant.round, description: variant.description, rationale: variant.rationale, status: variant.id === state!.bestVariant && variant.round > 0 ? "champion" : variant.status, train: means(train), test: means(test), testInterval: interval, costUsd: round3(avg(test.map((row) => row.result.costUsd))), config: variant.config, changes, createdAt: variant.createdAt };
+      return { id: variant.id, round: variant.round, description: variant.description, rationale: variant.rationale, status: variant.id === state!.bestVariant && variant.round > 0 ? "champion" : variant.status, train: means(train), test: means(test), testInterval: interval, costUsd: round3(avg(test.flatMap((row) => row.result ? [row.result.costUsd] : []))), config: variant.config, changes, createdAt: variant.createdAt };
     });
     const summary = summarize(variants, state);
-    const baselineCases = state?.variants.find((variant) => variant.id === "baseline")?.cases ?? [];
+    const baselineCases = (state?.variants.find((variant) => variant.id === "baseline")?.cases ?? []).filter((row) => row.error === undefined);
     const baselineValues = baselineCases.map((row) => row.metrics[HEADLINE] ?? 0);
     const baselineRange = bootstrapInterval(baselineValues, 17);
     const baselineMean = avg(baselineValues);
@@ -193,14 +243,20 @@ export function createHuntEval(deps: EvalDeps, options: HuntEvalOptions) {
     ].join(", ");
     const latestVariant = state?.lastBrain === "live" ? "baseline" : state?.bestVariant ?? "baseline";
     const latest = state?.variants.find((variant) => variant.id === latestVariant)?.cases ?? [];
-    const modelNames = [...new Set(latest.flatMap((row) => Object.keys(row.result.models)))].sort();
+    const modelNames = [...new Set(latest.flatMap((row) => Object.keys(row.result?.models ?? {})))].sort();
     const table = modelNames.length ? `\n\nRunner models:\n${modelNames.map((model) => {
-      const samples = latest.flatMap((row) => row.result.models[model] ? [row.result.models[model]!] : []);
+      const samples = latest.flatMap((row) => row.result?.models[model] ? [row.result.models[model]!] : []);
       return `- ${model}: ${round3(avg(samples.map((item) => item.pages)))} pages, ${round3(avg(samples.map((item) => item.peopleKept)))} kept, ${round3(avg(samples.map((item) => item.peopleRefused)))} refused, ${round3(avg(samples.map((item) => item.plantedFailed)))} planted failed, ${Math.round(avg(samples.flatMap((item) => item.medianLatencyMs === null ? [] : [item.medianLatencyMs])))} ms median latency`;
     }).join("\n")}` : "";
     const baseline = variants.find((item) => item.id === "baseline");
-    const roundLines = variants.filter((item) => item.round > 0).map((item) =>
-      `Round ${item.round} proposed ${item.description}; train: ${metricLine(item.train)}; held-out: ${metricLine(item.test)}; ${item.status === "champion" ? "kept as champion" : item.status}.`);
+    const roundLines = (state?.variants ?? []).filter((item) => item.round > 0).map((item) => {
+      const failures = item.cases.filter((row) => row.error !== undefined);
+      const failureNote = failures.length
+        ? ` ${failures.length} world${failures.length === 1 ? "" : "s"} failed: ${[...new Set(failures.map((row) => row.error))].join("; ")}.`
+        : "";
+      const reported = variants.find((variant) => variant.id === item.id)!;
+      return `Round ${item.round} proposed ${item.description}; train: ${metricLine(reported.train)}; held-out: ${metricLine(reported.test)}; ${reported.status === "champion" ? "kept as champion" : reported.status}. ${item.rationale}${failureNote}`;
+    });
     const narrative = state
       ? `Baseline strong early founders found in a world: ${baselineMean.toFixed(3)} across ${baselineValues.length} worlds; 95% bootstrap range [${baselineRange?.[0].toFixed(3) ?? "n/a"}, ${baselineRange?.[1].toFixed(3) ?? "n/a"}]; ${positiveWorlds}/${baselineValues.length} worlds above zero. Noise floor: ${(state.noiseFloor ?? 0).toFixed(3)} (1.96 standard errors of the held-out mean, from a bootstrap over worlds; a change is compared world by world, so its own floor is the spread of those differences). Baseline fit-screener counts: ${metricLine(means(baselineCases))}. Best held-out yield: ${summary.best?.toFixed(3) ?? "not measured"}.${roundLines.length ? `\n\n${roundLines.join("\n")}` : ""}${table}`
       : "";
@@ -230,13 +286,20 @@ export function createHuntEval(deps: EvalDeps, options: HuntEvalOptions) {
       }
       return serializeEvalFlow(lockKey, async () => {
         await mkdir(root, { recursive: true });
-        let state = await getState();
-        if (!state) state = { baselineConfig: clone(BASE_CONFIG), variants: [], bestVariant: "baseline", currentRound: 0, tried: [], updatedAt: new Date().toISOString(), lastBrain: brain, noiseFloor: 0 };
+        const storedState = await readStoredState();
+        if (storedState) await archiveStaleState(storedState);
+        let state = storedState && isCurrentState(storedState.value) ? storedState.value : null;
+        if (!state) state = { version: HUNT_YIELD_STATE_VERSION, baselineConfig: clone(BASE_CONFIG), variants: [], bestVariant: "baseline", currentRound: 0, tried: [], updatedAt: new Date().toISOString(), lastBrain: brain, noiseFloor: 0 };
         const baselineConfig = state.variants.find((variant) => variant.id === "baseline")?.config ?? state.baselineConfig;
         const savedBaseline = state.variants.find((variant) => variant.id === "baseline");
         const baselineCases = brain !== state.lastBrain || !savedBaseline
           ? await evaluate(baselineConfig, allCases.map((item) => item.id), brain, budgetUsd)
           : savedBaseline.cases;
+        const baselineFailures = baselineCases.filter((row) => row.error !== undefined);
+        if (baselineFailures.length) {
+          const details = baselineFailures.map((row) => `seed ${row.seed}: ${row.error}`).join("; ");
+          throw new ServiceError(502, `Hunt yield baseline failed in ${baselineFailures.length} of ${allCases.length} worlds. ${details}`);
+        }
         if (!savedBaseline) state.variants.push({ id: "baseline", round: 0, description: "Baseline configuration", rationale: "Starting configuration.", status: "baseline", config: baselineConfig, createdAt: new Date().toISOString(), cases: baselineCases });
         else if (brain !== state.lastBrain) savedBaseline.cases = baselineCases;
         const trainIds = allCases.slice(0, 8).map((item) => item.id);
@@ -255,22 +318,32 @@ export function createHuntEval(deps: EvalDeps, options: HuntEvalOptions) {
             }
           }
           if (!proposal) break;
-          const rows = await evaluate(proposal.config, allCases.map((item) => item.id), "sim", budgetUsd);
+          const allowanceChanged = changesCallAllowance(current.config, proposal.config);
+          const rows = allowanceChanged ? [] : await evaluate(proposal.config, allCases.map((item) => item.id), "sim", budgetUsd);
           const heldOut = (cases: readonly CaseResult[]) => cases.filter((row) => Number(row.id.slice(5)) >= 929);
           const currentTest = means(heldOut(current.cases));
           const candidateTest = means(heldOut(rows));
           const baselineTest = means(heldOut(baselineCases));
           const floors = pairedFloors(heldOut(current.cases), heldOut(rows));
-          const decision = options.decideCandidate(currentTest, candidateTest, floors, rows.length === 16, baselineTest, {
+          const complete = !allowanceChanged
+            && rows.filter((row) => row.error === undefined).length === SEEDS.length
+            && current.cases.filter((row) => row.error === undefined).length === SEEDS.length;
+          const decision = options.decideCandidate(currentTest, candidateTest, floors, complete, baselineTest, {
             target: HEADLINE,
             hold: HOLD,
             labels: { [HEADLINE]: "strong early founders found", late_found: "late-found share", weak_found: "weak-found share", planted_failed: "planted-page failure rate" },
           });
-          const kept = decision.keep;
+          const failedRows = rows.filter((row) => row.error !== undefined);
+          const rationale = allowanceChanged
+            ? `${decision.rationale} This change alters how many runner calls a run may make, so the comparison would not be like for like; held-out trials were not run.`
+            : failedRows.length
+              ? `${decision.rationale} ${failedRows.length} trial world${failedRows.length === 1 ? " failed" : "s failed"}.`
+              : decision.rationale;
+          const kept = !allowanceChanged && decision.keep;
           const round = state.currentRound + 1;
           const id = `v${round}`;
           const config = { ...proposal.config, id: `cfg_hunt-yield_${id}`, label: `Round ${round}: ${proposal.description}` };
-          state.variants.push({ id, round, description: proposal.description, rationale: decision.rationale, status: kept ? "kept" : "reverted", config, createdAt: new Date().toISOString(), cases: rows });
+          state.variants.push({ id, round, description: proposal.description, rationale, status: kept ? "kept" : "reverted", config, createdAt: new Date().toISOString(), cases: rows });
           state.tried.push(proposal.key);
           state.currentRound = round;
           if (kept) state.bestVariant = id;
@@ -281,7 +354,7 @@ export function createHuntEval(deps: EvalDeps, options: HuntEvalOptions) {
         state.updatedAt = new Date().toISOString();
         await writeState(state);
         const result = dto(state);
-        result.spentUsd = brain === "live" ? round3(avg(baselineCases.map((row) => row.result.costUsd)) * baselineCases.length) : 0;
+        result.spentUsd = brain === "live" ? round3(avg(baselineCases.flatMap((row) => row.result ? [row.result.costUsd] : [])) * baselineCases.length) : 0;
         return result;
       });
     },

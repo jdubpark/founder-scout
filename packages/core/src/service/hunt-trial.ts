@@ -68,7 +68,11 @@ export function createHuntTrial(env: NodeJS.ProcessEnv = process.env, options: {
         const cancel = () => { void runs.cancel(started.id).catch(() => undefined); };
         input.signal?.addEventListener("abort", cancel, { once: true });
         try {
-          await runs.wait(started.id);
+          const completed = await runs.wait(started.id);
+          if (completed.status === "failed" || completed.status === "cancelled" || completed.status === "budget_stopped") {
+            const budgetNote = completed.status === "budget_stopped" ? " The trial needs a larger budget to finish." : "";
+            throw new Error(`Hunt trial day ${day + 1} run ended with status '${completed.status}'.${budgetNote}`);
+          }
           if (input.signal?.aborted) throw input.signal.reason ?? new Error("Hunt trial cancelled.");
         } finally {
           input.signal?.removeEventListener("abort", cancel);
