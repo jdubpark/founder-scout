@@ -18,7 +18,6 @@ import { createLiveRepoFinder as buildRepoFinder, type RepoFinderOptions } from 
 import { huntProxyFromEnv, linkedinAccountsFromEnv } from "./sessions";
 import { createWebReader } from "./web";
 import { createGitHubSearchEngine, createHnSearchEngine, createHuggingFaceSearchEngine } from "./search";
-import { createYcAdapter } from "./yc";
 
 export { createArxivAdapter } from "./arxiv";
 export { createBrowserLinkedInReader, createRoutingWebReader, type BrowserLinkedInReaderOptions } from "./browser-reader";
@@ -39,7 +38,6 @@ export {
 } from "./sessions";
 export { createWebReader, type WebReaderOptions } from "./web";
 export { createGitHubSearchEngine, createHnSearchEngine, createHuggingFaceSearchEngine, type SearchOptions } from "./search";
-export { createYcAdapter } from "./yc";
 export { looksLikeFounder, parseConnectionsCsv, type ParsedContact } from "./connections";
 export { sanitizeCheckout, type SanitizeResult } from "./sanitize";
 export { parseRepoUrl, parseGitHubLogin, type RepoFinderOptions } from "./repo-finder";
@@ -178,7 +176,7 @@ export function createLivePeopleLookup(env: NodeJS.ProcessEnv = process.env): Pe
 }
 
 /** Adapters that fetch from the outside world. web, call and manual have none in live mode. */
-const LIVE_IDS = ["hackernews", "github", "arxiv", "people_data", "yc"] as const satisfies readonly SourceId[];
+const LIVE_IDS = ["hackernews", "github", "arxiv", "people_data"] as const satisfies readonly SourceId[];
 
 export function createLiveSources(env: NodeJS.ProcessEnv = process.env): SourceRegistry {
   const pdlApiKey = env.PDL_API_KEY?.trim();
@@ -187,13 +185,6 @@ export function createLiveSources(env: NodeJS.ProcessEnv = process.env): SourceR
     ["github", createGitHubAdapter({ env })],
     ["arxiv", createArxivAdapter()],
     ["people_data", createPeopleDataAdapter(pdlApiKey ? createPdlVendor({ apiKey: pdlApiKey, allowance: pdlAllowance(env, pdlApiKey) }) : null)],
-    // The scout keeps its own reader so its reads stay spaced whatever the hunt does.
-    ["yc", createYcAdapter({
-      reader: createWebReader({
-        ...(env.HUNT_USER_AGENT ? { userAgent: env.HUNT_USER_AGENT } : {}),
-        ...(huntProxyFromEnv(env) ? { proxyUrl: huntProxyFromEnv(env) } : {}),
-      }),
-    })],
   ]);
 
   return {

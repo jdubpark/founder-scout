@@ -154,10 +154,6 @@ check it. `packages/core/src/rules.test.ts` enforces that, so add the test with 
   host on their own; robots.txt is what is obeyed. Tests:
   `packages/core/src/sources/web.test.ts`, `packages/shared/src/policy.test.ts`,
   `packages/shared/src/hunt.test.ts`.
-- **The YC scout reads company pages through the web reader**, so robots.txt and per-host spacing
-  govern it like the hunt; the directory index comes from the open mirror at most once a day, and
-  a page that keeps failing is given up after three tries. Tests:
-  `packages/core/src/sources/yc.test.ts`, `packages/core/src/sources/web.test.ts`.
 - **A page is read once; a search runs again only in a later run or on a later day.** Test:
   `packages/core/src/db/store.test.ts`.
 - **A runner call names no effort, and that means answer fast.** DeepSeek is sent thinking off
