@@ -25,8 +25,8 @@ measurement it improves against.
 
 **Non-goals for v0**
 
-- Connecting a live voice calling service. Approved-call actions and a simulated dialler exist; no
-  live dialler adapter is connected.
+- Making a real AI call or completing a production calling workflow. The Vapi adapter is built but
+  has never placed a call; consent and outreach gaps are listed in section 17.
 - A licensed professional-profile data feed. The adapter slot exists and reports "not configured".
 - Login, multi-user roles, hosting. The server refuses to bind to anything but the local machine.
 - Evidence about real founders' outcomes. The first eval is synthetic.
@@ -196,20 +196,35 @@ depth) and one repository review. Codex has no file-reading tool, so the review 
 read-only shell commands and forbids running anything from the repository. `anthropic-api` and an OpenAI-compatible adapter (OpenAI, DeepSeek, Meta) make direct
 structured calls; they are unit-tested against documented shapes and **not verified against a live
 service**, because no keys were available. `opencode-cli` runs structured jobs through OpenCode
-with a generated tool-free agent, a temporary work directory and an empty configuration directory.
-It uses the saved vendor login when OpenCode is installed; this provider path has not been run live.
+with a generated tool-free agent, a temporary work directory and an empty configuration directory,
+so the person's own OpenCode instructions are not inherited. Each call gets a data folder of its
+own holding only a link to the saved login, removed afterwards, so nothing is added to the
+person's OpenCode history and the call cannot read their earlier sessions. The process runner sets
+the child's `PWD` to the directory it runs in, because OpenCode takes its project folder from
+`PWD`. The provider is ready only when a login is saved. In a real run on 2026-11-13, 33 tasks on
+DeepSeek Flash and Muse Ember completed without failure for $0.12 in 113 seconds. That is too few
+calls to rank the models. Like Codex and the API adapters, OpenCode cannot be given a spend
+ceiling for one call; only headless Claude can, and the run's cap is checked between calls.
 
 **Cheap pool.** When both DeepSeek Flash and Muse Ember routes are ready, scouts and the fit
 screener assign 50% to their ordinary route and 25% to each cheap model. Hunt page readers and
-result sifters split equally between ready DeepSeek and Meta routes. Direct API routes take
+result sifters split equally between ready DeepSeek Flash and Muse Ember routes. Direct API routes take
 precedence over OpenCode; a person's configured pool or pinned route takes precedence over these
-defaults. Pool changes use checked output; the screener's shares stay fixed.
+defaults. Pool changes use checked output; the screener's shares stay fixed. A member whose calls
+fail twice in a row for a provider reason (down, not set up, unsupported, timed out, rate limited)
+is left out for the rest of that run, and its share goes to the others or to the job's one route:
+in a live run a dead member had failed twelve sift calls in a row and no page was read.
 
 The owner accepted DeepSeek Flash and Muse Ember for scouts, screening and runners through
-OpenCode on 2026-11-13. Direct API routes remain available when configured. Meta's cheaper
-contributor tier may train on prompts and answers; code permits it only for public material and
-fund instructions. Jobs that read partner calls or private founder and company files refuse that
-tier. No route in the default pool uses it.
+OpenCode on 2026-11-13, on Meta's standard tier. Direct API routes remain available when
+configured. Meta's contributor tier may train on prompts and answers. Whether a job may be sent to
+a model whose vendor trains on what it is sent depends only on the job's inputs: public pages and
+feeds, plus the fund's own thesis, steering, notebook, learned lines and skills. A lead is not
+public, because it can come from a contact list or a typed note. So the navigator, the scouts and
+the runners may use such a model, and a task sent to one is not shown the partners' calls. The fit
+screener may not, nor may any job that reads a founder's or a company's file, a transcript or a
+contact list. A person chooses the tier; it is never a default, and the thesis and steering text
+go to the vendor.
 
 ## 9. Sources and conduct
 
@@ -222,8 +237,8 @@ tier. No route in the default pool uses it.
 | Professional profiles | A data vendor's API under contract. An adapter for People Data Labs is built | Built, unverified against the live service (no key on this machine) |
 | Your network | A partner's own exported contact list, uploaded by that partner | Built |
 | Added by a person | A name and a link typed into the dashboard | Built |
-| Conversations | Approved calls, simulated calls, pasted notes | Call controls and simulation built; no live dialler |
-| Recordings | Direct public audio and video files | Fetch and transcript stage built; intake and live transcription unverified |
+| Conversations | Approved calls, simulated calls, pasted notes | Vapi adapter and call controls built; no live call made |
+| Recordings | Direct public audio and video files | Upload and link intake built; real link fetch and HTTP transcription unverified |
 
 Rules the system enforces in code, not in prose:
 
@@ -349,6 +364,13 @@ being called a failure. The bar is a proxy, it is this system's own choice,
 and it is listed among the assumptions (section 15). A company that launched twice is one case.
 Sentences in which a founder states a personal detail are removed before the dataset is written.
 It is kept out of the repository because it names real people.
+
+**Fund deal history.** `pnpm swarm past import --file deals.csv` adds the fund's own dated cases to
+this dataset. One case is one company as seen on one date; a month-only date uses its first day, and
+the UTC date sets the cohort. IDs stay stable for the same normalized company and date, so a reimport
+updates that case. Headers ignore case and spacing; yes/no aliases become labels, and an unknown
+outcome is left out. Investment decision, company and founder names, and domains remain metadata for
+masking and later analysis.
 
 **What the past-founders eval measured** (2026-11-13, real data). 155 companies that launched on
 Hacker News between 2018 and 2020, 23 of which met the bar; 66 more were collected and left out
@@ -509,6 +531,16 @@ or 2,400 for other jobs. Code inserts them before learned lines and records thei
 `skills.off` disables named notes at a steering scope. A person's instruction takes precedence;
 skills cannot direct scoring, decisions, personal-attribute use or barred-host requests. Matching
 uses only fields already sent to the job and never simulator state.
+
+**Tests are kept few.** One proof for each contract at its strongest boundary, a regression test
+for every defect a review or a live run found, and no test of a wrapper, a copied list or a value
+the code itself produced. On 2026-11-13 the suite went from 1,209 tests to 988 in six lanes. A
+test was removed only when a stronger proof of the same contract was left standing, and each lane
+then broke the production code on purpose, more than a hundred times in all, to confirm the kept
+tests fail. That pass also turned up real defects, which were fixed and given tests: a robots.txt
+cut off at the size limit was parsed as if it were whole, and the personal-attribute check missed
+a statement whose subject was a name ("Ada is gay") and had no rule for a phone number or an
+email the text calls personal.
 
 ## 15. Pools of agents, pools of context, and the assumptions behind the objective
 
@@ -676,7 +708,9 @@ a person to add to it as trails reach new sites.
 
 The reader names itself `web-reader/1.0` unless `HUNT_USER_AGENT` says otherwise. A reader
 should carry a name and a contact address of its owner, so a site can refuse it by name; that
-name is the owner's to choose, so it is a setting and not a default.
+name is the owner's to choose, so it is a setting and not a default. Recordings are fetched under
+the same name. A robots.txt answered with 401, 403 or 429, or one too large to read in full
+(512 KiB), means the site is not read; a missing one still means no rules.
 
 **Where the early signal is.** The one place with published timing is GitHub: start-ups raise
 their activity there in the twelve months before a first financing round (Conti, Peukert and
@@ -718,10 +752,10 @@ approved for data about named people. None of this was run against a live key he
 matching. A person a runner found becomes a lead like any other (source "web", with its trail,
 its quote and its stage), and from there the pipeline of section 5 applies unchanged: matching,
 the fit screen, investigation, the quote check, fact-checking, the rubric. The hunt may spend at
-most `hunt.budget_share` of a run's cap. Each call is given an allowance before it starts, out
-of what is left of that share, and is held to it; allowances in flight never add up to more
-than what is left, and a call that finds no room waits for one in flight to finish instead of
-ending the hunt.
+most `hunt.budget_share` of a full run's cap. A hunt-only run gives the hunt at least 90% of its
+cap, since only the fit screen follows. Each call is given an allowance before it starts, out of
+what is left of that share, and is held to it; allowances in flight never add up to more than what
+is left, and a call that finds no room waits for one in flight to finish instead of ending the hunt.
 
 **A person's hand comes first.** A navigator's turn takes seconds to arrive, and a person may
 have pinned, paused or closed a trail meanwhile. The turn is checked against the trails as
@@ -766,17 +800,19 @@ the next run. Live, on the headless logins, four runs on one notebook for $0.25 
 
 The first run read no page at all: every call of both waves was a search, because the oldest
 item went first and the navigator kept adding searches. That is why pages now go before
-searches. Four runs show that the parts work together on real sites. They say nothing about
-how many founders a hunt finds, or how good they are, and nothing about DeepSeek, Meta or OpenCode
-as runners: no live route for these models was available, so those paths have run only against a
-fake client.
-The last of the four ran on the code as it is after both reviews.
+searches. Those four headless runs show the reader and navigator on real sites; they say nothing
+about how many founders a hunt finds, or how good they are. In the evening, DeepSeek Flash and Muse
+Ember handled 33 OpenCode tasks without failure for $0.12 in 113 seconds, including real HN and
+GitHub items and six real pages. There were too few calls to rank the models. A built-in Codex
+navigator with real runners on the simulated web completed 19 tasks for $0.25 in 43 seconds and
+found five people; that is not evidence about real founder yield.
 
 **Open-web search.** The live hunt can use Claude's native `WebSearch` tool through the
 `hunt.search` job. The job asks for one search, runs inside the hunt budget and extracts URLs only
-from tool results, never assistant prose. The runner call is capped at ten hits; code validates
-them before the numbered results reach the sifter. Set `HUNT_WEB_SEARCH=off` to disable this engine.
-OpenCode does not support this search tool.
+from tool results, never assistant prose. Each engine is asked for ten results; code validates them
+before the numbered results reach the sifter. Set `HUNT_WEB_SEARCH=off` to disable web search.
+With `LINKUP_API_KEY`, the `web` engine uses Linkup; otherwise it uses the model provider's own
+search tool. OpenCode does not provide Claude's `WebSearch` tool.
 
 Linkup is the selected search service, pending a written answer on keeping a queue of result
 addresses. With `LINKUP_API_KEY` set, app assembly uses Linkup instead of Claude WebSearch. The
@@ -792,92 +828,148 @@ queue for later automated reading fits article 4.1, and whether zero data retent
 The terms review and its limits are in `docs/research/web-search-services.md`.
 
 **Outside navigator seat.** The Hunt page can hand `hunt.navigator` to an outside agent. Start the
-local server and connect its stdio MCP process with `pnpm swarm mcp --swarm SWARM_ID`; setup and
-the turn/wave loop are in `docs/agents/hunt-seat.md`. The outside agent receives the same bounded
-`NavigateInput` as the built-in navigator, without page text or founder dossiers. Turns pass
-`applyNavigatorTurn` and `checkTurn`, and are audited. It can ask for a hunt-only wave. The built-in
-navigator takes the seat back after the configured idle period, two days by default. The MCP
-process forwards requests only to the loopback API and does not open the database.
+local server and connect its stdio MCP process with `pnpm --silent swarm mcp --swarm SWARM_ID`;
+setup and the turn/wave loop are in `docs/agents/hunt-seat.md`. `pnpm --silent` keeps its banner
+off the protocol stream. In `codex exec`, pass `--approve-for-me` to approve MCP calls. The outside
+agent receives the same bounded `NavigateInput` as the built-in navigator, without page text or
+founder dossiers. Turns pass `applyNavigatorTurn` and `checkTurn`, and are audited. It can ask for a
+hunt-only wave. The built-in navigator takes the seat back after the configured idle period, two
+days by default. The MCP process forwards requests only to the loopback API and does not open the
+database. Both kinds of outside session were run against the simulated web on 2026-11-13. A
+headless Claude Code session (Haiku) read the view, took a turn in which one trail was opened and
+one LinkedIn address was refused with the reason given back to it, sent a wave and read the view
+again, for $0.004. A headless Codex session (`gpt-6-luna`) read the view, opened one trail, closed
+another and sent a wave.
 
 **Hunt yield eval.** `hunt-yield` runs each case with a fresh in-memory store and a seeded simulated
 world for three hunt-only days. Sixteen fixed worlds split into eight train cases and eight held-out
-cases. One tunable setting changes at a time; wave size and navigator turns stay fixed. The
-headline, `strong_early_found`, is the share of strong early founders visible in the simulated web
-that the hunt kept. Late-stage people kept, planted-page failures and runner calls are guardrails.
-A deterministic bootstrap over held-out worlds sets the noise floor. Hidden simulator truth is
-joined only after each trial finishes. Run it with `pnpm swarm eval rounds --flow hunt-yield
---rounds 2`. The web is simulated; these results say nothing about real founders. A live baseline
-may use live models but still reads the simulated web. Automatic live rounds are refused until a
-spending approval path exists, and autopilot cannot apply this `realData: false` result.
+cases. Its headline is a count: distinct strong early founders found per world (hidden quality at
+least 0.6 and true stage at or before seed) when the runner report passes the page check, before fit
+screening. Late-stage finds, weak finds and planted-page failures are held guardrails. Runner calls,
+strong early founders per 100 calls and fit-kept people are reported, not held. Candidates are
+compared with the current config world by world on the same eight held-out worlds. A candidate that
+changes effective `hunt.turns` or `hunt.wave_size` is reverted without a trial, so every variant has
+the same call allowance. The noise floor is 1.96 standard errors of paired world differences from a
+bootstrap. Saved state is versioned by the eval definition; stale state starts from a fresh baseline.
+Failed, cancelled or budget-stopped trials are incomplete and cannot lower a score or be kept.
+Hidden simulator truth is joined only after a trial finishes. Run it with
+`pnpm swarm eval rounds --flow hunt-yield --rounds 2`. A live baseline (`--brain live --rounds 0`)
+has real models read the simulated web; it has not been run, and is refused with a budget under
+$16, a dollar for each world. Tuning rounds on real models are refused until a spending approval
+step exists. Autopilot cannot apply this `realData: false` result.
+
+The machine's simulated-brain baseline found 17.75 strong early founders per world across 16 worlds
+(95% range 15.4 to 20.1; held-out noise floor 2.33). Three rounds proposed `hunt.max_depth` 2 to 1
+and `hunt.pages_per_search` 3 to 2 and 3 to 4; all were reverted. The figure depends on which
+providers are ready on the machine. This simulated web says nothing about real founders.
+
+**What went wrong first.** The earliest version scored zero everywhere, for two reasons: a found
+person counted only after the fit screener kept them, and each simulated run was given about two
+cents, less than one navigator turn. The first repair used strong early founders per 100 calls as
+its headline, and the loop then kept "follow links one step, not two", which scored 38% better per
+call and found fewer strong founders in total (16.1 against 16.8 on the held-out worlds), because
+the hunt ran out of things to read and stopped. A rate for each call rewards reading less. That is
+why the headline is a count under a fixed allowance of calls, and why a candidate that changes the
+allowance is not measured at all.
 
 **Built now and still missing.** General web search through Claude's tool, Linkup wiring, the
-outside MCP seat, and the simulated hunt-yield eval are built. Linkup has only fake-client tests;
-a written answer is still needed before keeping its result queue. A live
-calling adapter, recording upload and intake controls, a retention schedule, and notices for people
-in the EU and UK are not built.
+outside MCP seat, the simulated hunt-yield eval, and recording upload and intake are built. Linkup
+has only fake-client tests; a written answer is still needed before keeping its result queue. The
+Vapi adapter is connected behind configuration but has never placed a call. Consent and outreach
+gaps, retention, and EU or UK notices are described below.
 
 ## 17. Recordings and calls
 
-**Recordings.** A queued recording belongs to one founder and swarm. The fetcher accepts direct
-HTTP audio or video files only. It checks the host policy, resolved addresses, robots.txt and each
-redirect, and refuses embedded players, barred hosts, private addresses, non-media responses and
-files over 150 MB by default. SQLite stores the transcript and time-coded segments. `MEDIA_MAX_MB`
-sets the size ceiling.
+**Recordings.** A person can add a recording on a founder's page by public link or upload. The
+talks analyst can queue up to three recordings per founder in one run. The fetcher accepts direct
+HTTP audio or video files only. It uses the page reader's host, address, robots.txt, redirect and
+`HUNT_USER_AGENT` checks, and refuses players, barred or private hosts, non-media responses and
+files over 150 MB by default. Before transcription, `ffprobe` measures length. If that fails, code
+uses a file-size bound at 6 kbit/s. A recording that will not fit the run's remaining allowance is
+refused before transcription. A transcript is made once, detected personal-attribute sentences are
+removed, and transcription cost is recorded as a run task. `media.read` gets a founder brief and one
+time-coded stretch; code keeps only words found there and marks the quote before fact-checking.
 
-The live transcriber prefers `TRANSCRIBE_COMMAND`, which must include `{file}` and is started
-without a shell. Otherwise it uses `TRANSCRIBE_BASE_URL`, `TRANSCRIBE_API_KEY` and
-`TRANSCRIBE_MODEL` at an OpenAI-compatible endpoint and requests `verbose_json`. The media stage
-uses `media.enabled` and `media.max_minutes_per_run`. `media.read` receives a founder brief and one
-time-coded transcript stretch. Code keeps only exact words found in that stretch, adds the time to
-the evidence address and marks the quote found before ordinary fact-checking. Simulation uses
-`SimWorld.transcript`; hidden simulator state stays out of model input.
+`TRANSCRIBE_COMMAND` takes precedence and must include `{file}`; otherwise the OpenAI-compatible
+transcriber uses `TRANSCRIBE_BASE_URL`, `TRANSCRIBE_API_KEY` and `TRANSCRIBE_MODEL`. A ten-second
+Mac voice clip was transcribed locally by `mlx-whisper` through `TRANSCRIBE_COMMAND`; Claude Sonnet
+read it and code found two evidence quotes. The HTTP transcriber and recording fetch from a real
+site have not been tested live. There is no retention schedule.
 
-The add/delete recording API, upload, recording suggestions from the talks analyst, and the
-founder-page Recordings block are not built. Neither transcription adapter has been run against a
-real service. There is no retention schedule.
+**Calls.** Runs still only propose outreach. A person can place an approved founder or reference
+call with Vapi when `VAPI_API_KEY`, `VAPI_PHONE_NUMBER_ID` and `VAPI_VOICE_ID` are set. Placement
+also needs `FUND_NAME` and an E.164 `FUND_CALLBACK_NUMBER`. Before dialing, code saves the consent
+statement and a placement mark. If the provider response is uncertain, the item is failed for a
+person to check and is never dialed again. Stored call text has phone numbers removed. Vapi call
+artifacts are deleted after local sync by default. The adapter has a fake-client test only and has
+never placed a real call.
 
-**Calls.** Runs still only propose outreach. A person can place one approved founder or reference
-call after entering how the person agreed to an AI call and choosing whether to record. Code
-requires an E.164 number, a time zone whose local time is from 09:00 through 19:59, the emergency
-stop off, and fewer than five calls on the current UTC date. Failed, declined and unanswered calls
-do not retry. The action and audit retain only the number's last two digits.
+The service requires approval, an E.164 destination, a time zone whose local time is 09:00 through
+19:59, the emergency stop off, and fewer than five placements on the UTC date. Code builds the
+opening, disclosure, approved agenda, stop instructions and closing with the fund name and callback
+number. Consent fields record what the operator entered; they are not a legal finding that consent
+was valid. Recording starts with the call when chosen; there is no in-call confirmation. Invitation
+and written-consent flow, a do-not-call list, US-only eligibility checks and transcript review are
+not built. Counsel must review consent, recording, disclosure, retention and jurisdiction questions
+in `docs/research/ai-voice-calls.md` before a first real call.
 
-The opening and instructions are made from code and the approved agenda. The opening gives the
-draft disclosure, asks if now is a good time, and states that recording is in progress when the
-person chose recording. Code records the operator's consent statement and recording choice; this is
-not a legal finding that consent was valid. Instructions limit the call to approved questions,
-exclude personal attributes and direct it to stop on request. Code passes a 15-minute limit to the
-dialler. No live dialler is connected, so those instructions have not been checked in a real call.
-A completed transcript is stored only when recording was chosen and is redacted before it becomes
-evidence. Simulated calls use `SimWorld.transcript` and mark the evidence simulated.
+The steps of a compliant call, from that research note, against what the code enforces today:
 
-No live dialler is connected. The vendor-neutral live dialler returns no adapter, and there are no
-Vapi key settings in code, so keys alone will not enable a real call. The owner accepted Vapi as
-the preferred service on 2026-11-13, after counsel's review. Counsel must answer the consent,
-recording, AI disclosure, time and jurisdiction, data retention and vendor-contract questions in
-`docs/research/ai-voice-calls.md` before the first real call. That research was not tested against
-a live service and leaves legal questions open.
+| Step | What the code does |
+| --- | --- |
+| 1. Configuration | Placement needs `FUND_NAME` and an E.164 `FUND_CALLBACK_NUMBER`; Vapi needs its key, an imported number ID and a voice ID. Nothing limits calls to the United States. |
+| 2. Invitation | Approval is required. Writing and sending an invitation are not built. |
+| 3. Written, stored consent | Placement needs a sentence saying how the person agreed, and records it with its time, who entered it and the recording choice. There is no signed record, no chosen time window and no withdrawal. |
+| 4. Checks before dialling | One approved call item, an E.164 destination, local time from 09:00 to 19:59, the daily limit, the stop switch, and no personal attribute in the agenda or questions. No do-not-call list. |
+| 5. Dial | The placement mark is stored first. One assistant is sent for the one call. |
+| 6. First sentence | Written by code: it says an AI is calling for the named fund and asks for the named person. The prompt ends a call that reached someone else. |
+| 7. Ask before recording | Not enforced inside the call. Recording, when chosen, starts with the call. |
+| 8. Confirmation on the recording | Not enforced. |
+| 9. Decline, silence, voicemail | No answer, a refusal and a hang-up within five seconds are not completed calls. Voicemail is not detected. |
+| 10. During the call | The prompt keeps to the approved questions and stops on request. |
+| 11. Closing | Written by code: the fund's name and its callback number. |
+| 12. Collecting the result | Fetched when a person asks; there is no polling loop. A placement left without a call ID is failed for a person to check. |
+| 13. Checking the transcript | Stored only when recording was agreed, with personal details and phone numbers removed. Nothing checks that the confirmation and the closing were spoken. |
+| 14. Deleting at the vendor | After the local record is saved; on unless `VAPI_DELETE_AFTER_FETCH` turns it off. |
+| 15. Later requests | Withdrawing consent and asking for deletion are not built. |
 
 ## 18. Decisions that are yours
 
 1. The fund's name and first thesis.
-2. Which profile-data vendor to sign with, after reading its terms and asking where its data comes from. The People Data Labs adapter works with a free key (100 records a month) for a first look.
-3. Whether the fund will hold data on people in the EU or UK. If so, a notice and a retention limit must be built first.
-4. How much the founders should count against the company (the share is 0.6 today), once there are real calls to tune it on.
-5. Accepted 2026-11-13: if calls proceed after counsel's review, use Vapi. Counsel's answers and
-   the live dialler implementation remain open.
-6. API keys for unattended daily runs. The command-line logins are fine for a prototype; a scheduled production run should bill an API account.
+2. Which profile-data vendor to sign with, after reading its terms and asking where its data comes
+   from. The People Data Labs adapter works with a free key (100 records a month) for a first look.
+3. Whether the fund will hold data on people in the EU or UK. If so, a notice and a retention limit
+   must be built first.
+4. How much the founders should count against the company (the share is 0.6 today), once there are
+   real calls to tune it on.
+5. Accepted 2026-11-13: if calls proceed after counsel's review, use Vapi. The adapter is built and
+   stays off until its keys, the fund's name and a callback number are set. Still open: counsel's
+   answers, and the steps of the table in section 17 that the code does not enforce.
+6. API keys for unattended daily runs. The command-line logins are fine for a prototype; a
+   scheduled production run should bill an API account.
 7. Accepted 2026-11-13: add more labelled cases from the fund's own deal history first. The
+   importer is built (`pnpm swarm past import --file deals.csv`); the file is yours to export. The
    past-founders eval has 155 cases and needs roughly seven times that to steer anything.
 8. Hosting and login, before anyone but you opens the dashboard.
-9. What counts as a company that did well. Today: publicly listed, on its programme's list of top companies, or still operating with at least 100 people. A labels file overrides it.
-10. Which model judges past cases (`EVAL_JUDGE`), and how much autopilot may spend on evals each day (zero today, so it only suggests).
-11. Accepted 2026-11-13: use DeepSeek Flash and Muse Ember through OpenCode for scouts,
-    screening and runners. Direct API routes take precedence when configured. The default scout
-    and screener shares are 50% ordinary route and 25% per cheap model; runner shares split equally.
-    Never use Meta's contributor tier for anything but public material and fund instructions.
+9. What counts as a company that did well. Today: publicly listed, on its programme's list of top
+   companies, or still operating with at least 100 people. A labels file overrides it.
+10. Which model judges past cases (`EVAL_JUDGE`), and how much autopilot may spend on evals each
+    day (zero today, so it only suggests).
+11. Accepted 2026-11-13, and run that day: DeepSeek Flash and Muse Ember through OpenCode for
+    scouts, screening and runners, on Meta's standard tier. Direct API routes take precedence when
+    configured. The default scout and screener shares are 50% ordinary route and 25% for each
+    cheap model; runner shares split equally. Meta's contributor tier is never a default, and
+    choosing it sends the thesis and steering text to Meta.
 12. Accepted 2026-11-13: Linkup is the preferred search service, conditional on its written answer
-    that keeping queued result addresses is permitted under article 4.1. Still open: that answer,
-    the reader name and contact address in `HUNT_USER_AGENT`. Seed remains the latest stage by
-    default; any direct DeepSeek API requires a separately approved host.
-13. Which sites to add to the list the hunt does not read. The list holds the ones whose terms were read; a trail will reach others.
+    that keeping queued result addresses is permitted under article 4.1. Until there is a key,
+    general web search runs through the model provider's own search tool. Still open: that answer
+    and the key. Seed remains the latest stage by default; any direct DeepSeek API requires a
+    separately approved host.
+13. The reader's name and contact address in `HUNT_USER_AGENT`. It is not set, because a contact
+    address is yours to choose. A form that works: `<FundName>Scout/1.0 (+https://<fund
+    site>/bot; <a role address>)`, with a page at that address saying what the reader does and how
+    to ask it to stop.
+14. Which sites to add to the list the hunt does not read. The list holds the ones whose terms were
+    read; a trail will reach others.
+15. Who else is given access to the code. It is in a private GitHub repository, created
+    2026-11-13, on branch `v0-next`.

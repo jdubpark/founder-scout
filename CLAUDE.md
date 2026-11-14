@@ -24,9 +24,10 @@ pnpm exec vitest run packages/core/src/engine   # one area
 pnpm dev                                     # API on 4317, dashboard on 5317
 pnpm swarm run --days 3                      # simulated runs from the command line; each prints what its hunt read and found
 pnpm swarm past collect --from 2018-01-01 --to 2021-01-01 --yc --unicorns   # build the past-companies dataset
+pnpm swarm past import --file deals.csv                                      # merge the fund's labelled deal history
 pnpm swarm eval rounds --flow past-founders --rounds 0 --budget 3          # measure it; this calls models
 pnpm swarm eval rounds --flow hunt-yield --rounds 2                        # tune the hunt on simulated web
-pnpm swarm mcp --swarm SWARM_ID                                             # stdio MCP server for an outside navigator
+pnpm --silent swarm mcp --swarm SWARM_ID                                    # stdio MCP server for an outside navigator; --silent keeps pnpm's banner off the protocol
 ```
 
 Package scripts call `../../node_modules/.bin/tsc` and `../../node_modules/.bin/tsx` on purpose: a
@@ -41,13 +42,16 @@ check it. `packages/core/src/rules.test.ts` enforces that, so add the test with 
 - **Models judge, code decides.** A model never returns a score or a decision. It answers rubric
   questions; `packages/shared/src/scoring.ts` does the rest. Tests: `packages/core/src/rules.test.ts`,
   `packages/shared/src/scoring.test.ts`.
-- **Outreach stays proposed; only a person's action can place an approved call.** The call action
-  records the caller's statement that the person agreed, requires an E.164 number, local time from
-  09:00 to 20:00, the stop switch off, and fewer than five placements on the UTC date. It stores
-  only the number's last two digits. Generated instructions limit the call to its approved agenda,
-  tell it to end on a stop request, and pass a 15-minute limit to the dialler. The disclosure on
-  the draft is written by code. The live dialler slot is empty, so no real call can be placed.
-  Tests: `packages/core/src/engine/index.test.ts`, `packages/core/src/service/index.test.ts`.
+- **Outreach stays proposed; only a person's action can place an approved call.** Nothing in a run
+  sends or dials, and the disclosure on a draft is written by code and cannot be edited. Placing a
+  call records how the person agreed and needs the fund's name and E.164 callback number, an E.164
+  destination, local time from 09:00 to 19:59, the stop switch off, and fewer than five placements
+  on the UTC date. The consent and a placement mark are saved before dialling; a placement whose
+  result is uncertain is failed for a person to check and is never dialled again. Only the last
+  two digits of the number are stored, and stored call text has phone numbers removed. Generated
+  instructions keep the call to its approved agenda, end it on a stop request, and pass a
+  15-minute limit to the dialler. Tests: `packages/core/src/engine/index.test.ts`,
+  `packages/core/src/service/index.test.ts`, `packages/core/src/sources/dialler-vapi.test.ts`.
 - **Nothing requests the professional network's own site.** No adapter, no fetching, no logged-in
   automation, for linkedin.com and the other hosts in `packages/shared/src/policy.ts`. A link to one
   is a pointer for a person to open. Profile data comes from a data vendor under contract, from a
@@ -55,8 +59,10 @@ check it. `packages/core/src/rules.test.ts` enforces that, so add the test with 
   `packages/core/src/sources/http.test.ts`, `packages/core/src/sources/quote-check.test.ts`,
   `packages/core/src/providers/claude-cli.test.ts`.
 - **Never store or score personal attributes** (`PROHIBITED_ATTRIBUTES` in `rubric.ts`). Trajectory
-  is judged against years of experience, never age. Tests: `packages/core/src/jobs/index.test.ts`,
-  `packages/core/src/service/index.test.ts`.
+  is judged against years of experience, never age. The text check is phrase based: it removes an
+  explicit statement whoever its subject is (a name, a pronoun, "I"), and a phone number or an
+  email address only where the text calls it personal. It does not catch hints. Tests:
+  `packages/core/src/jobs/index.test.ts`, `packages/core/src/service/index.test.ts`.
 - **A quote must be on the page it cites.** Research prompts ask for the source's exact words, and
   before the fact-checker runs, code opens each cited page and rejects an item whose words are not
   there. The check refuses private network addresses, because the address comes from a model.
@@ -78,9 +84,13 @@ check it. `packages/core/src/rules.test.ts` enforces that, so add the test with 
   for professional fields and has its own ceiling on records per day. Test:
   `packages/core/src/sources/pdl.test.ts`.
 - **Headless agents do not inherit unrelated secrets or user instructions.** Claude and Codex get
-  only required environment keys; OpenCode runs a generated tool-free agent in a temporary
-  directory with an empty config directory. Tests: `packages/core/src/providers/env.test.ts`,
-  `packages/core/src/providers/opencode-cli.test.ts`.
+  only required environment keys. OpenCode runs a generated tool-free agent in a temporary
+  directory with an empty config directory. It is ready only with a saved login, and each call
+  gets a data folder of its own holding only a link to that login, removed afterwards, so nothing
+  is added to the person's OpenCode history. The process runner sets a child's `PWD` to the
+  directory it runs in. Tests: `packages/core/src/providers/env.test.ts`,
+  `packages/core/src/providers/opencode-cli.test.ts`,
+  `packages/core/src/providers/subprocess.test.ts`.
 - **Simulator fields stay out of prompts.** `simId`, `simFounderId`, `sim` and hidden hunt truth
   exist for checks after a job, not as model input. Tests: `packages/core/src/jobs/index.test.ts`,
   `packages/core/src/engine/index.test.ts`, `packages/core/src/service/hunt-trial.test.ts`.
@@ -94,10 +104,15 @@ check it. `packages/core/src/rules.test.ts` enforces that, so add the test with 
   beyond the noise floor with no guardrail worse, or no loss at all with a guardrail clearly better.
   The synthetic flow's headline is rank correlation with hidden true quality, on purpose: outcomes
   in the simulated world are too noisy to steer by. Test: `packages/core/src/eval/index.test.ts`.
-- **The hunt yield eval compares fixed simulated worlds only.** Eight train worlds propose changes;
-  eight held-out worlds decide them, with wave size and navigator turns held fixed. The headline is
-  strong early founders kept; late-stage finds, planted-page failures and runner calls are guards.
-  Tests: `packages/core/src/eval/index.test.ts`, `packages/core/src/service/hunt-trial.test.ts`.
+- **The hunt yield eval counts distinct strong early founders found per simulated world.** Eight
+  train worlds propose a change and eight held-out worlds decide it, each candidate compared with
+  the current config world by world. A candidate that changes `hunt.turns` or `hunt.wave_size` is
+  reverted unmeasured, so every variant has the same allowance of calls. The headline is a count
+  and not a rate for each call, because a rate rewards reading less. Late or weak finds and
+  planted-page failures are guards; calls, the per-call rate and the fit-kept count are reported
+  only. A trial whose run failed, was cancelled or hit its spend cap is an error, never a low
+  score, and saved state from an older definition of the eval is set aside. Tests:
+  `packages/core/src/eval/hunt.test.ts`, `packages/core/src/service/hunt-trial.test.ts`.
 - **On past companies, the latest periods choose nothing.** A change is proposed on the earliest
   periods, chosen on middle periods held back from tuning, and only reported on the latest. The
   noise floor is the larger of the judge's own spread and a bootstrap over which cases were drawn.
@@ -131,12 +146,13 @@ check it. `packages/core/src/rules.test.ts` enforces that, so add the test with 
   `packages/shared/src/context.test.ts`, `packages/shared/src/skills.test.ts`,
   `packages/core/src/service/pools.test.ts`.
 - **Code picks the pool member, and share moves only on checks the member did not make about
-  itself.** Supported items for each dollar, planted claims accepted, tasks failed. When both are
-  ready, scout and screener defaults split 50% to their ordinary route and 25% to each cheap model;
-  direct APIs take precedence over OpenCode, and a configured pool or pinned route takes precedence
-  over defaults. Tests:
-  `packages/shared/src/pools.test.ts`, `packages/core/src/service/pools.test.ts`,
-  `packages/core/src/db/store.test.ts`, `packages/core/src/engine/index.test.ts`.
+  itself.** Supported items for each dollar, planted claims accepted, tasks failed. When both cheap
+  models are ready, scout and screener defaults split 50% to their ordinary route and 25% to each;
+  direct APIs take precedence over OpenCode, and a configured pool or pinned route takes
+  precedence over defaults. A member whose calls fail twice in a row for a provider reason is
+  left out for the rest of that run. Tests: `packages/shared/src/pools.test.ts`,
+  `packages/core/src/service/pools.test.ts`, `packages/core/src/db/store.test.ts`,
+  `packages/core/src/engine/index.test.ts`, `packages/core/src/engine/hunt.test.ts`.
 - **Code marks an assumption supported, never a model, and never from the latest periods.** The
   ledger in `packages/shared/src/assumptions.ts` tests each statement on past companies from the
   tuning periods and on the partner's calls, and keeps the two apart. Tests:
@@ -145,7 +161,10 @@ check it. `packages/core/src/rules.test.ts` enforces that, so add the test with 
   memory is a notebook in the database. It is shown counts and labels of a few words, never a
   page. Its turn is a request that `checkTurn` checks, and it cannot write guidance for the
   analysts or change a weight. An outside MCP agent receives the same bounded view and its turns
-  pass through the same checks. Tests: `packages/shared/src/hunt.test.ts`,
+  pass through the same checks; the built-in navigator takes the seat back when the outside agent
+  has gone quiet. Saying `done` ends the steering for that run while queued runner work goes on,
+  and a hunt-only run gives the hunt at least 90% of the run's cap. Tests:
+  `packages/shared/src/hunt.test.ts`,
   `packages/core/src/engine/hunt.test.ts`, `packages/core/src/service/index.test.ts`,
   `packages/shared/src/context.test.ts`.
 - **A runner cannot add a person or an address.** A person is kept only when the name and the
@@ -161,12 +180,17 @@ check it. `packages/core/src/rules.test.ts` enforces that, so add the test with 
   are spaced, there is no login and no cookie, a refusal is final, an address must be a named
   public host, and the sites in `TERMS_BARRED_HOSTS` are not read even where robots.txt allows.
   This includes YouTube, Vimeo and Spotify media hosts. Add a site to that list with the sentence
-  that bars it. Tests:
+  that bars it. A robots.txt answered with 401, 403 or 429, or one too large to read in full
+  (512 KiB), means the site is not read; a missing one means no rules. The reader names itself
+  with `HUNT_USER_AGENT`. Tests:
   `packages/core/src/sources/web.test.ts`, `packages/shared/src/policy.test.ts`,
   `packages/shared/src/hunt.test.ts`.
-- **A recording fetch must be a permitted direct audio or video file.** Code refuses barred or
-  private hosts, player pages, robots.txt refusals, unsafe redirects and files over the size limit.
-  Test: `packages/core/src/sources/media.test.ts`.
+- **A recording fetch must be a permitted direct audio or video file.** It goes through the page
+  reader's own checks under the reader's name (`HUNT_USER_AGENT`), and refuses barred or private
+  hosts, player pages, robots.txt refusals, unsafe redirects and files over the size limit. Its
+  length is found before transcribing, or bounded from its size at 6 kbit/s when it cannot be
+  measured, and a recording that does not fit the run's allowance is refused. Tests:
+  `packages/core/src/sources/media.test.ts`, `packages/core/src/engine/index.test.ts`.
 - **A transcript quote must be present in the time-coded stretch.** Code drops unsupported words,
   keeps the recording time in the evidence address, and marks the quote found before fact-checking.
   Test: `packages/core/src/engine/index.test.ts`.
@@ -176,8 +200,10 @@ check it. `packages/core/src/rules.test.ts` enforces that, so add the test with 
 - **Linkup search observes its separate per-day ceiling and the no-read list.** A missing key or
   failed response yields no hits; the ceiling is held in memory and resets with the server.
   Test: `packages/core/src/sources/search-linkup.test.ts`.
-- **Completed simulated calls become redacted, labelled evidence only when recording was chosen.**
-  The completed call item is synced; it is not retried as a new call. Test:
+- **Completed calls become redacted evidence only when recording was chosen.** A simulated call's
+  evidence is labelled simulated. The completed call item is synced; it is not retried as a new
+  call. The Vapi adapter has a fake-client test only and has never placed a real call. Tests:
+  `packages/core/src/sources/dialler-vapi.test.ts`,
   `packages/core/src/service/index.test.ts`.
 - **A hunt skill applies only to matching jobs or classes and matching task material.** Code picks
   at most three by priority then id, within the prompt budget; `skills.off` removes an id at its
@@ -197,6 +223,19 @@ check it. `packages/core/src/rules.test.ts` enforces that, so add the test with 
   address. The runner pool can use DeepSeek Flash and Muse Ember through OpenCode or their direct
   APIs, and only includes ready routes. Tests: `packages/core/src/providers/openai-compatible.test.ts`,
   `packages/shared/src/pools.test.ts`, `packages/core/src/service/pools.test.ts`.
+- **A model whose vendor trains on what it is sent is allowed only for a job whose inputs are
+  public pages or feeds and the fund's own words.** `mayUseContributorModel` decides from the
+  job's input pools alone. Scouts, the navigator and the runners may use one; the fit screener may
+  not, because a lead can come from a contact list or a typed note; nothing that reads a founder's
+  or a company's file, a transcript or a contact list may. A task sent to such a model is not
+  shown the partners' calls. Choosing one is a person's act, never a default. Tests:
+  `packages/shared/src/context.test.ts`, `packages/shared/src/steering.test.ts`,
+  `packages/core/src/engine/index.test.ts`.
+- **The fund's own deal history never reaches a model that trains on what it is sent, and an
+  unknown outcome is left out.** An `EVAL_JUDGE` naming such a model is refused at start, and
+  inside the eval such a route falls back to the job's default. The importer never quotes a cell
+  in its reason for refusing a row. Tests: `apps/server/src/config.test.ts`,
+  `packages/core/src/eval/past.test.ts`, `packages/core/src/sources/deals.test.ts`.
 - **The server has no login.** It binds to loopback and rejects other Host names and other sites'
   Origins (`apps/server/src/app.ts`); the MCP process forwards only to this local API. Keep both
   checks until there is a login. Tests: `apps/server/src/app.test.ts`, `apps/server/src/mcp.test.ts`.
@@ -211,9 +250,14 @@ check it. `packages/core/src/rules.test.ts` enforces that, so add the test with 
   Tests: `packages/core/src/jobs/index.test.ts`, `packages/core/src/providers/codex-cli.test.ts`.
 - **Dashboard:** follow `apps/web/BUILDING.md` and `DESIGN.md`. Light, simple, only necessary text, desktop only.
   `PageHeader` ignores `description` on purpose. (Judgment.)
+- **Tests stay few.** One proof for each contract at the strongest boundary, a regression test for
+  each defect a review or a live run found, and no test of a wrapper, a copied list or a value the
+  code itself produced. A kept test must be able to fail. (Judgment.)
 
 ## Testing reality
 
 Simulation covers the engine, service, evals and dashboard end to end. Live coverage is opt-in:
 `LIVE_SOURCES=1` and `LIVE_PROVIDERS=1`. The direct Claude API and OpenAI-compatible adapters have
-only fake-client tests, so say "unverified against a live service" rather than implying otherwise.
+only fake-client tests, and so do the Linkup, Vapi, People Data Labs and HTTP transcriber adapters,
+so say "unverified against a live service" rather than implying otherwise. DeepSeek Flash and Muse
+Ember have run only through OpenCode's saved logins.
