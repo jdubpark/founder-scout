@@ -27,6 +27,12 @@ const HEADLINE = "strong_early_found";
 /** Days in one trial, and what a simulated trial may pretend to spend: enough that the settings, not the money, decide what it reads. */
 const TRIAL_DAYS = 3;
 const SIM_TRIAL_BUDGET_USD = 40 * TRIAL_DAYS;
+/**
+ * The least a live baseline may be given: a dollar for each world. One day of one world is
+ * about four navigator turns and up to forty-eight runner calls, which cost about $0.25 to
+ * $0.30 on the default models when measured on 2026-11-13.
+ */
+const LIVE_BASELINE_MIN_USD = SEEDS.length;
 const round3 = (value: number) => Math.round(value * 1000) / 1000;
 const avg = (values: number[]) => values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : 0;
 const clone = <T>(value: T): T => JSON.parse(JSON.stringify(value)) as T;
@@ -221,6 +227,9 @@ export function createHuntEval(deps: EvalDeps, options: HuntEvalOptions) {
       const rounds = Math.max(0, Math.floor(input.rounds ?? 1));
       if (brain === "live" && rounds > 0) throw new ServiceError(409, "Automatic eval rounds on real models need a spending approval step that does not exist yet. Run a baseline without automatic rounds to measure it.");
       const budgetUsd = input.budgetUsd ?? 3;
+      if (brain === "live" && budgetUsd < LIVE_BASELINE_MIN_USD) {
+        throw new ServiceError(409, "A live baseline has real models read " + SEEDS.length + " simulated worlds for " + TRIAL_DAYS + " days each. Give it a budget of at least " + LIVE_BASELINE_MIN_USD + " dollars. With less the hunts would be cut short, and the result would say nothing.");
+      }
       return serializeEvalFlow(lockKey, async () => {
         await mkdir(root, { recursive: true });
         let state = await getState();

@@ -49,6 +49,9 @@ const PAGES_PER_HOST_PER_WAVE = 3;
 /** Results asked of a search engine for one search. A runner sifts them by number. */
 const SEARCH_RESULTS = 10;
 
+/** The least of a hunt-only run's spend cap that the hunt itself may use. */
+const HUNT_ONLY_SHARE = 0.9;
+
 const ZERO_STATS: TrailStats = { searches: 0, pages: 0, leads: 0, kept: 0, dropped: 0, tooLate: 0, blocked: 0, costUsd: 0 };
 
 /** What a change to the notebook needs: where it is kept, the time, and who is asking. */
@@ -349,7 +352,9 @@ export async function runHunt(runtime: EngineRuntime, simIdsByLead: Map<string, 
   const waveSize = Math.max(0, Math.floor(numberParam("hunt.wave_size", runtime.resolve(looker, "hunt.wave_size"), runtime.config)));
   const maxDepth = Math.max(0, Math.floor(numberParam("hunt.max_depth", runtime.resolve(looker, "hunt.max_depth"), runtime.config)));
   const plantedEvery = Math.max(1, Math.floor(numberParam("hunt.planted_every", runtime.resolve(looker, "hunt.planted_every"), runtime.config)));
-  const budgetShare = Math.max(0, numberParam("hunt.budget_share", settings, runtime.config));
+  // The share keeps money back for looking closely at the people found. A hunt-only run has
+  // nothing after the hunt to pay for but the fit screen, so there the hunt may spend most of it.
+  const budgetShare = Math.max(runtime.run.scope === "hunt" ? HUNT_ONLY_SHARE : 0, numberParam("hunt.budget_share", settings, runtime.config));
   const maxSpend = runtime.run.budgetUsd * budgetShare;
   const latestStage = resolvedLatestStage(runtime);
   const engineStatuses = await Promise.all(webAccess.engines.map(async (engine) => {
