@@ -223,7 +223,8 @@ into the same dataset with `pnpm swarm past import --file deals.csv`. The CSV us
 `founders` and `decision`. Month-only dates use the first day of the month. Unknown outcomes are
 left out, and the summary should contain only evidence known on the `seen` date. See
 [`docs/examples/deals.example.csv`](docs/examples/deals.example.csv). Use `--bar "<text>"` to
-state what counts as a positive outcome.
+state what counts as a positive outcome. A relative `--file` or `--labels` path is read from the
+directory you type the command in.
 
 `EVAL_JUDGE` names the model that judges the cases. Without it the analysts' own model is used,
 which costs tens of dollars for a few hundred cases; a small model costs a few. `--rounds 0`
@@ -293,9 +294,9 @@ LIVE_PROVIDERS=1 pnpm exec vitest run packages/core/src/providers # real Claude 
 Tests stay few: one proof for each contract at the strongest boundary, and a regression test for
 every defect a review or a live run found. There are no tests of a wrapper, a copied list or a
 value the code itself produced, and a kept test must be able to fail when its contract breaks. On
-2026-11-13 the suite was cut from 1,209 tests to 988 (13 of them run only with the live flags
-above). Each test removed had a stronger proof left standing, and the kept tests were checked by
-breaking the code on purpose and seeing them fail.
+2026-11-13 the suite was cut from 1,209 tests to under a thousand (13 of them run only with the
+live flags above). Each test removed had a stronger proof left standing, and the kept tests were
+checked by breaking the code on purpose and seeing them fail.
 
 ## Layout
 

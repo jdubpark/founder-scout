@@ -212,6 +212,15 @@ function datasetsDirectory(env: NodeJS.ProcessEnv): string {
   return resolveConfig(env).datasetsDir;
 }
 
+/**
+ * A file a person names on the command line. `pnpm swarm` starts this file inside apps/server,
+ * so a relative path is read against the directory the person typed the command in, which pnpm
+ * passes as INIT_CWD, and not against the directory this process happens to run in.
+ */
+function typedPath(path: string, env: NodeJS.ProcessEnv): string {
+  return isAbsolute(path) ? path : resolve(env.INIT_CWD?.trim() || process.cwd(), path);
+}
+
 export async function pastShowCommand(datasetsDir: string, write: OutputWriter): Promise<void> {
   const cases = await readPastCases(datasetsDir);
   const summary = summarisePastCases(cases);
@@ -639,7 +648,7 @@ export async function runCliCommand(
         const { values } = parseArgs({ args: argv.slice(2), options: { file: { type: "string" }, bar: { type: "string" } }, strict: true });
         if (!values.file) throw new Error("past import requires --file <deals.csv>.");
         const existing = await readPastCases(datasetsDir);
-        const result = importDealsCsv(await readFile(values.file, "utf8"), { existing, bar: values.bar, redact: redactSensitive });
+        const result = importDealsCsv(await readFile(typedPath(values.file, env), "utf8"), { existing, bar: values.bar, redact: redactSensitive });
         await writePastCases(datasetsDir, result.cases);
         write(`Imported: ${result.imported}; updated: ${result.updated}; left out for no outcome: ${result.leftOutNoOutcome}; refused: ${result.refused.length}`);
         for (const row of result.refused) write(`Refused line ${row.line}: ${row.reason}`);
@@ -665,7 +674,7 @@ export async function runCliCommand(
       await pastCollectCommand({
         from: values.from,
         to: values.to,
-        labels: values.labels,
+        labels: values.labels === undefined ? undefined : typedPath(values.labels, env),
         unicorns: values.unicorns ?? false,
         yc: values.yc ?? false,
         minTeam: values["min-team"] === undefined ? undefined : positiveInteger(values["min-team"], "min-team", DEFAULT_MIN_TEAM),

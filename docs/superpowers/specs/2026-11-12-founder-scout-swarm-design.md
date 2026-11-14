@@ -534,7 +534,8 @@ uses only fields already sent to the job and never simulator state.
 
 **Tests are kept few.** One proof for each contract at its strongest boundary, a regression test
 for every defect a review or a live run found, and no test of a wrapper, a copied list or a value
-the code itself produced. On 2026-11-13 the suite went from 1,209 tests to 988 in six lanes. A
+the code itself produced. On 2026-11-13 the suite went from 1,209 tests to under a thousand in six
+lanes. A
 test was removed only when a stronger proof of the same contract was left standing, and each lane
 then broke the production code on purpose, more than a hundred times in all, to confirm the kept
 tests fail. That pass also turned up real defects, which were fixed and given tests: a robots.txt
