@@ -271,20 +271,28 @@ describe("createWebReader", () => {
     expect(requested).not.toContain("https://redirected.example.com/page");
   });
 
-  it("allows a robots 404 and blocks a robots 503", async () => {
+  it.each([
+    { name: "a missing robots.txt means there are no rules", robots: () => new Response("missing", { status: 404 }), status: "ok", detail: null },
+    { name: "a robots.txt the site refuses to show is a no", robots: () => new Response("", { status: 403 }), status: "blocked", detail: "This site refused its robots.txt, so nothing on it is read." },
+    { name: "a robots.txt answered with slow down is a no, with the pause the site asked for", robots: () => new Response("", { status: 429, headers: { "retry-after": "120" } }), status: "blocked", detail: "The site asked for a pause of 120 seconds." },
+    { name: "a robots.txt the server cannot serve is a no", robots: () => new Response("unavailable", { status: 503 }), status: "blocked", detail: "robots.txt does not allow it." },
+    {
+      // The one rule that says no comes after the part that is read.
+      name: "a robots.txt too large to read in full is a no",
+      robots: () => new Response("# padding\n".repeat(60_000) + "User-agent: *\nDisallow: /page\n", { headers: { "content-type": "text/plain" } }),
+      status: "blocked",
+      detail: "This site's robots.txt is too large to read in full, so nothing on it is read.",
+    },
+  ])("$name", async ({ robots, status, detail }) => {
     const requested: string[] = [];
     const reader = makeReader(async (url) => {
       requested.push(url);
-      if (url.startsWith("https://not-found.example.com/robots.txt")) return new Response("missing", { status: 404 });
-      if (url.startsWith("https://unavailable.example.com/robots.txt")) return new Response("unavailable", { status: 503 });
-      return html(longText);
+      return url.endsWith("/robots.txt") ? robots() : html(longText);
     });
-    await expect(reader.read("https://not-found.example.com/page")).resolves.toMatchObject({ status: "ok" });
-    await expect(reader.read("https://unavailable.example.com/page")).resolves.toMatchObject({
-      status: "blocked",
-      detail: "robots.txt does not allow it.",
-    });
-    expect(requested).not.toContain("https://unavailable.example.com/page");
+    const page = await reader.read("https://site.example.com/page");
+    expect(page.status).toBe(status);
+    if (detail !== null) expect(page.detail).toBe(detail);
+    expect(requested.includes("https://site.example.com/page")).toBe(status === "ok");
   });
 
   it("spaces requests by the default gap and raises it for Crawl-delay", async () => {

@@ -228,6 +228,17 @@ export function createWebReader(options: WebReaderOptions = {}): WebReader & Web
       return { allowed: false, blockedDetail: "robots.txt does not allow it.", rules: [], crawlDelayMs: 0 };
     }
     const status = result.response.status;
+    // A site that answers its robots.txt with "not allowed" or "slow down" has not said yes.
+    // RFC 9309 lets a reader take any 4xx as "no rules". That is right for a missing file and
+    // too generous for a refusal, so those three are read as a no.
+    if (status === 401 || status === 403 || status === 429) {
+      return {
+        allowed: false,
+        blockedDetail: (status === 429 ? retryAfterDetail(result.response, now()) : null) ?? "This site refused its robots.txt, so nothing on it is read.",
+        rules: [],
+        crawlDelayMs: 0,
+      };
+    }
     if (status >= 400 && status < 500) {
       return { allowed: true, blockedDetail: "robots.txt does not allow it.", rules: [], crawlDelayMs: 0 };
     }
@@ -238,6 +249,10 @@ export function createWebReader(options: WebReaderOptions = {}): WebReader & Web
         rules: [],
         crawlDelayMs: 0,
       };
+    }
+    // Rules past the size limit were not read, and one of them may be the rule that says no.
+    if (result.truncated) {
+      return { allowed: false, blockedDetail: "This site's robots.txt is too large to read in full, so nothing on it is read.", rules: [], crawlDelayMs: 0 };
     }
     return parseRobots(result.body ?? "", productToken);
   }
