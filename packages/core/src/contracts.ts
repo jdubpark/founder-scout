@@ -393,8 +393,6 @@ export interface SimWorld {
   search(engine: string, query: string, day: number, limit: number): SearchHit[];
   /** The search engines the simulated web has: the same ids as the live ones. */
   engines(): Array<{ id: string; label: string; searches: string }>;
-  /** @deprecated Eval metrics use all found founders and their hidden truth instead. */
-  strongEarlyFounders(day: number): SimFounder[];
 }
 
 export interface Dialler {
@@ -893,10 +891,8 @@ export interface HuntTrialInput {
 export interface HuntTrialPerson {
   simFounderId: string;
   quality: number;
-  /** Hidden true company stage, read from the simulated founder/company. */
-  stage?: string;
-  /** @deprecated Kept for old in-process trial stubs; real trials always return stage. */
-  early?: boolean;
+  /** Hidden true company stage, read from the simulated founder or company. */
+  stage: string;
 }
 
 export interface HuntTrialModelStats {
@@ -909,19 +905,14 @@ export interface HuntTrialModelStats {
 
 export interface HuntTrialResult {
   /** Distinct founders reported by a runner after the page check, before fit screening. */
-  found?: HuntTrialPerson[];
+  found: HuntTrialPerson[];
+  /** Of those, the ones the fit screener then kept. Reported, not scored: the screener is another agent. */
   kept: HuntTrialPerson[];
-  /** @deprecated Legacy fields accepted for older trial stubs; eval metrics do not use them. */
-  strongEarlyAvailable?: number;
-  /** @deprecated Legacy fields accepted for older trial stubs; eval metrics do not use them. */
-  strongEarlyFounderIds?: string[];
   runnerCalls: number;
   pages: number;
   searches: number;
   plantedRead: number;
   plantedFailed: number;
-  /** @deprecated Legacy field accepted for older trial stubs; eval metrics do not use it. */
-  lateKept?: number;
   costUsd: number;
   unpricedCalls: number;
   models: Record<string, HuntTrialModelStats>;

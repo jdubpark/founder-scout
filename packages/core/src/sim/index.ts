@@ -1070,7 +1070,6 @@ export function createSimWorld(options: { seed?: number; founders?: number; days
     page: web.page,
     search: web.search,
     engines: web.engines,
-    strongEarlyFounders: web.strongEarlyFounders,
     companyEvidenceFor,
     repos: (simId) => repos(simId).map(copyRepo),
     transcript: (simId: string, kind: OutreachKind, targetName: string) => {

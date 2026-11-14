@@ -402,7 +402,6 @@ function context(overrides: Partial<JobContext> = {}): JobContext {
     } : null,
     search: () => [],
     engines: () => [],
-    strongEarlyFounders: () => [],
   };
   return {
     swarm: {

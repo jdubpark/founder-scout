@@ -59,11 +59,9 @@ function latestStageRank(config: SwarmConfig): number {
   return stageRank(String(config.params["hunt.latest_stage"] ?? "seed"));
 }
 function caseMetrics(result: HuntTrialResult, config: SwarmConfig): Metrics {
-  // Legacy stubs may omit found; production trials always provide it. The compatibility path
-  // keeps existing eval-service tests working while new trial results measure before screening.
-  const people = result.found ?? result.kept;
+  const people = result.found;
   const unique = [...new Map(people.map((person) => [person.simFounderId, person])).values()];
-  const isEarly = (person: typeof unique[number]) => stageRank(person.stage ?? (person.early ? "seed" : "series a")) <= 1;
+  const isEarly = (person: typeof unique[number]) => stageRank(person.stage) <= 1;
   const strongEarly = unique.filter((person) => person.quality >= 0.6 && isEarly(person)).length;
   const calls = result.runnerCalls;
   const per100 = calls > 0 ? (strongEarly / calls) * 100 : 0;
@@ -71,7 +69,7 @@ function caseMetrics(result: HuntTrialResult, config: SwarmConfig): Metrics {
   return {
     strong_early_found: strongEarly,
     strong_early_per_100_calls: per100,
-    late_found: unique.length ? unique.filter((person) => stageRank(person.stage ?? (person.early ? "seed" : "series a")) > latest).length / unique.length : 0,
+    late_found: unique.length ? unique.filter((person) => stageRank(person.stage) > latest).length / unique.length : 0,
     weak_found: unique.length ? unique.filter((person) => person.quality < 0.4).length / unique.length : 0,
     planted_failed: result.plantedRead ? result.plantedFailed / result.plantedRead : 0,
     calls,
