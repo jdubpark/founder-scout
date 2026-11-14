@@ -64,6 +64,30 @@ code are right.
     industry and round chips and the tagline under it), Moat, Status, Overall, Call.
 16. **Architecture page** is light only, as designed.
 
+## Fixes after the second independent review (same day)
+
+17. **The past-companies eval never sends a case to a model that trains on what it is sent.**
+    Since deal history can be imported, a case may hold the fund's own notes. An `EVAL_JUDGE`
+    that names such a model is refused when the server or the command line starts, and inside
+    the eval such a route falls back to the job's default route.
+18. **The hunt eval's saved state carries a version.** A state file from an older definition
+    of the eval is set aside and the flow starts from a fresh baseline, so results measured
+    under different definitions are never compared.
+19. **A candidate that changes how many calls a run may make** (`hunt.turns` or
+    `hunt.wave_size`) is reverted without being measured: the headline is fair only because
+    every variant has the same allowance.
+20. **A trial whose run failed, was cancelled or stopped at its spend cap is an error**, not a
+    low score. The candidate is recorded as incomplete, which the keep rule reverts.
+21. **A recording is fetched under the reader's own name** (`HUNT_USER_AGENT`), so a site's
+    robots.txt rules for that name apply to recordings as to pages. **A recording whose length
+    cannot be measured** is bounded from its file size at 6 kbit/s, the lowest speech is
+    encoded at; if that bound does not fit the allowance it is refused.
+22. **Two proofs that pruning had weakened were restored**: the default pools' members and
+    shares, and the rule that simulator fields stay out of prompts (its test could no longer
+    fail; it now can, and was checked by breaking the code on purpose).
+23. **The deal-history importer** never quotes a cell's content in the reason for refusing a
+    row, so a company's name cannot be printed for a refused row.
+
 ## The hunt eval (`hunt-yield`)
 
 - Headline: strong early founders found in one simulated world over three days (hidden quality
