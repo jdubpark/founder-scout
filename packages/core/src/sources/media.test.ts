@@ -28,17 +28,22 @@ describe("media fetch", () => {
     ]);
   });
 
-  it("applies robots wildcards and refuses a bare public IP before requesting it", async () => {
+  it("applies the page reader's robots rules, under the reader's own name, and refuses a bare public IP", async () => {
     const directory = await mkdtemp(join(tmpdir(), "agentswarm-media-"));
     try {
       const fetch = vi.fn(async (url: string) => {
         if (url === "https://pattern.example.com/robots.txt") {
           return new Response("User-agent: *\nDisallow: /*.mp3$", { status: 200, headers: { "content-type": "text/plain" } });
         }
+        if (url === "https://named.example.com/robots.txt") {
+          // Everyone may read this site except the reader by name: a recording is refused as a page would be.
+          return new Response("User-agent: FundScout\nDisallow: /\n\nUser-agent: *\nAllow: /", { status: 200, headers: { "content-type": "text/plain" } });
+        }
         if (url.endsWith("/robots.txt")) return new Response("User-agent: *\nAllow: /", { status: 200, headers: { "content-type": "text/plain" } });
         return new Response(new Uint8Array([1, 2, 3]), { status: 200, headers: { "content-type": "audio/mpeg" } });
       });
       const media = createMediaFetcher({
+        env: { HUNT_USER_AGENT: "FundScout/1.0 (+https://fund.example/bot)" },
         fetch,
         resolveHost: async () => ["93.184.216.34"],
         sleep: async () => undefined,
@@ -46,7 +51,8 @@ describe("media fetch", () => {
 
       expect(await media.fetch("https://pattern.example.com/private.mp3", directory)).toEqual({ refused: "robots.txt does not allow this recording." });
       expect(await media.fetch("https://93.184.216.34/audio.mp3", directory)).toEqual({ refused: expect.any(String) });
-      expect(fetch.mock.calls.map(([url]) => url)).toEqual(["https://pattern.example.com/robots.txt"]);
+      expect(await media.fetch("https://named.example.com/talk.mp3", directory)).toEqual({ refused: "robots.txt does not allow this recording." });
+      expect(fetch.mock.calls.map(([url]) => url)).toEqual(["https://pattern.example.com/robots.txt", "https://named.example.com/robots.txt"]);
     } finally {
       await rm(directory, { recursive: true, force: true });
     }

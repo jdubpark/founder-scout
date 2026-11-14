@@ -582,7 +582,10 @@ describe("run engine", () => {
     const directory = await mkdtemp(join(tmpdir(), "agentswarm-media-limit-"));
     try {
       const filePath = join(directory, "recording.media");
-      await writeFile(filePath, new Uint8Array(8 * 1024 * 1024));
+      // 100 kB whose length cannot be measured. At the lowest bitrate speech is encoded at it
+      // could run over two minutes, so it does not fit a one-minute allowance. (At a kinder
+      // guess of 16 kbit/s it would look like 50 seconds and be transcribed in full.)
+      await writeFile(filePath, new Uint8Array(100_000));
       const world = createSimWorld({ seed: 718, founders: 1, days: 2 });
       const founder = makeFounder(world.founders()[0]!, "fnd_media_limit");
       const recording: Recording = {

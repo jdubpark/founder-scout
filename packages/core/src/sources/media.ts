@@ -35,6 +35,9 @@ export function createMediaFetcher(options: MediaFetchOptions = {}) {
   const env = options.env ?? process.env;
   const fetchFn = options.fetch;
   const safety = createWebReader({
+    // The same name the page reader gives. A site's robots.txt may have rules for that name,
+    // and a recording must not be fetched where a page would be refused.
+    userAgent: env.HUNT_USER_AGENT,
     fetch: fetchFn,
     resolveHost: options.resolveHost ?? (async (host) => host === SIM_WEB_HOST
       ? ["93.184.216.34"]

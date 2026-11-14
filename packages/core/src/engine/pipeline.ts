@@ -74,6 +74,8 @@ type InvestigatorJobId = (typeof INVESTIGATOR_JOBS)[number];
 
 const NO_MODEL_PROVIDER = "sim";
 const NO_MODEL_NAME = "none";
+/** Bits a second below which recorded speech is not encoded. Bounds a recording's length from its size. */
+const LOWEST_SPEECH_BITRATE = 6_000;
 
 function isScoutJob(jobId: JobId): jobId is ScoutJobId {
   return (SCOUT_JOBS as readonly JobId[]).includes(jobId);
@@ -1028,9 +1030,10 @@ async function runMedia(runtime: EngineRuntime, assessmentCandidates: Set<string
         const fileInfo = await stat(filePath);
         const probed = await runtime.deps.media?.probeDuration?.(filePath, { signal: runtime.signal }) ?? null;
         if (probed === null) {
-          // At 16 kbit/s, even very compressed speech takes this many minutes; larger files
-          // cannot be proven to fit the allowance without a successful ffprobe result.
-          plannedSeconds = Math.ceil((fileInfo.size * 8) / 16_000);
+          // The length could not be measured, so it is bounded from the file's size: speech is not
+          // encoded below about 6 kbit/s, so a file of this size cannot run longer than this. A
+          // higher figure here would let a long, heavily compressed recording through.
+          plannedSeconds = Math.ceil((fileInfo.size * 8) / LOWEST_SPEECH_BITRATE);
           if (!Number.isFinite(plannedSeconds) || plannedSeconds <= 0 || plannedSeconds > remainingSeconds) {
             refuse("The recording length is unknown and it may exceed the run allowance.");
             continue;
