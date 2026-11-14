@@ -58,6 +58,11 @@ check it. `packages/core/src/rules.test.ts` enforces that, so add the test with 
   partner's own exported contact list, or not at all. Tests: `packages/shared/src/policy.test.ts`,
   `packages/core/src/sources/http.test.ts`, `packages/core/src/sources/quote-check.test.ts`,
   `packages/core/src/providers/claude-cli.test.ts`.
+- **Every founder waits for the partner's Yes / No, for now.** The swarm's own decision is a
+  suggestion until a person calls it, whatever the status: the partner asked for this on
+  2026-11-13 (`awaitsCall` in `packages/shared/src/feedback.ts` is the one place to narrow it). A
+  call keeps the status it replaced and the assessment then current, so an eval can later compare
+  the swarm with the partner. Test: `packages/core/src/service/index.test.ts`.
 - **Never store or score personal attributes** (`PROHIBITED_ATTRIBUTES` in `rubric.ts`). Trajectory
   is judged against years of experience, never age. The text check is phrase based: it removes an
   explicit statement whoever its subject is (a name, a pronoun, "I"), and a phone number or an

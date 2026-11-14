@@ -200,6 +200,7 @@ const founderQuerySchema = z
       .enum(["lead", "screened_out", "queued", "surfaced", "needs_evidence", "watch", "passed", "contacted", "meeting", "archived", "all"])
       .optional(),
     decision: z.enum(["surface", "needs_evidence", "watch", "pass"]).optional(),
+    call: z.enum(["waiting"]).optional(),
     q: z.string().optional(),
     sort: z.enum(["composite", "cracked", "fit", "recent"]).optional(),
     limit: queryInteger.optional(),

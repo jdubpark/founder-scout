@@ -45,6 +45,9 @@ team and the stated plans. A company analyst answers nine rubric questions and w
 code combines the company's score with its lead founder's into one decision. The Companies page
 ranks them and takes a Yes / No with reasons, separate from the call on the founder.
 
+The Founders page opens on every founder with no Yes / No yet, whatever the swarm decided about
+them: for now each call is made by hand, and each is kept with the swarm's own decision beside it.
+
 The Founders table has six columns: Founder, Company, Moat, Status, Overall and Call. Company shows
 industry and round chips, with its tagline below. Round uses the company's stage, then the founder's,
 then the latest sourced hunt stage. Taglines need an exact quote from the company's site; the moat

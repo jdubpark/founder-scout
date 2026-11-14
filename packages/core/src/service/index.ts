@@ -1,7 +1,7 @@
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
-  AGENT_CLASSES, BASE_CONFIG, JOBS, MODEL_JOB_IDS, SOURCES, STAGES, isContributorModel, mayUseContributorModel, runnerPools,
+  AGENT_CLASSES, BASE_CONFIG, JOBS, MODEL_JOB_IDS, SOURCES, STAGES, awaitsCall, isContributorModel, mayUseContributorModel, runnerPools,
   buildEffectiveSteering, coerceParam, effectiveRoute, getParamDef, isClassId, isCompanyReasonFor, isJobId, redactPhoneNumbers,
   isNeverFetchUrl, isReasonFor, newId, normalizeCompanyName, normalizeRoundLabel, normalizeScope, overlayConfig, paramsFor, scopeLabel, stageLabel,
   scopeLevel, stableId, suggestSteering, suggestionTextKey, summarizeCalls, swarmIdentity,
@@ -439,12 +439,13 @@ export function createSwarmService(deps: ServiceDeps): SwarmService {
     }), { date, leads: 0, screenedIn: 0, investigated: 0, surfaced: 0, costUsd: 0 }));
     const feedback = latestFeedback(swarm.id);
     const latestByFounder = new Map(feedback.map((item) => [item.founderId, item]));
-    const surfacedFounders = store.listFounders({ swarmId: swarm.id }).filter((founder) => store.latestAssessment(founder.id)?.decision === "surface");
+    const everyFounder = store.listFounders({ swarmId: swarm.id });
+    const surfacedFounders = everyFounder.filter((founder) => store.latestAssessment(founder.id)?.decision === "surface");
     const surfacedLatest = surfacedFounders.map((founder) => latestByFounder.get(founder.id)).filter((value): value is Feedback => Boolean(value));
     const calls = summarizeCalls(feedback, {
       called: surfacedLatest.length,
       yes: surfacedLatest.filter((item) => item.verdict === "yes").length,
-      waiting: surfacedFounders.length - surfacedLatest.length,
+      waiting: everyFounder.filter((founder) => awaitsCall({ status: founder.status, feedback: latestByFounder.get(founder.id)?.verdict ?? null })).length,
     });
     const rowsBySource = SOURCES.filter((source) => JOBS.some((job) => job.classId === "scout" && job.source === source.id));
     const leads = store.listLeads({ swarmId: swarm.id });
@@ -737,6 +738,7 @@ export function createSwarmService(deps: ServiceDeps): SwarmService {
         getSwarm(query.swarmId);
         const statuses = ["all", "lead", "screened_out", "queued", "surfaced", "needs_evidence", "watch", "passed", "contacted", "meeting", "archived"];
         if (query.status !== undefined && !statuses.includes(query.status)) fail(400, "Choose a valid founder status.", { status: "Choose a valid founder status." });
+        if (query.call !== undefined && query.call !== "waiting") fail(400, "Choose a valid call filter.", { call: "Choose a valid call filter." });
         const result = store.founderRows({ ...query, q: query.q?.trim() });
         return { ...result, rows: withCompanyIds(result.rows) };
       },
@@ -762,9 +764,13 @@ export function createSwarmService(deps: ServiceDeps): SwarmService {
         const timestamp = new Date(now().getTime());
         const prior = store.listFeedback(founderId).at(-1);
         if (prior && Date.parse(prior.createdAt) >= timestamp.getTime()) timestamp.setTime(Date.parse(prior.createdAt) + 1);
-        const feedback: Feedback = { id: newId("fbk"), founderId, author: actor, verdict: input.verdict, reasonTags, note: note || null, createdAt: iso(timestamp) };
+        // The call keeps what the swarm had decided, because the call itself changes the status.
+        const atCall = { status: founder.status, assessmentId: store.latestAssessment(founderId)?.id ?? null };
+        const feedback: Feedback = { id: newId("fbk"), founderId, author: actor, verdict: input.verdict, reasonTags, note: note || null, createdAt: iso(timestamp), atCall };
         store.insertFeedback(feedback);
-        const status = input.verdict === "no" ? "passed" : founder.status === "surfaced" ? "surfaced" : ["passed", "watch", "needs_evidence"].includes(founder.status) ? "surfaced" : founder.status;
+        // A yes on a founder the swarm had not looked into, or had screened out, sends them to be investigated in the next run.
+        const status = input.verdict === "no" ? "passed" : founder.status === "surfaced" ? "surfaced" : ["passed", "watch", "needs_evidence"].includes(founder.status) ? "surfaced"
+          : founder.status === "lead" || founder.status === "screened_out" ? "queued" : founder.status;
         if (status !== founder.status) store.updateFounder(founderId, { status, updatedAt: iso(now()) });
         audit(actor, "feedback.create", founderId, { verdict: feedback.verdict, reasonTags: feedback.reasonTags }); return feedback;
       },

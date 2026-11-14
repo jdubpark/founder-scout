@@ -2,6 +2,7 @@ import type Database from "better-sqlite3";
 import {
   DEFAULT_SETTINGS,
   ZERO_STATS,
+  awaitsCall,
   type Agent,
   type FounderListDTO,
   type FounderQuery,
@@ -600,10 +601,12 @@ export class SqliteStore implements Store {
         updatedAt: founder.updatedAt,
       };
     });
+    const waiting = rows.filter(awaitsCall).length;
     rows = rows.filter((row) => {
       if (query.status === undefined || query.status === "all") {
         if (row.status === "archived") return false;
       } else if (row.status !== query.status) return false;
+      if (query.call === "waiting" && !awaitsCall(row)) return false;
       if (query.decision !== undefined && row.decision !== query.decision) return false;
       if (query.q !== undefined && query.q.length > 0) {
         const term = query.q.toLowerCase();
@@ -620,7 +623,7 @@ export class SqliteStore implements Store {
     const total = rows.length;
     const limit = Math.min(500, Math.max(0, Math.floor(query.limit ?? 50)));
     const offset = Math.max(0, Math.floor(query.offset ?? 0));
-    return { rows: rows.slice(offset, offset + limit), total, counts };
+    return { rows: rows.slice(offset, offset + limit), total, counts, waiting };
   }
 
   insertCompany(company: Company): void {

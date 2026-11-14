@@ -13,7 +13,7 @@
  */
 
 import type { CreateDirectiveInput } from "./api";
-import type { Feedback, FeedbackVerdict } from "./domain";
+import type { Feedback, FeedbackVerdict, FounderStatus } from "./domain";
 import { getParamDef, weightKey } from "./params";
 import type { ClassId } from "./registry";
 import type { DimensionId } from "./rubric";
@@ -300,10 +300,20 @@ export function suggestSteering(feedback: readonly Feedback[], ctx: SuggestionCo
 /* Summary for the overview                                             */
 /* ------------------------------------------------------------------ */
 
+/**
+ * Whether a founder waits for the partner's Yes / No. For now that is every founder with no call,
+ * whatever the swarm decided about them: the partner asked on 2026-11-13 to make each call by
+ * hand, and to keep the calls for evals. The swarm's own decision is a suggestion until then.
+ * This is the one place to narrow it later, for example to the founders the swarm surfaced.
+ */
+export function awaitsCall(founder: { status: FounderStatus; feedback: FeedbackVerdict | null }): boolean {
+  return founder.feedback === null && founder.status !== "archived";
+}
+
 export interface CallsSummary {
   yes: number;
   no: number;
-  /** Surfaced founders nobody has called yet. */
+  /** Founders nobody has called yet (`awaitsCall`). */
   waiting: number;
   /** Of the surfaced founders a partner has called, the share that got a yes. null when none. */
   hitRate: number | null;
@@ -311,9 +321,13 @@ export interface CallsSummary {
   topReasons: Array<{ verdict: FeedbackVerdict; id: string; label: string; count: number }>;
 }
 
+/**
+ * `called` and `yes` count the founders the swarm surfaced, for the hit rate. `waiting` counts
+ * every founder with no call.
+ */
 export function summarizeCalls(
   feedback: readonly Feedback[],
-  surfaced: { called: number; yes: number; waiting: number },
+  counts: { called: number; yes: number; waiting: number },
 ): CallsSummary {
   const latest = [...latestCalls(feedback).values()];
   const tally = new Map<string, { verdict: FeedbackVerdict; id: string; count: number }>();
@@ -328,8 +342,8 @@ export function summarizeCalls(
   return {
     yes: latest.filter((f) => f.verdict === "yes").length,
     no: latest.filter((f) => f.verdict === "no").length,
-    waiting: surfaced.waiting,
-    hitRate: surfaced.called > 0 ? surfaced.yes / surfaced.called : null,
+    waiting: counts.waiting,
+    hitRate: counts.called > 0 ? counts.yes / counts.called : null,
     topReasons: [...tally.values()]
       .sort((a, b) => b.count - a.count || a.id.localeCompare(b.id))
       .slice(0, 6)

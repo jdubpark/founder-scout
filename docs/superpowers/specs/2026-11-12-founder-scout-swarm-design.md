@@ -160,6 +160,21 @@ A partner calls yes or no on a candidate and taps a reason. One call does four t
 3. **Suggests steering.** When three of the last twenty calls share a reason, a proposal appears with the count behind it ("3 of your last 12 calls said no: outside thesis. Raise the thesis-fit bar to 65"). A person accepts or dismisses it. Nothing applies itself. Calls made before a setting was last changed do not count toward changing it again, so accepting a proposal does not immediately produce the next step up.
 4. **Scores the swarm.** Every call is a label. A second eval flow asks whether the swarm ranks the partner's yeses above their noes, and tunes weights against it at no model cost.
 
+**Who waits for a call (changed 2026-11-13).** For now every founder does, not only the ones the
+swarm surfaced: the partner asked to make each call by hand until the swarm has earned trust. The
+status the swarm gave a founder (surfaced, passed, outside thesis and the rest) is shown as its
+suggestion, and the Founders page opens on everyone with no call yet. One function,
+`awaitsCall` in `packages/shared/src/feedback.ts`, decides who waits, for the list and for the
+count on Home; it is the place to narrow the queue again.
+
+Each call is stored with what the swarm had decided at that moment (`atCall`): the status the
+call replaced and the assessment then current. Without it a later eval could not tell that a
+founder the partner turned down had been screened out, because a no rewrites the status. A yes
+on a founder who was only a lead, or whom the screener dropped, queues them for investigation in
+the next run. A call on a founder with no assessment is kept, but the agreement eval cannot use
+it yet: it scores rubric answers, and that founder has none. An eval of the screener and of the
+surface decision against these calls is not built.
+
 ## 8. Models
 
 Facts and sources are in `docs/research/models-2026-11.md`; prices are list prices per million

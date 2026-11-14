@@ -282,6 +282,8 @@ export interface FounderQuery {
   swarmId: string;
   status?: FounderStatus | "all";
   decision?: Decision;
+  /** "waiting" keeps only the founders with no partner call yet. */
+  call?: "waiting";
   q?: string;
   sort?: FounderSort;
   limit?: number;
@@ -293,6 +295,8 @@ export interface FounderListDTO {
   total: number;
   /** Count per status, ignoring the status filter, for filter tabs. */
   counts: Partial<Record<FounderStatus, number>>;
+  /** Founders with no partner call yet, ignoring every filter. */
+  waiting: number;
 }
 
 export interface FounderDetailDTO {

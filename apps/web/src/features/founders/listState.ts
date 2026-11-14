@@ -12,7 +12,7 @@ export const SORT_OPTIONS: ReadonlyArray<{ value: FounderSort; label: string }> 
   { value: "recent", label: "Most recent" },
 ];
 
-/** A view of the list that is not a founder status: surfaced founders with no partner call yet. */
+/** A view of the list that is not a founder status: every founder with no partner call yet. */
 export const WAITING = "waiting" as const;
 
 export type StatusView = FounderStatus | "all" | typeof WAITING;

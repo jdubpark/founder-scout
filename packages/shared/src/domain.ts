@@ -497,6 +497,12 @@ export interface Feedback {
   /** Anything the partner typed. */
   note: string | null;
   createdAt: string;
+  /**
+   * What the swarm had decided when the call was made, so a later eval can compare the two: the
+   * founder's status just before the call, which the call may change, and the assessment that was
+   * current. Absent on calls recorded before 2026-11-13.
+   */
+  atCall?: { status: FounderStatus; assessmentId: string | null };
 }
 
 /* ----------------------------- Outreach ---------------------------- */

@@ -6,6 +6,7 @@ import {
   PARAM_DEFS,
   resolveSteering,
   suggestSteering,
+  awaitsCall,
   summarizeCalls,
   newId,
   cleanUrl,
@@ -275,7 +276,7 @@ export function createDemoClient(snapshot: DemoSnapshot, getActor: () => string)
     return summarizeCalls(allFeedback(swarmId), {
       called: called.length,
       yes: called.filter((r) => r.feedback === "yes").length,
-      waiting: rows.filter((r) => r.feedback === null && r.status === "surfaced").length,
+      waiting: founderRows(swarmId).filter(awaitsCall).length,
     });
   }
 
@@ -468,6 +469,7 @@ export function createDemoClient(snapshot: DemoSnapshot, getActor: () => string)
 
       let rows = all;
       if (query.status && query.status !== "all") rows = rows.filter((r) => r.status === query.status);
+      if (query.call === "waiting") rows = rows.filter(awaitsCall);
       if (query.decision) rows = rows.filter((r) => r.decision === query.decision);
       if (query.q?.trim()) {
         const q = query.q.trim().toLowerCase();
@@ -490,7 +492,7 @@ export function createDemoClient(snapshot: DemoSnapshot, getActor: () => string)
       });
       const offset = query.offset ?? 0;
       const limit = Math.min(query.limit ?? 50, 500);
-      return clone({ rows: rows.slice(offset, offset + limit), total: rows.length, counts });
+      return clone({ rows: rows.slice(offset, offset + limit), total: rows.length, counts, waiting: all.filter(awaitsCall).length });
     },
     async getFounder(id) {
       const detail = state.founderDetails[id];

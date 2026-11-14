@@ -753,13 +753,25 @@ describe("createSwarmService", () => {
     const { service, store } = createHarness();
     const swarm = await service.as("Partner").createSwarm({ name: "Calls", thesis });
     const founder = founderRecord(swarm.id, newId("fnd"), "watch"); store.insertFounder(founder);
+    const screenedOut = founderRecord(swarm.id, newId("fnd"), "screened_out"); store.insertFounder(screenedOut);
     const api = service.as("Decision Maker");
+    // The swarm surfaced neither founder, and both wait for a call until a person makes one.
+    const waitingIds = async () => (await api.listFounders({ swarmId: swarm.id, call: "waiting" })).rows.map((row) => row.id).sort();
+    expect(await waitingIds()).toEqual([founder.id, screenedOut.id].sort());
+    expect((await api.getOverview(swarm.id)).calls.waiting).toBe(2);
     await expectServiceError(api.addFeedback(founder.id, { verdict: "no" }), 400, "reasonTags");
     const no = await api.addFeedback(founder.id, { verdict: "no", reasonTags: ["builder", "outside_thesis"] });
     expect(no.reasonTags).toEqual(["outside_thesis"]);
+    // The call keeps the status it replaced, so an eval can later compare the swarm with the partner.
+    expect(store.listFeedback(founder.id)[0]?.atCall).toEqual({ status: "watch", assessmentId: null });
     expect(store.getFounder(founder.id)?.status).toBe("passed");
     await api.addFeedback(founder.id, { verdict: "yes", reasonTags: ["builder"] });
     expect(store.getFounder(founder.id)?.status).toBe("surfaced");
+    // A yes on a founder the screener dropped sends them to be investigated.
+    await api.addFeedback(screenedOut.id, { verdict: "yes", reasonTags: ["builder"] });
+    expect(store.getFounder(screenedOut.id)?.status).toBe("queued");
+    expect(await waitingIds()).toEqual([]);
+    expect((await api.getOverview(swarm.id)).calls.waiting).toBe(0);
     expect(Date.parse(store.listFeedback(founder.id)[1]?.createdAt ?? "")).toBeGreaterThan(Date.parse(store.listFeedback(founder.id)[0]?.createdAt ?? ""));
     const scout = store.listAgents(swarm.id).find((agent) => agent.jobId === "scout.github")!;
     expect((await api.getEffectiveSteering({ swarmId: swarm.id, agentId: scout.id })).callsBlock).toContain("YES: Vector Works");

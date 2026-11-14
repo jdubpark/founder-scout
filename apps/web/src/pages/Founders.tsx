@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { Search } from "lucide-react";
-import type { FounderSort, FounderStatus, FounderRow } from "@agentswarm/shared";
+import type { FounderSort, FounderStatus } from "@agentswarm/shared";
 import { Button } from "../components/ui/Button";
 import { Input, Segmented, Select, type SegmentedOption } from "../components/ui/Field";
 import { EmptyState, ErrorNote, PageHeader, SkeletonRows } from "../components/ui/layout";
@@ -19,8 +19,6 @@ import { useSwarm } from "../lib/swarm";
 const CORE_STATUSES: FounderStatus[] = ["surfaced", "needs_evidence", "watch", "passed", "screened_out"];
 const OTHER_STATUSES: FounderStatus[] = ["lead", "queued", "contacted", "meeting", "archived"];
 
-/** Enough to hold every surfaced founder on one page, so the waiting view needs no paging. */
-const WAITING_LIMIT = 200;
 /** Enough to count every scored founder against a bar that is being tried. */
 const PREVIEW_LIMIT = 500;
 
@@ -37,18 +35,13 @@ export default function FoundersPage() {
   const waiting = state.status === WAITING;
   const q = state.q.trim() || undefined;
 
-  // Surfaced founders, unpaged, for the "Waiting for your call" count and view.
-  const surfaced = useFounders(
+  // The waiting view is every founder with no call yet, whatever the swarm decided about them.
+  const list = useFounders(
     swarmId
-      ? { swarmId, status: "surfaced", q: waiting ? q : undefined, sort: state.sort, limit: WAITING_LIMIT, offset: 0 }
-      : null,
-  );
-
-  const paged = useFounders(
-    swarmId && !waiting
       ? {
           swarmId,
           status: state.status === WAITING ? "all" : state.status,
+          ...(waiting ? { call: "waiting" as const } : {}),
           q,
           sort: state.sort,
           limit: PAGE_SIZE,
@@ -57,18 +50,14 @@ export default function FoundersPage() {
       : null,
   );
 
-  // The counts for every filter come from the unfiltered list, so one query serves them.
-  const counts = (paged.data ?? surfaced.data)?.counts ?? {};
-  const waitingCount = (surfaced.data?.rows ?? []).filter((r) => r.feedback === null).length;
+  // The counts for every filter ignore the filters, so the one query serves them.
+  const counts = list.data?.counts ?? {};
+  const waitingCount = list.data?.waiting ?? 0;
   const total = Object.values(counts).reduce<number>((sum, n) => sum + (n ?? 0), 0);
 
-  // The waiting view is the surfaced founders with no call yet, shown without paging.
-  const waitingRows: FounderRow[] = surfaced.data?.rows.filter((r) => r.feedback === null) ?? [];
-  const data = waiting
-    ? surfaced.data && { rows: waitingRows, total: waitingRows.length, counts: surfaced.data.counts }
-    : paged.data;
-  const loading = waiting ? surfaced.isPending : paged.isPending;
-  const failure = waiting ? surfaced.error : paged.error;
+  const data = list.data;
+  const loading = list.isPending;
+  const failure = list.error;
 
   // The bar is a swarm setting, read from its steering. The table marks founders against the previewed bar.
   const [draft, setDraft] = useState<number | null>(null);
@@ -120,7 +109,7 @@ export default function FoundersPage() {
     })),
   ];
 
-  const offset = waiting ? 0 : (state.page - 1) * PAGE_SIZE;
+  const offset = (state.page - 1) * PAGE_SIZE;
   const rows = data?.rows ?? [];
   const pages = Math.max(1, Math.ceil((data?.total ?? 0) / PAGE_SIZE));
 
@@ -202,9 +191,9 @@ export default function FoundersPage() {
         ) : rows.length === 0 ? (
           total === 0 ? (
             <EmptyState title="No founders yet" action={<Link to="/" className="text-sm font-bold text-navy hover:underline">Overview</Link>} />
-          ) : waiting ? (
+          ) : waiting && waitingCount === 0 ? (
             <EmptyState
-              title="All surfaced founders have a call"
+              title="Every founder has your call"
               action={
                 <Button variant="secondary" size="sm" onClick={() => setFilters({ status: "all", page: 1 })}>
                   Show all founders
@@ -227,34 +216,32 @@ export default function FoundersPage() {
               <FounderTable rows={rows} threshold={threshold} wouldSurface={marks} />
             </TableScroll>
 
-            {!waiting ? (
-              <nav aria-label="Pages" className="flex items-center justify-between gap-3 border-t border-rule pt-3 text-sm">
-                <p className="figure text-ink-2">
-                  {`${count(offset + 1)}–${count(offset + rows.length)} of ${count(data.total)}`}
-                </p>
-                <div className="flex items-center gap-2">
-                  <Button
-                    variant="secondary"
-                    size="sm"
-                    disabled={state.page <= 1}
-                    onClick={() => setFilters({ page: state.page - 1 })}
-                    aria-label="Previous page"
-                  >
-                    Previous
-                  </Button>
-                  <span className="figure text-ink-2">{`${state.page} / ${pages}`}</span>
-                  <Button
-                    variant="secondary"
-                    size="sm"
-                    disabled={state.page >= pages}
-                    onClick={() => setFilters({ page: state.page + 1 })}
-                    aria-label="Next page"
-                  >
-                    Next
-                  </Button>
-                </div>
-              </nav>
-            ) : null}
+            <nav aria-label="Pages" className="flex items-center justify-between gap-3 border-t border-rule pt-3 text-sm">
+              <p className="figure text-ink-2">
+                {`${count(offset + 1)}–${count(offset + rows.length)} of ${count(data.total)}`}
+              </p>
+              <div className="flex items-center gap-2">
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  disabled={state.page <= 1}
+                  onClick={() => setFilters({ page: state.page - 1 })}
+                  aria-label="Previous page"
+                >
+                  Previous
+                </Button>
+                <span className="figure text-ink-2">{`${state.page} / ${pages}`}</span>
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  disabled={state.page >= pages}
+                  onClick={() => setFilters({ page: state.page + 1 })}
+                  aria-label="Next page"
+                >
+                  Next
+                </Button>
+              </div>
+            </nav>
           </>
         )}
       </div>
