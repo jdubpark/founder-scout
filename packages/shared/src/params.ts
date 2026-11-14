@@ -416,7 +416,7 @@ export const PARAM_DEFS: readonly ParamDef[] = [
     default: null,
     options: PROVIDER_IDS,
     group: "routing",
-    appliesTo: ["scout", "screener", "investigator", "verifier", "analyst", "outreach"],
+    appliesTo: ["navigator", "scout", "runner", "screener", "investigator", "company", "verifier", "analyst", "outreach"],
     tunable: true,
   },
   {
@@ -426,7 +426,7 @@ export const PARAM_DEFS: readonly ParamDef[] = [
     type: "string",
     default: null,
     group: "routing",
-    appliesTo: ["scout", "screener", "investigator", "verifier", "analyst", "outreach"],
+    appliesTo: ["navigator", "scout", "runner", "screener", "investigator", "company", "verifier", "analyst", "outreach"],
     tunable: true,
   },
   {
@@ -437,7 +437,7 @@ export const PARAM_DEFS: readonly ParamDef[] = [
     default: null,
     options: EFFORTS,
     group: "routing",
-    appliesTo: ["scout", "screener", "investigator", "verifier", "analyst", "outreach"],
+    appliesTo: ["navigator", "scout", "runner", "screener", "investigator", "company", "verifier", "analyst", "outreach"],
     tunable: true,
   },
   {
@@ -463,7 +463,7 @@ export const PARAM_DEFS: readonly ParamDef[] = [
     max: 100,
     step: 0.25,
     group: "budget",
-    appliesTo: ["scout", "screener", "investigator", "verifier", "analyst", "outreach"],
+    appliesTo: ["navigator", "scout", "runner", "screener", "investigator", "company", "verifier", "analyst", "outreach"],
     tunable: false,
   },
   {

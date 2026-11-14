@@ -889,4 +889,15 @@ describe("hunt engine stage", () => {
     expect(sifts.filter((task) => task.status === "succeeded").every((task) => task.model === "alive-model")).toBe(true);
     expect(store.listTasks({ runId: run.id }).some((task) => task.jobId === "hunt.look")).toBe(true);
   });
+
+  it("keeps reading what is queued after the navigator says it is done, without asking it again", async () => {
+    // Seen live: a navigator said done on its first turn while its trails still had searches waiting.
+    const { store, controller } = harness({ "hunt.turns": 3, "hunt.wave_size": 6, "hunt.budget_share": 0.5, "hunt.planted_every": 100 }, {
+      wrapExecuteJob: (delegate) => wrapJob(delegate, { navigate: (_input, output) => ({ ...output, done: true }) }),
+    });
+    const run = await controller.wait((await controller.start({ swarmId: SWARM_ID, trigger: "manual", scope: "hunt", brain: "sim", sources: "sim", budgetUsd: 40 })).id);
+    const tasks = store.listTasks({ runId: run.id });
+    expect(tasks.filter((task) => task.jobId === "hunt.navigate")).toHaveLength(1);
+    expect(tasks.filter((task) => task.jobId === "hunt.look").length).toBeGreaterThan(0);
+  });
 });

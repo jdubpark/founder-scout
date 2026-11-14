@@ -412,6 +412,7 @@ export async function runHunt(runtime: EngineRuntime, simIdsByLead: Map<string, 
   let ownSpend = 0;
   let failedTurns = 0;
   let lastWave: WaveDigest | null = hunt.lastWave ?? null;
+  let steeringOver = false;
   // People kept in this run, so the same person on two pages is one lead.
   const keptThisRun = new Set<string>();
   // Hosts that asked for a pause. They are left alone for the rest of the run, not just the wave.
@@ -487,7 +488,8 @@ export async function runHunt(runtime: EngineRuntime, simIdsByLead: Map<string, 
     let plan: TurnPlan = { open: [], extend: [], close: [], focus: [], notes: [], done: false, refused: [] };
     let openedOrExtended = false;
     // With an outside agent in the seat there is no model call here: this round is its wave.
-    if (!outside) {
+    // The same once the built-in navigator has said it is done: see `steeringOver` below.
+    if (!outside && !steeringOver) {
     const frontier = runtime.deps.store.listFrontier(hunt.id);
     trails = runtime.deps.store.listTrails(hunt.id);
     const notes = runtime.deps.store.listHuntNotes(hunt.id, 12);
@@ -861,7 +863,12 @@ export async function runHunt(runtime: EngineRuntime, simIdsByLead: Map<string, 
     // Kept on the notebook, so the next turn sees this wave: in a later run, or from an outside agent.
     hunt = { ...hunt, lastWave };
     saveHunt();
-    if (plan.done || (!wave.length && !openedOrExtended) || !canStart() || stopWave || runtime.stopped()) break;
+    // "Done" from the navigator means it has nothing more to ask for. It does not mean the
+    // pages already waiting should go unread: the rounds that are left send runners without
+    // asking it again, and the hunt stops when nothing is waiting. (Seen live: one navigator
+    // said done on its first turn with three trails of searches queued.)
+    if (plan.done) steeringOver = true;
+    if ((!wave.length && !openedOrExtended) || !canStart() || stopWave || runtime.stopped()) break;
   }
   saveHunt();
 }
