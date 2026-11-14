@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { SIM_WEB_HOST } from "@agentswarm/shared";
 import { pinnedFetch } from "./quote-check";
 import type { FetchFn } from "./http";
-import { createWebReader, type WebAddressCheck } from "./web";
+import { DEFAULT_USER_AGENT, createWebReader, type WebAddressCheck } from "./web";
 
 const REDIRECTS = new Set([301, 302, 303, 307, 308]);
 const DEFAULT_MAX_MB = 150;
@@ -34,10 +34,12 @@ function addressRefusal(check: Extract<WebAddressCheck, { kind: "blocked" | "unr
 export function createMediaFetcher(options: MediaFetchOptions = {}) {
   const env = options.env ?? process.env;
   const fetchFn = options.fetch;
+  // The same name the page reader gives, for the rules and for the request. A site's robots.txt
+  // may have rules for that name, a recording must not be fetched where a page would be refused,
+  // and the site must be able to see who is asking for the file.
+  const userAgent = env.HUNT_USER_AGENT?.trim() || DEFAULT_USER_AGENT;
   const safety = createWebReader({
-    // The same name the page reader gives. A site's robots.txt may have rules for that name,
-    // and a recording must not be fetched where a page would be refused.
-    userAgent: env.HUNT_USER_AGENT,
+    userAgent,
     fetch: fetchFn,
     resolveHost: options.resolveHost ?? (async (host) => host === SIM_WEB_HOST
       ? ["93.184.216.34"]
@@ -67,7 +69,7 @@ export function createMediaFetcher(options: MediaFetchOptions = {}) {
             (fetchFn ?? ((address, init) => pinnedFetch(address, init, checked.addresses)))(checked.url, {
               method: "GET",
               redirect: "manual",
-              headers: { "User-Agent": "web-reader/1.0", Accept: "audio/*, video/*" },
+              headers: { "User-Agent": userAgent, Accept: "audio/*, video/*" },
               signal: fetchOptions.signal,
             }),
           );

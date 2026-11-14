@@ -31,7 +31,7 @@ describe("media fetch", () => {
   it("applies the page reader's robots rules, under the reader's own name, and refuses a bare public IP", async () => {
     const directory = await mkdtemp(join(tmpdir(), "agentswarm-media-"));
     try {
-      const fetch = vi.fn(async (url: string) => {
+      const fetch = vi.fn(async (url: string, _init?: RequestInit) => {
         if (url === "https://pattern.example.com/robots.txt") {
           return new Response("User-agent: *\nDisallow: /*.mp3$", { status: 200, headers: { "content-type": "text/plain" } });
         }
@@ -53,6 +53,12 @@ describe("media fetch", () => {
       expect(await media.fetch("https://93.184.216.34/audio.mp3", directory)).toEqual({ refused: expect.any(String) });
       expect(await media.fetch("https://named.example.com/talk.mp3", directory)).toEqual({ refused: "robots.txt does not allow this recording." });
       expect(fetch.mock.calls.map(([url]) => url)).toEqual(["https://pattern.example.com/robots.txt", "https://named.example.com/robots.txt"]);
+
+      // A recording that may be read is asked for under that same name, so the site sees who is
+      // reading: the request once said "web-reader/1.0" whatever the reader was called.
+      expect(await media.fetch("https://open.example.com/talk.mp3", directory)).toEqual({ path: expect.any(String), detail: "" });
+      const request = fetch.mock.calls.find(([url]) => url === "https://open.example.com/talk.mp3");
+      expect(new Headers(request?.[1]?.headers).get("user-agent")).toBe("FundScout/1.0 (+https://fund.example/bot)");
     } finally {
       await rm(directory, { recursive: true, force: true });
     }
