@@ -336,4 +336,25 @@ describe("CLI commands", () => {
       await dataset.cleanup();
     }
   });
+
+  it("reads a file named on the command line from the directory the command was typed in", async () => {
+    // `pnpm swarm` starts the command line inside apps/server and passes the caller's directory
+    // as INIT_CWD. `--file deals.csv` once failed with "no such file" for a file that was there.
+    const { service } = fakeService();
+    const dataset = await tempDataset();
+    try {
+      const env = { ...dataset.env, INIT_CWD: dataset.root };
+      await writeFile(join(dataset.root, "deals.csv"), "company,seen,summary,outcome\nAcme,2019-03,Two engineers with a working prototype.,1\n");
+      const lines: string[] = [];
+      expect(await runCliCommand(service, ["past", "import", "--file", "deals.csv"], (line) => lines.push(line), { env })).toBe(0);
+      expect(lines[0]).toBe("Imported: 1; updated: 0; left out for no outcome: 0; refused: 0");
+
+      await writeFile(join(dataset.root, "labels.csv"), "company,outcome,source\nOther,1,reviewed\n");
+      const collectLaunchPosts = vi.fn(async () => [pastCase("past_hn_2", "Other", 0)]);
+      expect(await runCliCommand(service, ["past", "collect", "--from", "2018-01-01", "--to", "2018-12-31", "--labels", "labels.csv"], () => undefined, { env, collectLaunchPosts })).toBe(0);
+      expect((await readPastCases(dataset.root)).find((item) => item.subject.company === "Other")?.outcome).toBe(1);
+    } finally {
+      await dataset.cleanup();
+    }
+  });
 });

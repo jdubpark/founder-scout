@@ -921,10 +921,16 @@ describe("sensitive text detection and output normalization", () => {
     "Ada identifies as Muslim.",
     "The founder identifies as non-binary.",
     "The founder is gay.",
+    // A name as the subject, not only "the founder": the check once missed these.
+    "Ada identifies as non-binary.",
+    "Ada is gay.",
+    "Ada is a registered Democrat.",
     "Ada is disabled.",
     "Ada is married.",
     "Political party: Democrat.",
     "Home address: 21 Market Street.",
+    "Ada's personal email is ada@example.com.",
+    "Mobile: +1 415 555 0100.",
   ])("removes prohibited personal text at the job output boundary: %s", (text) => {
     const result = normalizeOutput("investigate.background", inputFor("investigate.background") as InvestigateInput, {
       evidence: [evidenceDraft({ excerpt: text })],
@@ -945,6 +951,10 @@ describe("sensitive text detection and output normalization", () => {
     "Company location: Toronto, Canada.",
     "A 20-year-old company owns this market.",
     "We are a Brazilian company.",
+    "Our revenue estimate is conservative.",
+    "The outcome is non-binary: a deal can be partial.",
+    "A mobile app with private email for field teams.",
+    "Contact: founders@example.com.",
   ])("preserves work history and company context: %s", (text) => {
     const result = normalizeOutput("investigate.background", inputFor("investigate.background") as InvestigateInput, {
       evidence: [],
