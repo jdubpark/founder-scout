@@ -1,5 +1,5 @@
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { access, mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { ProviderError, type ModelProvider, type ProviderRequest } from "../contracts";
 import {
@@ -35,6 +35,12 @@ function callPrompt<T>(req: ProviderRequest<T>): string {
   return `${req.prompt}\n\nReturn exactly one JSON object matching this JSON Schema. Do not include other text.\n${schema}`;
 }
 
+/** Where opencode keeps the vendor logins a person saved with `opencode auth login`. */
+function loginFile(env: NodeJS.ProcessEnv): string {
+  const dataHome = env.XDG_DATA_HOME?.trim() || join(env.HOME?.trim() || homedir(), ".local", "share");
+  return join(dataHome, "opencode", "auth.json");
+}
+
 export interface OpenCodeCliOptions {
   env?: NodeJS.ProcessEnv;
   runner?: ProcessRunner;
@@ -52,9 +58,12 @@ export class OpenCodeCliProvider implements ModelProvider {
 
   async status(): Promise<{ configured: boolean; detail: string }> {
     const path = await findOnPath("opencode", this.env);
-    return path
-      ? { configured: true, detail: "Found opencode on PATH. Uses the existing OpenCode login." }
-      : { configured: false, detail: "opencode is not on PATH. Install OpenCode to use its saved vendor logins." };
+    if (!path) return { configured: false, detail: "opencode is not on PATH. Install opencode to use its saved vendor logins." };
+    // Keys in the environment are removed before a call, so the saved login is the only way in.
+    const loggedIn = await access(loginFile(this.env)).then(() => true, () => false);
+    return loggedIn
+      ? { configured: true, detail: "Found opencode on PATH with a saved login. Calls keep no session in your opencode history." }
+      : { configured: false, detail: "opencode has no saved login. Run opencode auth login for DeepSeek or Meta." };
   }
 
   async run<T>(req: ProviderRequest<T>) {
@@ -65,7 +74,14 @@ export class OpenCodeCliProvider implements ModelProvider {
     const started = Date.now();
     const workdir = await mkdtemp(join(tmpdir(), "agentswarm-opencode-"));
     const xdg = await mkdtemp(join(tmpdir(), "agentswarm-opencode-config-"));
+    // opencode writes every call into its data folder as a session. The call gets a folder of
+    // its own that holds nothing but a link to the saved login, and the folder is deleted
+    // afterwards: a page a runner read is not left in the person's opencode history, and the
+    // call cannot read their earlier sessions. Checked by running it on 2026-11-13.
+    const data = await mkdtemp(join(tmpdir(), "agentswarm-opencode-data-"));
     try {
+      await mkdir(join(data, "opencode"));
+      await symlink(loginFile(this.env), join(data, "opencode", "auth.json"));
       const config = {
         $schema: "https://opencode.ai/config.json",
         agent: {
@@ -89,6 +105,8 @@ export class OpenCodeCliProvider implements ModelProvider {
       const variant = meta ? req.route.effort ?? "minimal" : null;
       const env = scrubEnv(this.env, []);
       env.XDG_CONFIG_HOME = xdg;
+      env.XDG_DATA_HOME = data;
+      env.XDG_STATE_HOME = join(data, "state");
       const outcome = await this.runner({
         command: "opencode",
         args: buildOpenCodeArgs(model, variant, message),
@@ -103,6 +121,8 @@ export class OpenCodeCliProvider implements ModelProvider {
       await Promise.all([
         rm(workdir, { recursive: true, force: true }),
         rm(xdg, { recursive: true, force: true }),
+        // Removes the link, never the login file it points at.
+        rm(data, { recursive: true, force: true }),
       ]);
     }
   }

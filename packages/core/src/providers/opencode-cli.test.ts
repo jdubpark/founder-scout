@@ -1,4 +1,4 @@
-import { readdir, readFile } from "node:fs/promises";
+import { readdir, readFile, readlink } from "node:fs/promises";
 import { join } from "node:path";
 import { z } from "zod";
 import { describe, expect, it } from "vitest";
@@ -18,6 +18,7 @@ function request(model: string, effort?: "low" | "high"): ProviderRequest<z.infe
 describe("OpenCode CLI provider", () => {
   it("runs a locked structured call and maps success and error events", async () => {
     const calls: ProcessRequest[] = [];
+    const dataHomes: string[] = [];
     const streams = [
       await fixture("opencode-deepseek.jsonl"),
       await fixture("opencode-meta.jsonl"),
@@ -35,6 +36,11 @@ describe("OpenCode CLI provider", () => {
         expect(call.env.HOME).toBe("/users/owner");
         expect(call.env.XDG_CONFIG_HOME).not.toBe("/users/owner/.config");
         expect(await readdir(call.env.XDG_CONFIG_HOME as string)).toEqual([]);
+        // Its own data folder: a link to the saved login and nothing else of the person's.
+        const dataHome = call.env.XDG_DATA_HOME as string;
+        expect(await readdir(join(dataHome, "opencode"))).toEqual(["auth.json"]);
+        expect(await readlink(join(dataHome, "opencode", "auth.json"))).toBe("/users/owner/.local/share/opencode/auth.json");
+        dataHomes.push(dataHome);
         expect(call.env.DEEPSEEK_API_KEY).toBeUndefined();
         expect(call.env.OTHER_SECRET).toBeUndefined();
         expect(call.env.PATH).toBe("/bin");
@@ -57,5 +63,7 @@ describe("OpenCode CLI provider", () => {
     const error = await provider.run(request("meta/muse-ember-1.0")).then(() => null, (err: unknown) => err);
     expect(error).toBeInstanceOf(ProviderError);
     expect(error).toMatchObject({ kind: "transport", message: expect.stringContaining("Unexpected server error") });
+    // Nothing of a call is kept: a page a runner read is not left in a session on disk.
+    expect(await Promise.all(dataHomes.map((dir) => readdir(dir).then(() => "kept", () => "gone")))).toEqual(["gone", "gone", "gone", "gone"]);
   });
 });
