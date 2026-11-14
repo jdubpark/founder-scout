@@ -267,7 +267,7 @@ export function createRunController(deps: EngineDeps): RunController {
         control: null,
         poolMember: selected?.member ?? null,
         usage: null,
-        costUsd: null,
+        costUsd: typeof input.costUsd === "number" && Number.isFinite(input.costUsd) && input.costUsd >= 0 ? input.costUsd : null,
         latencyMs: null,
         itemsOut: input.itemsOut ?? 0,
         error: input.error ?? null,

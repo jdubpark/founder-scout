@@ -27,6 +27,8 @@ import type {
   OutreachAction,
   OutreachDraft,
   OutreachStatus,
+  Recording,
+  RecordingKind,
   Run,
   RunScope,
   Settings,
@@ -302,6 +304,8 @@ export interface FounderDetailDTO {
   evidence: Evidence[];
   leads: Lead[];
   outreach: OutreachAction[];
+  /** Recordings bundled into a frozen demo snapshot, when available. */
+  recordings?: Recording[];
   feedback: Feedback[];
   /** The tasks that worked on this founder, newest first, without traces. */
   tasks: TaskRun[];
@@ -319,6 +323,20 @@ export interface AddFounderInput {
   link?: string | null;
   /** Why this person is worth a look, in the partner's words. */
   why?: string | null;
+}
+
+export interface AddRecordingLinkInput {
+  title: string;
+  kind: RecordingKind;
+  url: string;
+}
+
+/** A raw upload; the filename is intentionally absent because the server generates its own. */
+export interface UploadRecordingInput {
+  title: string;
+  kind: RecordingKind;
+  contentType: string;
+  data: Uint8Array;
 }
 
 export interface FeedbackInput {
@@ -764,6 +782,14 @@ export interface ApiClient {
   listFounders(query: FounderQuery): Promise<FounderListDTO>;
   /** GET /api/founders/:id */
   getFounder(id: string): Promise<FounderDetailDTO>;
+  /** GET /api/founders/:id/recordings */
+  listRecordings(founderId: string): Promise<Recording[]>;
+  /** POST /api/founders/:id/recordings (JSON link) */
+  addRecordingLink(founderId: string, input: AddRecordingLinkInput): Promise<Recording>;
+  /** POST /api/founders/:id/recordings (raw audio or video body) */
+  uploadRecording(founderId: string, input: UploadRecordingInput): Promise<Recording>;
+  /** DELETE /api/recordings/:id */
+  removeRecording(id: string): Promise<void>;
   /** POST /api/founders/:id/feedback */
   addFeedback(founderId: string, input: FeedbackInput): Promise<Feedback>;
   /** POST /api/founders */

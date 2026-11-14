@@ -1,4 +1,7 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   BASE_CONFIG,
   DEFAULT_SETTINGS,
@@ -243,6 +246,7 @@ interface HarnessOptions {
   providerError?: () => never;
   wrapExecuteJob?: (delegate: ExecuteJob) => ExecuteJob;
   transcriber?: EngineDeps["transcriber"];
+  media?: EngineDeps["media"];
 }
 
 function makeHarness(options: HarnessOptions = {}) {
@@ -285,6 +289,7 @@ function makeHarness(options: HarnessOptions = {}) {
     quotes: options.quotes,
     people: options.people,
     transcriber: options.transcriber,
+    media: options.media,
     fundName: "Northstar Ventures",
     now: () => new Date(NOW),
     sleep: async () => undefined,
@@ -490,7 +495,15 @@ describe("run engine", () => {
       simWorld: world,
       agentJobs: ["media.read"],
       transcriber: {
-        sim: { async status() { return { configured: true, detail: "sim" }; }, async transcribe() { throw new Error("stage should use SimWorld"); } },
+        sim: {
+          async status() { return { configured: true, detail: "sim" }; },
+          async transcribe(_path, options) {
+            const selected = options?.simulatedFounder;
+            if (!selected) throw new Error("missing simulated founder identity");
+            const text = world.transcript(selected.simId, "call_founder", selected.name);
+            return { text, segments: [{ startSec: 0, endSec: 180, text }], durationSec: 180, model: "simulated", costUsd: null };
+          },
+        },
         live: null,
       },
       wrapExecuteJob: (delegate) => async (jobId, input, context, options) => {
@@ -516,6 +529,182 @@ describe("run engine", () => {
     expect(evidence.length).toBeGreaterThan(0);
     expect(evidence.every((item) => storedRecording.transcript!.text.includes(item.excerpt))).toBe(true);
     expect(evidence.every((item) => item.quote === "found" && item.url?.includes("#t="))).toBe(true);
+  });
+
+  it("turns a simulated talks listing into transcript evidence in one run", async () => {
+    const world = createSimWorld({ seed: 721, founders: 4, days: 2 });
+    const sim = world.founders().find((founder) => Number(founder.simId.match(/(\d+)$/u)?.[1] ?? 0) % 4 === 1)!;
+    const founder = makeFounder(sim, "fnd_media_sim_listing");
+    const transcriptText = world.transcript(sim.simId, "call_founder", sim.name);
+    const harness = makeHarness({
+      simWorld: world,
+      agentJobs: ["investigate.media", "media.read"],
+      media: {
+        async checkAddress(url) { return { url, addresses: ["93.184.216.34"] }; },
+        async fetch() { throw new Error("simulated recording should not fetch a network file"); },
+      },
+      transcriber: {
+        sim: {
+          async status() { return { configured: true, detail: "sim" }; },
+          async transcribe(_path, options) {
+            const selected = options?.simulatedFounder;
+            if (!selected) throw new Error("missing simulated founder identity");
+            const text = world.transcript(selected.simId, "call_founder", selected.name);
+            return {
+              text,
+              segments: [{ startSec: 0, endSec: 180, text }],
+              durationSec: 180,
+              model: "simulated",
+              costUsd: null,
+            };
+          },
+        },
+        live: null,
+      },
+    });
+    harness.store.insertFounder(founder);
+
+    const started = await harness.controller.start({ swarmId: SWARM_ID, trigger: "manual", brain: "sim", sources: "sim" });
+    const run = await harness.controller.wait(started.id);
+
+    const listed = harness.store.listRecordingsByFounder(founder.id).filter((recording) => recording.addedBy === "researcher");
+    const ready = listed.filter((recording) => recording.status === "ready");
+    const transcript = ready[0]?.transcript;
+    const evidence = harness.store.listEvidence(founder.id).filter((item) => listed.some((recording) => item.url?.startsWith(`${recording.sourceUrl}#t=`)));
+    expect(run.status).toBe("succeeded");
+    expect(listed).toHaveLength(1);
+    expect(ready).toHaveLength(1);
+    expect(transcript?.text).toBe(transcriptText);
+    expect(evidence).toHaveLength(1);
+    expect(evidence.every((item) => transcript!.text.includes(item.excerpt))).toBe(true);
+  });
+
+  it("refuses a recording that cannot fit the run allowance before calling the transcriber", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "agentswarm-media-limit-"));
+    try {
+      const filePath = join(directory, "recording.media");
+      await writeFile(filePath, new Uint8Array(8 * 1024 * 1024));
+      const world = createSimWorld({ seed: 718, founders: 1, days: 2 });
+      const founder = makeFounder(world.founders()[0]!, "fnd_media_limit");
+      const recording: Recording = {
+        id: "rec_media_limit", swarmId: SWARM_ID, founderId: founder.id, kind: "talk", title: "Founder talk",
+        sourceUrl: "https://example.com/talk.mp3", addedBy: "person", status: "queued", detail: "", durationSec: null, transcript: null,
+        createdAt: NOW.toISOString(), updatedAt: NOW.toISOString(),
+      };
+      const transcribe = vi.fn(async () => ({
+        text: "The recording is long.", segments: [{ startSec: 0, endSec: 3600, text: "The recording is long." }],
+        durationSec: 3600, model: "test-transcriber", costUsd: null,
+      }));
+      const harness = makeHarness({
+        agentJobs: ["media.read"],
+        config: { params: { "media.max_minutes_per_run": 1 } },
+        media: { fetch: async () => ({ path: filePath, detail: "" }) },
+        transcriber: {
+          sim: { async status() { return { configured: true, detail: "sim" }; }, async transcribe() { throw new Error("unused"); } },
+          live: { async status() { return { configured: true, detail: "live" }; }, transcribe },
+        },
+      });
+      harness.store.insertFounder(founder);
+      harness.store.insertRecording(recording);
+
+      await harness.controller.start({ swarmId: SWARM_ID, trigger: "manual", brain: "live", sources: "live" }).then((run) => harness.controller.wait(run.id));
+
+      expect(transcribe).not.toHaveBeenCalled();
+      expect(harness.store.getRecording(recording.id)).toMatchObject({ status: "refused", detail: expect.stringMatching(/length|allowance/i) });
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("does not transcribe a queued recording that already has a transcript", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "agentswarm-media-saved-"));
+    try {
+      const filePath = join(directory, "recording.media");
+      await writeFile(filePath, new Uint8Array([1, 2, 3]));
+      const world = createSimWorld({ seed: 719, founders: 1, days: 2 });
+      const founder = makeFounder(world.founders()[0]!, "fnd_media_saved");
+      const transcript = { text: "Saved transcript words.", segments: [{ startSec: 0, endSec: 5, text: "Saved transcript words." }], model: "saved-model" };
+      const recording: Recording = {
+        id: "rec_media_saved", swarmId: SWARM_ID, founderId: founder.id, kind: "interview", title: "Saved interview",
+        sourceUrl: "https://example.com/interview.mp3", addedBy: "person", status: "queued", detail: "", durationSec: 5, transcript,
+        createdAt: NOW.toISOString(), updatedAt: NOW.toISOString(),
+      };
+      const transcribe = vi.fn(async () => ({
+        text: "Replacement transcript.", segments: [{ startSec: 0, endSec: 5, text: "Replacement transcript." }],
+        durationSec: 5, model: "new-model", costUsd: null,
+      }));
+      const harness = makeHarness({
+        agentJobs: ["media.read"],
+        media: { fetch: async () => ({ path: filePath, detail: "" }) },
+        transcriber: {
+          sim: { async status() { return { configured: true, detail: "sim" }; }, async transcribe() { throw new Error("unused"); } },
+          live: { async status() { return { configured: true, detail: "live" }; }, transcribe },
+        },
+      });
+      harness.store.insertFounder(founder);
+      harness.store.insertRecording(recording);
+
+      await harness.controller.start({ swarmId: SWARM_ID, trigger: "manual", brain: "live", sources: "live" }).then((run) => harness.controller.wait(run.id));
+
+      expect(transcribe).not.toHaveBeenCalled();
+      expect(harness.store.getRecording(recording.id)?.transcript).toEqual(transcript);
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("redacts transcript text and segments before storage and media.read input, and records transcription cost", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "agentswarm-media-redact-"));
+    try {
+      const filePath = join(directory, "recording.media");
+      await writeFile(filePath, new Uint8Array([1, 2, 3]));
+      const world = createSimWorld({ seed: 720, founders: 1, days: 2 });
+      const founder = makeFounder(world.founders()[0]!, "fnd_media_redact");
+      const recording: Recording = {
+        id: "rec_media_redact", swarmId: SWARM_ID, founderId: founder.id, kind: "talk", title: "Founder talk",
+        sourceUrl: "https://example.com/talk.mp3", addedBy: "person", status: "queued", detail: "", durationSec: null, transcript: null,
+        createdAt: NOW.toISOString(), updatedAt: NOW.toISOString(),
+      };
+      const mediaInputs: Array<Array<{ startSec: number; endSec: number; text: string }>> = [];
+      const harness = makeHarness({
+        agentJobs: ["media.read"],
+        media: { fetch: async () => ({ path: filePath, detail: "" }) },
+        transcriber: {
+          sim: { async status() { return { configured: true, detail: "sim" }; }, async transcribe() { throw new Error("unused"); } },
+          live: {
+            async status() { return { configured: true, detail: "live" }; },
+            async transcribe() {
+              return {
+                text: "I was born in 1984.\nI built a cache that cut latency.",
+                segments: [
+                  { startSec: 0, endSec: 2, text: "I was born in 1984." },
+                  { startSec: 2, endSec: 5, text: "I built a cache that cut latency." },
+                ],
+                durationSec: 5, model: "test-transcriber", costUsd: 0.05,
+              };
+            },
+          },
+        },
+        wrapExecuteJob: (delegate) => async (jobId, input, context, executionOptions) => {
+          if (jobId === "media.read") mediaInputs.push((input as import("@agentswarm/shared").MediaReadInput).stretch);
+          return delegate(jobId, input, context, executionOptions);
+        },
+      });
+      harness.store.insertFounder(founder);
+      harness.store.insertRecording(recording);
+
+      const started = await harness.controller.start({ swarmId: SWARM_ID, trigger: "manual", brain: "live", sources: "live" });
+      const run = await harness.controller.wait(started.id);
+
+      const stored = harness.store.getRecording(recording.id)!;
+      expect(stored.transcript?.text).not.toContain("born in 1984");
+      expect(stored.transcript?.segments.map((segment) => segment.text).join("\n")).not.toContain("born in 1984");
+      expect(mediaInputs.flat(2).map((segment) => segment.text).join("\n")).not.toContain("born in 1984");
+      expect(harness.store.listTasks({ runId: run.id }).some((task) => task.model === "test-transcriber" && task.costUsd === 0.05)).toBe(true);
+      expect(run.costUsd).toBeGreaterThanOrEqual(0.05);
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
   });
 
   it("routes simulated investigation tasks to stable pool members unless a person pins the model", async () => {

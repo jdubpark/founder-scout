@@ -14,6 +14,21 @@ const runCommand: CommandRunner = (command, args, options) => new Promise((resol
   child.once("close", (code) => code === 0 ? resolve(stdout) : reject(new Error(stderr.trim() || `Transcriber exited with code ${code}.`)));
 });
 
+/** Ask ffprobe for the container duration. Missing ffprobe and unreadable files are unknown. */
+export async function probeMediaDuration(
+  filePath: string,
+  options: { signal?: AbortSignal } = {},
+  runner: CommandRunner = runCommand,
+): Promise<number | null> {
+  try {
+    const output = await runner("ffprobe", ["-v", "error", "-show_entries", "format=duration", "-of", "default=noprint_wrappers=1:nokey=1", filePath], options);
+    const seconds = Number(output.trim());
+    return Number.isFinite(seconds) && seconds > 0 ? seconds : null;
+  } catch {
+    return null;
+  }
+}
+
 function commandParts(template: string, filePath: string): { command: string; args: string[] } {
   const words = template.match(/(?:[^\s"']+|"[^"\\]*(?:\\.[^"\\]*)*"|'[^']*')+/gu) ?? [];
   const parts = words.map((word) => word.replace(/^(?:"(.*)"|'(.*)')$/u, (_, double: string | undefined, single: string | undefined) => double ?? single ?? "").replaceAll("{file}", filePath));

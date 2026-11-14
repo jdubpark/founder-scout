@@ -17,6 +17,19 @@ const ROBOTS_TTL_MS = 60 * 60 * 1000;
 const REDIRECTS = new Set([301, 302, 303, 307, 308]);
 const REFUSALS = new Set([401, 403, 407, 429, 451]);
 
+export type WebAddressCheck =
+  | { url: string; addresses: string[] }
+  | { kind: "blocked" | "unreachable"; detail: string };
+
+export interface WebSafetyReader {
+  /** Apply the same named-public-host, deny-list, DNS and restricted-address checks as page reads. */
+  checkAddress(raw: string): Promise<WebAddressCheck>;
+  /** Apply the cached RFC 9309 policy and return the request spacing it requires. */
+  robotsDecision(url: string, signal?: AbortSignal): Promise<{ allowed: boolean; detail: string; gapMs: number }>;
+  /** Serialize requests to one host using the page reader's timing state. */
+  withHostGap<T>(hostname: string, gapMs: number, run: () => Promise<T>): Promise<T>;
+}
+
 export interface WebReaderOptions {
   userAgent?: string;
   resolveHost?: (hostname: string) => Promise<string[]>;
@@ -53,7 +66,7 @@ interface HostTail {
   tail: Promise<void>;
 }
 
-export function createWebReader(options: WebReaderOptions = {}): WebReader {
+export function createWebReader(options: WebReaderOptions = {}): WebReader & WebSafetyReader {
   const userAgent = options.userAgent?.trim() || DEFAULT_USER_AGENT;
   const productToken = (userAgent.split(/[\s/]/u)[0] || DEFAULT_USER_AGENT.split("/")[0]!).toLowerCase();
   const resolveHost = options.resolveHost ?? (async (hostname: string) => (await lookup(hostname, { all: true })).map((entry) => entry.address));
@@ -65,7 +78,7 @@ export function createWebReader(options: WebReaderOptions = {}): WebReader {
   const hostTails = new Map<string, HostTail>();
   const hostStartedAt = new Map<string, number>();
 
-  async function validate(raw: string): Promise<{ url: string; addresses: string[] } | ReadResponse> {
+  async function checkAddress(raw: string): Promise<WebAddressCheck> {
     let parsed: URL;
     try {
       parsed = new URL(raw);
@@ -97,6 +110,11 @@ export function createWebReader(options: WebReaderOptions = {}): WebReader {
       return { kind: "blocked", detail: "This address resolves to a restricted network address." };
     }
     return { url: cleaned, addresses };
+  }
+
+  async function validate(raw: string): Promise<{ url: string; addresses: string[] } | ReadResponse> {
+    const checked = await checkAddress(raw);
+    return "kind" in checked ? { kind: checked.kind, detail: checked.detail } : checked;
   }
 
   async function withHost<T>(hostname: string, gapMs: number, run: () => Promise<T>): Promise<T> {
@@ -139,9 +157,9 @@ export function createWebReader(options: WebReaderOptions = {}): WebReader {
 
       let crawlDelayMs = DEFAULT_GAP_MS;
       if (followRobots) {
-        const policy = await robotsPolicy(current, callerSignal);
-        if (!policy.allowed || !robotsAllows(policy, current)) return { kind: "blocked", detail: policy.blockedDetail };
-        crawlDelayMs = Math.max(crawlDelayMs, policy.crawlDelayMs);
+        const decision = await robotsDecision(current, callerSignal);
+        if (!decision.allowed) return { kind: "blocked", detail: decision.detail };
+        crawlDelayMs = decision.gapMs;
       }
 
       const host = hostOf(current);
@@ -224,7 +242,20 @@ export function createWebReader(options: WebReaderOptions = {}): WebReader {
     return parseRobots(result.body ?? "", productToken);
   }
 
+  async function robotsDecision(rawUrl: string, callerSignal?: AbortSignal): Promise<{ allowed: boolean; detail: string; gapMs: number }> {
+    const policy = await robotsPolicy(rawUrl, callerSignal);
+    const allowed = policy.allowed && robotsAllows(policy, rawUrl);
+    return {
+      allowed,
+      detail: allowed ? "" : policy.blockedDetail,
+      gapMs: Math.max(DEFAULT_GAP_MS, policy.crawlDelayMs),
+    };
+  }
+
   return {
+    checkAddress,
+    robotsDecision,
+    withHostGap: withHost,
     async read(rawUrl, readOptions): Promise<PageRead> {
       const input = cleanUrl(rawUrl);
       const baseUrl = input ?? rawUrl;

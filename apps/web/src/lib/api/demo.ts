@@ -17,6 +17,7 @@ import {
   trailScore,
   ZERO_TRAIL_STATS,
   type AddTrailInput,
+  type AddRecordingLinkInput,
   type AgentIdentity,
   type ApiClient,
   type CallExample,
@@ -40,6 +41,7 @@ import {
   type ScopeSelector,
   type SwarmTreeDTO,
   type UpdateTrailInput,
+  type UploadRecordingInput,
   judgeAssumptions,
 } from "@agentswarm/shared";
 import { ApiError } from "./http";
@@ -496,6 +498,18 @@ export function createDemoClient(snapshot: DemoSnapshot, getActor: () => string)
         throw new ApiError(404, "The demo snapshot holds full dossiers only for the highest-ranked founders.");
       }
       return clone(detail);
+    },
+    async listRecordings(founderId) {
+      return clone(state.founderDetails[founderId]?.recordings ?? []);
+    },
+    async addRecordingLink(_founderId: string, _input: AddRecordingLinkInput) {
+      throw new ApiError(400, READ_ONLY);
+    },
+    async uploadRecording(_founderId: string, _input: UploadRecordingInput) {
+      throw new ApiError(400, READ_ONLY);
+    },
+    async removeRecording(_id: string) {
+      throw new ApiError(400, READ_ONLY);
     },
     async addFeedback(founderId, input) {
       const tags = (input.reasonTags ?? []).filter((t) => isReasonFor(input.verdict, t));

@@ -6,6 +6,7 @@ import { Rubric } from "../features/founders/dossier/Rubric";
 import { MemoPanel } from "../features/founders/dossier/Memo";
 import { AllEvidence } from "../features/founders/dossier/Evidence";
 import { AgentWorkPanel, OutreachPanel, SpottedPanel } from "../features/founders/dossier/Activity";
+import { RecordingsPanel } from "../features/founders/dossier/Recordings";
 import { useFounder } from "../lib/queries";
 
 export default function FounderDetailPage() {
@@ -48,6 +49,7 @@ export default function FounderDetailPage() {
         <Rubric assessment={assessment} evidence={evidence} />
       </Panel>
       <AllEvidence evidence={evidence} />
+      <RecordingsPanel founderId={founder.id} />
       <SpottedPanel leads={leads} />
       <OutreachPanel outreach={outreach} />
       <AgentWorkPanel tasks={tasks} />

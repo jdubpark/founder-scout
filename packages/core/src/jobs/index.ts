@@ -6,6 +6,7 @@ import {
   MAX_LESSON_LENGTH,
   MAX_LESSONS_PER_JOB,
   MODEL_JOB_IDS,
+  SIM_WEB_HOST,
   effectiveParam,
   estimateCostUsd,
   getJob,
@@ -27,6 +28,7 @@ import type {
   EvidenceDraft,
   FounderBrief,
   InvestigateInput,
+  InvestigateMediaOutput,
   InvestigateOutput,
   JobId,
   JobInput,
@@ -390,7 +392,7 @@ function buildPromptFor(id: ModelJobId, input: AnyInput, ctx: JobContext): { sys
       const focus: Record<string, string> = {
         "investigate.background": "Find sourced professional history, what the person built at each stop, and changes in responsibility over years of experience.",
         "investigate.company": "Establish this person's own part in the company: their role, what they personally built or decided, the insight they say led them to it, and how large an outcome they say they are aiming for. Leave the company's product, traction, team and funding to the company researchers.",
-        "investigate.media": "Find public talks, podcasts, or interviews and read available transcripts. Quote passages that show clear or deep thinking; a title alone is not evidence.",
+        "investigate.media": "Find public talks, podcasts, or interviews that exist as audio or video. Quote passages that show clear or deep thinking; a title alone is not evidence. List up to three direct audio or video recording URLs in recordings, with each recording's title and kind.",
         "investigate.redflags": "Check public claims about degrees, titles, traction, and authorship, and public professional conduct. Missing information is not evidence of misconduct.",
       };
       prompt = ["Task: " + focus[id], ...renderInvestigation(value)].join("\n\n");
@@ -743,7 +745,7 @@ function simulateScreen(input: ScreenInput, ctx: JobContext): ScreenOutput {
   };
 }
 
-function simulateInvestigation(id: ModelJobId, input: InvestigateInput, ctx: JobContext): InvestigateOutput {
+function simulateInvestigation(id: ModelJobId, input: InvestigateInput, ctx: JobContext): InvestigateOutput | InvestigateMediaOutput {
   const simId = input.founder.simId;
   const visibleProfile = {
     headline: input.founder.headline,
@@ -788,13 +790,23 @@ function simulateInvestigation(id: ModelJobId, input: InvestigateInput, ctx: Job
   const knownUrls = new Set(input.known.map((item) => item.url).filter((url): url is string => Boolean(url)));
   const evidence = ctx.sim.evidenceFor(simFounder.simId, id, input.depth)
     .filter((item) => item.url === null || !knownUrls.has(item.url));
-  return {
+  const result = {
     evidence,
     profile,
     notes: evidence.length
       ? "Synthetic public evidence found at " + input.depth + " depth."
       : "No new synthetic evidence was found beyond the material already on file.",
   };
+  if (id !== "investigate.media") return result;
+  const founderNumber = Number(simFounder.simId.match(/(\d+)$/u)?.[1] ?? 0);
+  const recordings = founderNumber % 4 === 1
+    ? [{
+        url: `https://${SIM_WEB_HOST}/recordings/${founderNumber}.mp3`,
+        title: `${simFounder.name} on building ${simFounder.companyName}`,
+        kind: "talk" as const,
+      }]
+    : [];
+  return { ...result, recordings };
 }
 
 function simulateVerify(input: VerifyInput, ctx: JobContext): VerifyOutput {
@@ -1094,7 +1106,7 @@ function normalizeFor(id: ModelJobId, input: AnyInput, output: AnyOutput): AnyOu
   if (id.startsWith("investigate.")) {
     const investigation = output as InvestigateOutput;
     const clean = (value: string | null): string | null => (value !== null && containsSensitive(value) ? null : value);
-    return {
+    const normalized = {
       ...investigation,
       // A short profile field that states a personal attribute is dropped whole.
       profile: {
@@ -1106,7 +1118,15 @@ function normalizeFor(id: ModelJobId, input: AnyInput, output: AnyOutput): AnyOu
         companyStage: clean(investigation.profile.companyStage),
       },
       evidence: sanitizeEvidenceDrafts(investigation.evidence),
-    } as AnyOutput;
+    };
+    if (id === "investigate.media") {
+      const media = output as InvestigateMediaOutput;
+      const recordings = media.recordings
+        .map((item) => ({ ...item, url: item.url.trim(), title: item.title.trim() }))
+        .filter((item) => item.url.length > 0 && item.title.length > 0 && !containsSensitive(item.url, item.title));
+      return { ...normalized, recordings } as AnyOutput;
+    }
+    return normalized as AnyOutput;
   }
   if (id === "company.product" || id === "company.traction" || id === "company.team") {
     return normalizeCompanyResearch(input as CompanyResearchInput, output as CompanyResearchOutput) as AnyOutput;

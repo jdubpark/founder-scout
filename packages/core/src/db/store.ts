@@ -455,6 +455,10 @@ export class SqliteStore implements Store {
     return parse(this.db.prepare("SELECT record FROM recordings WHERE id = ?").get(id) as RecordRow | undefined);
   }
 
+  deleteRecording(id: string): void {
+    this.db.prepare("DELETE FROM recordings WHERE id = ?").run(id);
+  }
+
   updateRecording(id: string, patch: Partial<Pick<Recording, "status" | "detail" | "durationSec" | "transcript" | "updatedAt">>): Recording {
     return this.transaction(() => {
       const current = this.getRecording(id);

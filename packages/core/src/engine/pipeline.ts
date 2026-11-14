@@ -1,4 +1,6 @@
 import { createHash } from "node:crypto";
+import { rm, stat } from "node:fs/promises";
+import { join } from "node:path";
 import {
   booleanParam,
   DIMENSIONS,
@@ -7,6 +9,7 @@ import {
   getJob,
   groundJudgments,
   latestCalls,
+  newId,
   numberParam,
   onPage,
   reasonLabel,
@@ -49,7 +52,7 @@ import { runCompanyAssess, runCompanyResearch, runCompanyResolve } from "./compa
 import { forEachConcurrent, type EngineRuntime } from "./runtime";
 import { runHunt } from "./hunt";
 import { normalizeLink, normalizeName } from "../db";
-import { redactSensitive } from "../jobs";
+import { findSensitive, redactSensitive } from "../jobs";
 
 const SCOUT_JOBS = [
   "scout.hackernews",
@@ -901,6 +904,9 @@ async function runInvestigate(runtime: EngineRuntime, assessmentCandidates: Set<
       applyProfileUpdate(runtime, current.id, entry.result.output.profile);
       const source = getJob(entry.jobId).source ?? "web";
       addEvidence(runtime, current.id, entry.result.task.id, source, entry.result.output.evidence);
+      if (entry.jobId === "investigate.media" && "recordings" in entry.result.output) {
+        await queueResearcherRecordings(runtime, current, entry.result.output.recordings);
+      }
       runtime.persist();
     }
     if (didWork) {
@@ -910,10 +916,51 @@ async function runInvestigate(runtime: EngineRuntime, assessmentCandidates: Set<
   });
 }
 
+async function queueResearcherRecordings(
+  runtime: EngineRuntime,
+  founder: Founder,
+  proposed: ReadonlyArray<{ url: string; title: string; kind: Recording["kind"] }>,
+): Promise<void> {
+  const checkAddress = runtime.deps.media?.checkAddress;
+  if (!checkAddress) return;
+  const existing = new Set(runtime.deps.store.listRecordingsByFounder(founder.id)
+    .flatMap((recording) => recording.sourceUrl ? [recording.sourceUrl] : []));
+  let added = 0;
+  const at = runtime.now().toISOString();
+  for (const item of proposed) {
+    if (added >= 3) break;
+    const title = item.title.trim();
+    if (!title || title.length > 200 || findSensitive(title).length > 0) continue;
+    let checked;
+    try {
+      checked = await checkAddress(item.url);
+    } catch {
+      continue;
+    }
+    if ("kind" in checked || existing.has(checked.url)) continue;
+    existing.add(checked.url);
+    runtime.deps.store.insertRecording({
+      id: newId("rcd"),
+      swarmId: founder.swarmId,
+      founderId: founder.id,
+      kind: item.kind,
+      title,
+      sourceUrl: checked.url,
+      addedBy: "researcher",
+      status: "queued",
+      detail: "",
+      durationSec: null,
+      transcript: null,
+      createdAt: at,
+      updatedAt: at,
+    });
+    added += 1;
+  }
+}
+
 async function runMedia(runtime: EngineRuntime, assessmentCandidates: Set<string>): Promise<void> {
   if (!booleanParam("media.enabled", runtime.resolve(null, "media.enabled"), runtime.config)) return;
   const transcriber = runtime.brain === "sim" ? runtime.deps.transcriber?.sim : runtime.deps.transcriber?.live;
-  if (!transcriber) return;
   const maxSeconds = numberParam("media.max_minutes_per_run", runtime.resolve(null, "media.max_minutes_per_run"), runtime.config) * 60;
   let usedSeconds = 0;
   const readAgent = runtime.agents.find((agent) => agent.jobId === "media.read");
@@ -921,38 +968,119 @@ async function runMedia(runtime: EngineRuntime, assessmentCandidates: Set<string
   const queued = runtime.deps.store.listRecordingsByStatus(runtime.swarm.id, "queued");
   for (const recording of queued) {
     if (runtime.stopped() || usedSeconds >= maxSeconds) break;
-    runtime.deps.store.updateRecording(recording.id, { status: "transcribing", detail: "", updatedAt: runtime.now().toISOString() });
+    if (!recording.transcript && !transcriber) return;
     let filePath: string | null = null;
+    let removeFetchedFile = false;
     try {
       const founder = runtime.deps.store.getFounder(recording.founderId);
       if (!founder || founder.swarmId !== runtime.swarm.id) throw new Error("The recording founder is unavailable.");
+      const at = runtime.now().toISOString();
+      const remainingSeconds = Math.max(0, maxSeconds - usedSeconds);
+      const simulated = runtime.brain === "sim" && founder.simId !== null;
       let transcript: { text: string; segments: Array<{ startSec: number; endSec: number; text: string }>; durationSec: number; model: string; costUsd: number | null };
-      if (runtime.brain === "sim" && founder.simId) {
-        const text = runtime.deps.simWorld.transcript(founder.simId, "call_founder", founder.name);
-        transcript = { text, segments: [{ startSec: 0, endSec: 180, text }], durationSec: 180, model: "simulated", costUsd: null };
-      } else {
-        if (!recording.sourceUrl || !runtime.deps.media) throw new Error("This recording has no fetchable file address.");
-        const fetched = await runtime.deps.media.fetch(recording.sourceUrl, runtime.deps.dataDir ?? "data", { signal: runtime.signal });
-        if ("refused" in fetched) {
-          runtime.deps.store.updateRecording(recording.id, { status: "refused", detail: fetched.refused.slice(0, 240), updatedAt: runtime.now().toISOString() });
+      let plannedSeconds: number;
+      const refuse = (detail: string, extra: { durationSec?: number; transcript?: Recording["transcript"] } = {}) => {
+        runtime.deps.store.updateRecording(recording.id, {
+          status: "refused",
+          detail: detail.replace(/\s+/gu, " ").slice(0, 240),
+          ...extra,
+          updatedAt: runtime.now().toISOString(),
+        });
+      };
+
+      if (recording.transcript) {
+        plannedSeconds = recording.durationSec ?? Math.max(0, ...recording.transcript.segments.map((segment) => segment.endSec));
+        if (!Number.isFinite(plannedSeconds) || plannedSeconds <= 0) {
+          refuse("The recording length is unknown.");
           continue;
         }
-        filePath = fetched.path;
-        transcript = await transcriber.transcribe(filePath, { signal: runtime.signal });
+        if (plannedSeconds > remainingSeconds) {
+          refuse("The recording is longer than the remaining run allowance.", { durationSec: plannedSeconds });
+          continue;
+        }
+        usedSeconds += plannedSeconds;
+        transcript = { ...recording.transcript, durationSec: plannedSeconds, costUsd: null };
+      } else if (simulated) {
+        plannedSeconds = 180;
+        if (plannedSeconds > remainingSeconds) {
+          refuse("The recording is longer than the remaining run allowance.", { durationSec: plannedSeconds });
+          continue;
+        }
+        usedSeconds += plannedSeconds;
+        runtime.deps.store.updateRecording(recording.id, { status: "transcribing", detail: "", durationSec: plannedSeconds, updatedAt: at });
+        transcript = await transcriber!.transcribe(`sim:${recording.id}`, {
+          signal: runtime.signal,
+          simulatedFounder: { simId: founder.simId!, name: founder.name },
+        });
+      } else {
+        if (recording.sourceUrl) {
+          if (!runtime.deps.media) throw new Error("This recording has no media reader.");
+          const fetched = await runtime.deps.media.fetch(recording.sourceUrl, runtime.deps.dataDir ?? "data", { signal: runtime.signal });
+          if ("refused" in fetched) {
+            refuse(fetched.refused);
+            continue;
+          }
+          filePath = fetched.path;
+          removeFetchedFile = true;
+        } else {
+          filePath = join(runtime.deps.dataDir ?? "data", "recordings", `${recording.id}.media`);
+        }
+        const fileInfo = await stat(filePath);
+        const probed = await runtime.deps.media?.probeDuration?.(filePath, { signal: runtime.signal }) ?? null;
+        if (probed === null) {
+          // At 16 kbit/s, even very compressed speech takes this many minutes; larger files
+          // cannot be proven to fit the allowance without a successful ffprobe result.
+          plannedSeconds = Math.ceil((fileInfo.size * 8) / 16_000);
+          if (!Number.isFinite(plannedSeconds) || plannedSeconds <= 0 || plannedSeconds > remainingSeconds) {
+            refuse("The recording length is unknown and it may exceed the run allowance.");
+            continue;
+          }
+        } else {
+          plannedSeconds = probed;
+          if (plannedSeconds > remainingSeconds) {
+            refuse("The recording is longer than the remaining run allowance.", { durationSec: plannedSeconds });
+            continue;
+          }
+        }
+        usedSeconds += plannedSeconds;
+        runtime.deps.store.updateRecording(recording.id, { status: "transcribing", detail: "", durationSec: plannedSeconds, updatedAt: at });
+        transcript = await transcriber!.transcribe(filePath, { signal: runtime.signal });
       }
-      if (usedSeconds + transcript.durationSec > maxSeconds) {
-        runtime.deps.store.updateRecording(recording.id, { status: "queued", detail: "", updatedAt: runtime.now().toISOString() });
-        break;
+
+      const durationSec = Number.isFinite(transcript.durationSec) && transcript.durationSec > 0 ? transcript.durationSec : plannedSeconds;
+      if (durationSec !== plannedSeconds) usedSeconds = Math.max(0, usedSeconds - plannedSeconds + durationSec);
+      const safeTranscript = {
+        text: redactSensitive(transcript.text),
+        segments: transcript.segments.map((segment) => ({ ...segment, text: redactSensitive(segment.text) })),
+        model: transcript.model,
+      };
+      if (usedSeconds > maxSeconds) {
+        refuse("The recording is longer than the remaining run allowance.", { durationSec, transcript: safeTranscript });
+        continue;
       }
-      usedSeconds += transcript.durationSec;
       runtime.deps.store.updateRecording(recording.id, {
-        status: "transcribing", detail: "", durationSec: transcript.durationSec,
-        transcript: { text: transcript.text, segments: transcript.segments, model: transcript.model }, updatedAt: runtime.now().toISOString(),
+        status: "transcribing", detail: "", durationSec,
+        transcript: safeTranscript, updatedAt: runtime.now().toISOString(),
       });
+      if (transcript.costUsd !== null && Number.isFinite(transcript.costUsd) && transcript.costUsd >= 0) {
+        runtime.recordPlainTask({
+          agent: readAgent,
+          stage: "investigate",
+          jobId: "media.read",
+          status: "succeeded",
+          provider: runtime.brain === "sim" ? "sim" : "openai-api",
+          model: transcript.model,
+          inputSummary: `Transcribe ${recording.title}`,
+          outputSummary: `Transcribed ${Math.ceil(durationSec / 60)} minute(s).`,
+          founderId: founder.id,
+          output: { durationSec, model: transcript.model },
+          costUsd: transcript.costUsd,
+        });
+      }
       const spans: Array<Array<{ startSec: number; endSec: number; text: string }>> = [];
       let span: Array<{ startSec: number; endSec: number; text: string }> = [];
       let spanLength = 0;
-      for (const segment of transcript.segments) {
+      for (const segment of safeTranscript.segments) {
         if (span.length && spanLength + segment.text.length > 4000) { spans.push(span); span = []; spanLength = 0; }
         span.push(segment);
         spanLength += segment.text.length;
@@ -987,6 +1115,8 @@ async function runMedia(runtime: EngineRuntime, assessmentCandidates: Set<string
     } catch (error) {
       const detail = (error instanceof Error ? error.message : String(error)).replace(/\s+/gu, " ").slice(0, 240) || "Transcription failed.";
       runtime.deps.store.updateRecording(recording.id, { status: "failed", detail, updatedAt: runtime.now().toISOString() });
+    } finally {
+      if (removeFetchedFile && filePath) await rm(filePath, { force: true }).catch(() => undefined);
     }
   }
 }

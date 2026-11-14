@@ -19,6 +19,7 @@ import { ServiceError } from "../contracts";
 import { openStore } from "../db";
 import { createSimDialler, createSimRepoFinder, createSimSources, createSimWorld } from "../sim";
 import { createLiveDialler, createLivePeopleLookup, createLiveRepoFinder, createLiveSources, createQuoteChecker, createLinkupSearchEngine, createLiveWebAccess, createModelSearchEngine, createSimWebAccess, createLiveTranscriber, createMediaFetcher, looksLikeFounder, parseConnectionsCsv } from "../sources";
+import { createLiveDialler, createLivePeopleLookup, createLiveRepoFinder, createLiveSources, createQuoteChecker, createLiveWebAccess, createModelSearchEngine, createSimWebAccess, createLiveTranscriber, createMediaFetcher, mediaMaxBytes, probeMediaDuration, looksLikeFounder, parseConnectionsCsv } from "../sources";
 import { createProviderRegistry } from "../providers";
 import { createJobRegistry, createExecuteJob, findSensitive, loadSkillLibrary, redactSensitive } from "../jobs";
 import { createRunController } from "../engine";
@@ -30,6 +31,7 @@ import { assumptionsFor } from "./assumptions";
 import { previewConfig } from "./preview";
 import { createHuntTrial } from "./hunt-trial";
 import { createCallService } from "./calls";
+import { createRecordingService } from "./recordings";
 
 const iso = (date: Date): string => date.toISOString();
 const messageOf = (error: unknown): string => error instanceof Error ? error.message : String(error);
@@ -746,6 +748,10 @@ export function createSwarmService(deps: ServiceDeps): SwarmService {
         const knownPeople = founder.company.name ? store.networkAtCompany(normalizeCompanyName(founder.company.name)) : [];
         return { founder, company: founder.companyId ? store.getCompany(founder.companyId) : null, assessment: store.latestAssessment(id), history: store.assessmentHistory(id), evidence, leads: store.listLeads({ founderId: id }), outreach: store.listOutreach({ founderId: id }), feedback: store.listFeedback(id), tasks, knownPeople };
       },
+      async listRecordings(founderId) { return deps.recordings.list(actor, founderId); },
+      async addRecordingLink(founderId, input) { return deps.recordings.addLink(actor, founderId, input); },
+      async uploadRecording(founderId, input) { return deps.recordings.upload(actor, founderId, input); },
+      async removeRecording(id) { return deps.recordings.remove(actor, id); },
       async addFeedback(founderId, input) {
         const founder = getFounder(founderId);
         if (input.verdict !== "yes" && input.verdict !== "no") fail(400, "Choose yes or no.", { verdict: "Choose yes or no." });
@@ -1285,13 +1291,22 @@ export function createSwarmService(deps: ServiceDeps): SwarmService {
 }
 
 export function createApp(options: AppOptions): App {
+  const env = options.env ?? process.env;
   const store = openStore(options.dbPath);
   const world = createSimWorld({ seed: options.simSeed });
   const simSources = createSimSources(world);
-  const liveSources = createLiveSources(options.env);
+  const liveSources = createLiveSources(env);
+  const media = createMediaFetcher({ env });
+  const recordingService = createRecordingService({
+    store,
+    dataDir: options.dataDir,
+    maxBytes: mediaMaxBytes(env),
+    checkAddress: media.checkAddress,
+    now: options.now,
+  });
   const simRepos = createSimRepoFinder(world);
-  const liveRepos = createLiveRepoFinder({ env: options.env, workDir: join(options.dataDir, "repos") });
-  const providers = createProviderRegistry(options.env);
+  const liveRepos = createLiveRepoFinder({ env, workDir: join(options.dataDir, "repos") });
+  const providers = createProviderRegistry(env);
   const web = {
     sim: createSimWebAccess(world),
     live: createLiveWebAccess({
@@ -1300,6 +1315,8 @@ export function createApp(options: AppOptions): App {
       // it is faster and a search costs half a cent. Otherwise the model provider's own search
       // tool does it, as a task inside the run's spend cap. HUNT_WEB_SEARCH=off leaves it out.
       extraEngines: (options.env ?? process.env).HUNT_WEB_SEARCH === "off"
+      env,
+      extraEngines: env.HUNT_WEB_SEARCH === "off"
         ? []
         : (options.env ?? process.env).LINKUP_API_KEY?.trim()
           ? [createLinkupSearchEngine({ env: options.env ?? process.env })]
@@ -1317,8 +1334,35 @@ export function createApp(options: AppOptions): App {
   const skillLibrary = loadSkillLibrary(join(dirname(fileURLToPath(import.meta.url)), "../../../../skills"));
   const jobs = createJobRegistry(skillLibrary);
   const executeJob = createExecuteJob({ jobs, providers });
-  const env = options.env ?? process.env;
-  const runs = createRunController({ store, jobs, executeJob, quotes: createQuoteChecker(), people: createLivePeopleLookup(env), transcriber: { sim: { async status() { return { configured: true, detail: "Simulated transcription is ready." }; }, async transcribe() { throw new Error("Simulated transcription requires a simulated recording."); } }, live: createLiveTranscriber(env) }, media: createMediaFetcher({ env }), dataDir: options.dataDir, sources: { sim: simSources, live: liveSources }, repos: { sim: simRepos, live: liveRepos }, web, defaultPools, simWorld: world, fundName: options.fundName ?? "the fund", now: options.now, logger: options.logger });
+  const runs = createRunController({
+    store,
+    jobs,
+    executeJob,
+    quotes: createQuoteChecker(),
+    people: createLivePeopleLookup(env),
+    transcriber: {
+      sim: {
+        async status() { return { configured: true, detail: "Simulated transcription is ready." }; },
+        async transcribe(_filePath, callOptions) {
+          const founder = callOptions?.simulatedFounder;
+          if (!founder) throw new Error("The simulated recording has no simulated founder.");
+          const text = world.transcript(founder.simId, "call_founder", founder.name);
+          return { text, segments: [{ startSec: 0, endSec: 180, text }], durationSec: 180, model: "simulated", costUsd: null };
+        },
+      },
+      live: createLiveTranscriber(env),
+    },
+    media: { ...media, probeDuration: probeMediaDuration },
+    dataDir: options.dataDir,
+    sources: { sim: simSources, live: liveSources },
+    repos: { sim: simRepos, live: liveRepos },
+    web,
+    defaultPools,
+    simWorld: world,
+    fundName: options.fundName ?? "the fund",
+    now: options.now,
+    logger: options.logger,
+  });
   const evals = createEvalService({
     store,
     jobs,
@@ -1332,5 +1376,6 @@ export function createApp(options: AppOptions): App {
     logger: options.logger,
   }, { pastJudge: options.evalJudge ?? null });
   const service = createSwarmService({ store, runs, evals, providers, liveSources, dialler: { sim: createSimDialler(world), live: createLiveDialler(options.env) }, fundName: env.FUND_NAME?.trim() || null, callbackNumber: env.FUND_CALLBACK_NUMBER?.trim() || null, web, defaultPools, skillLibrary, cron: options.cron, now: options.now, logger: options.logger });
+  const service = createSwarmService({ store, runs, evals, providers, liveSources, recordings: recordingService, dialler: { sim: createSimDialler(world), live: createLiveDialler(env) }, web, defaultPools, skillLibrary, cron: options.cron, now: options.now, logger: options.logger });
   return { service, store, providers, close: () => store.close() };
 }

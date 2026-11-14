@@ -15,6 +15,7 @@
 import type { z } from "zod";
 import type {
   Agent,
+  AddRecordingLinkInput,
   ApiClient,
   Assessment,
   AuditEntry,
@@ -63,6 +64,7 @@ import type {
   RecordingKind,
   RecordingStatus,
   RecordingTranscript,
+  UploadRecordingInput,
   RepoContributor,
   RepoRef,
   ResolvedSteering,
@@ -250,7 +252,7 @@ export interface WebReader {
 
 export interface Transcriber {
   status(): Promise<{ configured: boolean; detail: string }>;
-  transcribe(filePath: string, options?: { signal?: AbortSignal }): Promise<{
+  transcribe(filePath: string, options?: { signal?: AbortSignal; simulatedFounder?: { simId: string; name: string } }): Promise<{
     text: string;
     segments: Array<{ startSec: number; endSec: number; text: string }>;
     durationSec: number;
@@ -556,6 +558,7 @@ export interface Store {
   findFoundersByName(swarmId: string, normalizedName: string): Founder[];
   insertRecording(recording: Recording): void;
   getRecording(id: string): Recording | null;
+  deleteRecording(id: string): void;
   updateRecording(id: string, patch: Partial<Pick<Recording, "status" | "detail" | "durationSec" | "transcript" | "updatedAt">>): Recording;
   listRecordingsByFounder(founderId: string): Recording[];
   listRecordingsByStatus(swarmId: string, status: RecordingStatus): Recording[];
@@ -805,7 +808,11 @@ export interface EngineDeps {
   /** Vendor lookups for live runs. null when no vendor is connected. */
   people?: PeopleLookup | null;
   transcriber?: { sim: Transcriber; live: Transcriber | null };
-  media?: { fetch(sourceUrl: string, dataDir: string, options?: { signal?: AbortSignal }): Promise<{ path: string; detail: string } | { refused: string }> };
+  media?: {
+    checkAddress?(sourceUrl: string): Promise<{ url: string; addresses: string[] } | { kind: "blocked" | "unreachable"; detail: string }>;
+    fetch(sourceUrl: string, dataDir: string, options?: { signal?: AbortSignal }): Promise<{ path: string; detail: string } | { refused: string }>;
+    probeDuration?(filePath: string, options?: { signal?: AbortSignal }): Promise<number | null>;
+  };
   dataDir?: string;
   /** Source adapters for each source mode. */
   sources: { sim: SourceRegistry; live: SourceRegistry };
@@ -942,6 +949,13 @@ export interface SwarmService {
   close(): void;
 }
 
+export interface RecordingManager {
+  list(actor: string, founderId: string): Recording[];
+  addLink(actor: string, founderId: string, input: AddRecordingLinkInput): Promise<Recording>;
+  upload(actor: string, founderId: string, input: UploadRecordingInput): Promise<Recording>;
+  remove(actor: string, id: string): Promise<void>;
+}
+
 /** A failure the API should report to the caller, with an HTTP status. */
 export class ServiceError extends Error {
   readonly status: number;
@@ -970,6 +984,7 @@ export interface ServiceDeps {
   providers: ProviderRegistry;
   /** Live source adapters, for the settings page's status list. */
   liveSources: SourceRegistry;
+  recordings: RecordingManager;
   dialler?: { sim: Dialler; live: Dialler | null };
   /** Registered caller identity and phone disclosed on an AI call. */
   fundName?: string | null;

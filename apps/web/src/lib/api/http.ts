@@ -1,5 +1,6 @@
 import {
   ACTOR_HEADER,
+  type AddRecordingLinkInput,
   type AddFounderInput,
   type AddTrailInput,
   type ApiClient,
@@ -10,6 +11,7 @@ import {
   type FounderQuery,
   type NetworkImportInput,
   type OutreachQuery,
+  type UploadRecordingInput,
   type UpdateTrailInput,
 } from "@agentswarm/shared";
 
@@ -79,6 +81,32 @@ export function createHttpClient(options: { baseUrl?: string; getActor: () => st
 
   const get = <T>(path: string, query?: Query) => call<T>("GET", withQuery(path, query));
 
+  async function upload<T>(path: string, input: UploadRecordingInput): Promise<T> {
+    let response: Response;
+    const bytes = new ArrayBuffer(input.data.byteLength);
+    new Uint8Array(bytes).set(input.data);
+    try {
+      response = await fetch(`${base}${path}`, {
+        method: "POST",
+        headers: {
+          "content-type": input.contentType,
+          "x-recording-title": input.title,
+          "x-recording-kind": input.kind,
+          [ACTOR_HEADER]: options.getActor(),
+        },
+        body: new Blob([bytes], { type: input.contentType }),
+      });
+    } catch {
+      throw new ApiError(0, "The server did not respond. Check that it is running, then try again.");
+    }
+    if (!response.ok) {
+      let parsed: ApiErrorBody | null = null;
+      try { parsed = (await response.json()) as ApiErrorBody; } catch { parsed = null; }
+      throw new ApiError(response.status, parsed?.error ?? `The server answered with an error (${response.status}).`, parsed?.fields);
+    }
+    return (await response.json()) as T;
+  }
+
   return {
     getSettings: () => get("/api/settings"),
     updateSettings: (patch) => call("PATCH", "/api/settings", patch),
@@ -108,6 +136,11 @@ export function createHttpClient(options: { baseUrl?: string; getActor: () => st
 
     listFounders: (query: FounderQuery) => get("/api/founders", { ...query }),
     getFounder: (id) => get(`/api/founders/${encodeURIComponent(id)}`),
+    listRecordings: (founderId) => get(`/api/founders/${encodeURIComponent(founderId)}/recordings`),
+    addRecordingLink: (founderId, input: AddRecordingLinkInput) =>
+      call("POST", `/api/founders/${encodeURIComponent(founderId)}/recordings`, input),
+    uploadRecording: (founderId, input) => upload(`/api/founders/${encodeURIComponent(founderId)}/recordings`, input),
+    removeRecording: (id) => call("DELETE", `/api/recordings/${encodeURIComponent(id)}`),
     addFeedback: (founderId, input) =>
       call("POST", `/api/founders/${encodeURIComponent(founderId)}/feedback`, input),
     addFounder: (input: AddFounderInput) => call("POST", "/api/founders", input),

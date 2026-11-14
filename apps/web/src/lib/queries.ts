@@ -7,6 +7,7 @@ import { useMutation, useQuery, useQueryClient, type QueryClient } from "@tansta
 import type {
   AddAgentInput,
   AddFounderInput,
+  AddRecordingLinkInput,
   AddTrailInput,
   CompanyFeedbackInput,
   CompanyQuery,
@@ -32,6 +33,7 @@ import type {
   UpdateDirectiveInput,
   UpdateSwarmInput,
   UpdateTrailInput,
+  UploadRecordingInput,
 } from "@agentswarm/shared";
 import { useApi } from "./api/context";
 
@@ -48,6 +50,7 @@ export const keys = {
   suggestions: (swarmId: string) => ["suggestions", swarmId] as const,
   founders: (query: FounderQuery) => ["founders", query] as const,
   founder: (id: string) => ["founder", id] as const,
+  recordings: (founderId: string) => ["recordings", founderId] as const,
   companies: (query: CompanyQuery) => ["companies", query] as const,
   company: (id: string) => ["company", id] as const,
   network: ["network"] as const,
@@ -150,6 +153,16 @@ export function useFounder(id: string | null) {
     queryKey: keys.founder(id ?? ""),
     queryFn: () => client.getFounder(id as string),
     enabled: Boolean(id),
+  });
+}
+
+export function useRecordings(founderId: string | null) {
+  const { client } = useApi();
+  return useQuery({
+    queryKey: keys.recordings(founderId ?? ""),
+    queryFn: () => client.listRecordings(founderId as string),
+    enabled: Boolean(founderId),
+    refetchInterval: IDLE_REFRESH,
   });
 }
 
@@ -395,6 +408,38 @@ export function useAddFounder() {
       void qc.invalidateQueries({ queryKey: ["founders"] });
       void qc.invalidateQueries({ queryKey: ["overview"] });
     },
+  });
+}
+
+function recordingsChanged(qc: QueryClient, founderId: string) {
+  void qc.invalidateQueries({ queryKey: keys.recordings(founderId) });
+  void qc.invalidateQueries({ queryKey: keys.founder(founderId) });
+}
+
+export function useAddRecordingLink(founderId: string) {
+  const { client } = useApi();
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (input: AddRecordingLinkInput) => client.addRecordingLink(founderId, input),
+    onSuccess: () => recordingsChanged(qc, founderId),
+  });
+}
+
+export function useUploadRecording(founderId: string) {
+  const { client } = useApi();
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (input: UploadRecordingInput) => client.uploadRecording(founderId, input),
+    onSuccess: () => recordingsChanged(qc, founderId),
+  });
+}
+
+export function useRemoveRecording(founderId: string) {
+  const { client } = useApi();
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (recordingId: string) => client.removeRecording(recordingId),
+    onSuccess: () => recordingsChanged(qc, founderId),
   });
 }
 

@@ -260,10 +260,21 @@ export const InvestigateOutputSchema = z.object({
   notes: z.string(),
 });
 
+export const InvestigateMediaOutputSchema = InvestigateOutputSchema.extend({
+  recordings: z.array(z.object({
+    url: z.string(),
+    title: z.string(),
+    kind: z.enum(["talk", "interview", "call"]),
+  }).strict()),
+});
+
 /** An evidence draft, plus the simulator's hidden truth when simulated. */
 export type EvidenceDraft = z.infer<typeof EvidenceDraftSchema> & { sim?: SimMeta | null };
 export type ProfileUpdate = z.infer<typeof ProfileUpdateSchema>;
 export type InvestigateOutput = Omit<z.infer<typeof InvestigateOutputSchema>, "evidence"> & {
+  evidence: EvidenceDraft[];
+};
+export type InvestigateMediaOutput = Omit<z.infer<typeof InvestigateMediaOutputSchema>, "evidence"> & {
   evidence: EvidenceDraft[];
 };
 
@@ -636,7 +647,7 @@ export interface JobIO {
   "investigate.background": { input: InvestigateInput; output: InvestigateOutput };
   "investigate.code": { input: InvestigateInput; output: InvestigateOutput };
   "investigate.company": { input: InvestigateInput; output: InvestigateOutput };
-  "investigate.media": { input: InvestigateInput; output: InvestigateOutput };
+  "investigate.media": { input: InvestigateInput; output: InvestigateMediaOutput };
   "media.read": { input: MediaReadInput; output: MediaReadOutput };
   "investigate.redflags": { input: InvestigateInput; output: InvestigateOutput };
   "company.product": { input: CompanyResearchInput; output: CompanyResearchOutput };
@@ -696,7 +707,7 @@ export const JOB_OUTPUT_SCHEMAS = {
   "investigate.background": InvestigateOutputSchema,
   "investigate.code": InvestigateOutputSchema,
   "investigate.company": InvestigateOutputSchema,
-  "investigate.media": InvestigateOutputSchema,
+  "investigate.media": InvestigateMediaOutputSchema,
   "media.read": MediaReadOutputSchema,
   "investigate.redflags": InvestigateOutputSchema,
   "company.product": CompanyResearchOutputSchema,

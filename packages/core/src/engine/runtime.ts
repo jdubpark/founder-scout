@@ -28,6 +28,7 @@ export interface PlainTaskInput {
   output?: unknown;
   outputSummary?: string | null;
   itemsOut?: number;
+  costUsd?: number | null;
   error?: string | null;
 }
 

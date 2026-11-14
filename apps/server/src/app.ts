@@ -4,7 +4,7 @@ import cors from "@fastify/cors";
 import fastifyStatic from "@fastify/static";
 import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest } from "fastify";
 import { z } from "zod";
-import { ServiceError, type SwarmService } from "@agentswarm/core";
+import { ServiceError, mediaMaxBytes, type SwarmService } from "@agentswarm/core";
 import { ACTOR_HEADER, AGENT_CLASSES, JOBS, NavigateOutputSchema } from "@agentswarm/shared";
 import type { AddTrailInput, ApiClient, ClassId, CompanySort, CompanyStatus, DirectiveFilter, JobId, SetPoolInput, UpdateTrailInput } from "@agentswarm/shared";
 
@@ -40,6 +40,7 @@ const classIds = AGENT_CLASSES.map((cls) => cls.id) as [ClassId, ...ClassId[]];
 const jobIds = JOBS.map((job) => job.id) as [JobId, ...JobId[]];
 const companyStatuses = ["tracked", "surfaced", "needs_evidence", "watch", "passed", "archived"] as const satisfies readonly CompanyStatus[];
 const companySorts = ["deal", "company", "team", "recent"] as const satisfies readonly CompanySort[];
+const recordingKinds = ["talk", "interview", "call"] as const;
 
 const thesisSchema = z
   .object({
@@ -222,6 +223,7 @@ const addFounderSchema = z
     why: nullableText.optional(),
   })
   .strict();
+const addRecordingLinkSchema = z.object({ title: requiredText, kind: z.enum(recordingKinds), url: requiredText }).strict();
 const companyQuerySchema = z
   .object({
     swarmId: requiredText,
@@ -343,8 +345,9 @@ export function buildServer(options: {
   app.register(cors, {
     origin: [...allowedOrigins],
     methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-    allowedHeaders: ["content-type", actorHeader],
+    allowedHeaders: ["content-type", actorHeader, "x-recording-title", "x-recording-kind"],
   });
+  app.addContentTypeParser(/^(?:audio|video)\/[^;\s]+(?:\s*;.*)?$/iu, { parseAs: "buffer" }, (_request, body, done) => done(null, body));
 
   const staticRoot = webDist ? resolve(webDist) : null;
   const hasWebDist = staticRoot !== null && existsSync(staticRoot) && statSync(staticRoot).isDirectory();
@@ -418,6 +421,35 @@ export function buildServer(options: {
 
   get("/api/founders", founderQuerySchema, (api, input) => api.listFounders(input));
   get("/api/founders/:id", emptySchema, (api, _input, params) => api.getFounder(params.id!));
+  get("/api/founders/:id/recordings", emptySchema, (api, _input, params) => api.listRecordings(params.id!));
+  app.route({
+    method: "POST",
+    url: "/api/founders/:id/recordings",
+    bodyLimit: mediaMaxBytes(),
+    handler: async (request, reply) => {
+      const founderId = (request.params as Record<string, string>).id!;
+      const api = service.as(actorFor(request));
+      const contentType = request.headers["content-type"] ?? "";
+      if (/^(?:audio|video)\//iu.test(contentType.split(";", 1)[0]!.trim())) {
+        const title = request.headers["x-recording-title"];
+        const kind = request.headers["x-recording-kind"];
+        if (typeof title !== "string" || typeof kind !== "string" || !recordingKinds.includes(kind as (typeof recordingKinds)[number])) {
+          return reply.code(400).send({ error: "Recording title and kind headers are required.", fields: { title: "Enter a title.", kind: "Choose talk, interview, or call." } });
+        }
+        if (!Buffer.isBuffer(request.body)) {
+          return reply.code(400).send({ error: "Choose a non-empty recording file.", fields: { file: "Choose a non-empty file." } });
+        }
+        return api.uploadRecording(founderId, { title, kind: kind as (typeof recordingKinds)[number], contentType, data: new Uint8Array(request.body) });
+      }
+      const input = parseInput(addRecordingLinkSchema, request.body, reply);
+      if (input === invalid) return reply;
+      return api.addRecordingLink(founderId, input);
+    },
+  });
+  app.delete("/api/recordings/:id", async (request, reply) => {
+    await service.as(actorFor(request)).removeRecording((request.params as Record<string, string>).id!);
+    return reply.code(204).send();
+  });
   post("/api/founders/:id/feedback", feedbackSchema, (api, input, params) => api.addFeedback(params.id!, input));
   post("/api/founders", addFounderSchema, (api, input) => api.addFounder(input));
   get("/api/companies", companyQuerySchema, (api, input) => api.listCompanies(input));

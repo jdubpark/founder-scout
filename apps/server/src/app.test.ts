@@ -104,6 +104,14 @@ const routeCases: RouteCase[] = [
     args: [{ swarmId: "sw-1", limit: 20, offset: 5 }],
   },
   { method: "GET", url: "/api/founders/f-1", apiMethod: "getFounder", args: ["f-1"] },
+  { method: "GET", url: "/api/founders/f-1/recordings", apiMethod: "listRecordings", args: ["f-1"] },
+  {
+    method: "POST",
+    url: "/api/founders/f-1/recordings",
+    apiMethod: "addRecordingLink",
+    args: ["f-1", { title: "Founder talk", kind: "talk", url: "https://media.example.com/talk.mp3" }],
+    body: { title: "Founder talk", kind: "talk", url: "https://media.example.com/talk.mp3" },
+  },
   {
     method: "POST",
     url: "/api/founders/f-1/feedback",
@@ -251,6 +259,29 @@ describe("buildServer routes", () => {
 
     expect(calls).toHaveLength(routeCases.length);
     expect(calls.every((call) => call.actor === "Morgan Operator")).toBe(true);
+  });
+
+  it("passes an audio upload as raw bytes and deletes recordings with a no-content response", async () => {
+    const { service, calls } = fakeService();
+    const app = await serverFor(service);
+    const data = new Uint8Array([0, 1, 2, 3]);
+    const uploaded = await app.inject({
+      method: "POST",
+      url: "/api/founders/f-1/recordings",
+      headers: {
+        "content-type": "audio/mpeg",
+        "x-recording-title": "Founder talk",
+        "x-recording-kind": "talk",
+        "x-actor": "Morgan Operator",
+      },
+      payload: Buffer.from(data),
+    });
+    const removed = await app.inject({ method: "DELETE", url: "/api/recordings/rec-1", headers: { "x-actor": "Morgan Operator" } });
+
+    expect(uploaded.statusCode).toBe(200);
+    expect(calls[0]).toMatchObject({ method: "uploadRecording", actor: "Morgan Operator", args: ["f-1", { title: "Founder talk", kind: "talk", contentType: "audio/mpeg", data }] });
+    expect(removed.statusCode).toBe(204);
+    expect(calls[1]).toMatchObject({ method: "removeRecording", args: ["rec-1"] });
   });
 
   it("starts a manual run without triggering scheduled coaching", async () => {

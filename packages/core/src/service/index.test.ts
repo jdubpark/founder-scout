@@ -1,3 +1,6 @@
+import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   BASE_CONFIG, DEFAULT_SETTINGS, JOBS, PROVIDERS, ZERO_STATS, newId, stableId, runnerPools,
@@ -10,6 +13,8 @@ import { openStore } from "../db";
 import { ServiceError } from "../contracts";
 import { createSimDialler, createSimWorld } from "../sim";
 import { createApp, createSwarmService } from "./index";
+import { createRecordingService } from "./recordings";
+import { createMediaFetcher } from "../sources/media";
 
 const fixedAt = new Date("2026-11-12T18:00:00.000Z");
 const stamp = fixedAt.toISOString();
@@ -76,6 +81,13 @@ function harness(defaultPools?: () => Promise<Pools>, existingSwarm = false, dia
     store.insertAgent({ id: "agt_legacy_scout", swarmId: swarm.id, jobId: "scout.github", classId: "scout", name: "GitHub", status: "active", beat: null, state: {}, createdAt: stamp });
   }
   const service = createSwarmService({ store, runs, evals, providers, liveSources, ...(dialler ? { dialler } : {}), fundName, callbackNumber, ...(defaultPools ? { defaultPools } : {}), cron, now: () => clock });
+  const recordings = createRecordingService({
+    store,
+    dataDir: "/tmp/agentswarm-service-tests",
+    maxBytes: 150 * 1024 * 1024,
+    checkAddress: async (url) => ({ url, addresses: ["93.184.216.34"] }),
+  });
+  const service = createSwarmService({ store, runs, evals, providers, liveSources, recordings, ...(dialler ? { dialler } : {}), ...(defaultPools ? { defaultPools } : {}), cron, now: () => clock });
   return {
     store, service, refused,
     setNow: (at: Date) => { clock = at; },
@@ -153,6 +165,47 @@ function createHarness(defaultPools?: () => Promise<Pools>, existingSwarm = fals
 afterEach(() => { for (const item of opened.splice(0)) item.service.close(); });
 
 describe("createSwarmService", () => {
+  it("refuses unsafe links and stores uploads under generated names in the founder's recording list", async () => {
+    const { service, store } = createHarness();
+    await service.ensureSeeded();
+    const swarm = store.listSwarms()[0]!;
+    const founder = founderRecord(swarm.id, "fnd_recording_intake");
+    store.insertFounder(founder);
+    const dataDir = await mkdtemp(join(tmpdir(), "agentswarm-recordings-"));
+    try {
+      const media = createMediaFetcher({
+        resolveHost: async () => ["93.184.216.34"],
+        sleep: async () => undefined,
+      });
+      const recordings = createRecordingService({
+        store,
+        dataDir,
+        maxBytes: 1024,
+        checkAddress: media.checkAddress,
+        now: () => fixedAt,
+      });
+
+      await expectServiceError(recordings.addLink("Partner", founder.id, { title: "Founder talk", kind: "talk", url: "http://127.0.0.1/private.mp3" }), 400, "url");
+      await expectServiceError(recordings.addLink("Partner", founder.id, { title: "I was born in 1984", kind: "talk", url: "https://media.example.com/talk.mp3" }), 400, "title");
+      expect(recordings.list("Partner", founder.id)).toEqual([]);
+      const linked = await recordings.addLink("Partner", founder.id, { title: "Founder interview", kind: "interview", url: "https://media.example.com/interview.mp3" });
+      const data = new Uint8Array([1, 2, 3, 4]);
+      const uploaded = await recordings.upload("Partner", founder.id, { title: "Founder talk", kind: "talk", contentType: "audio/mpeg", data });
+      const generatedPath = join(dataDir, "recordings", `${uploaded.id}.media`);
+
+      expect(uploaded.sourceUrl).toBeNull();
+      expect(await readFile(generatedPath)).toEqual(Buffer.from(data));
+      expect(recordings.list("Partner", founder.id).map((recording) => recording.id).sort()).toEqual([linked.id, uploaded.id].sort());
+
+      await recordings.remove("Partner", uploaded.id);
+      expect(recordings.list("Partner", founder.id).map((recording) => recording.id)).toEqual([linked.id]);
+      await expect(readFile(generatedPath)).rejects.toThrow();
+      expect(store.recentAudit(8).map((entry) => entry.action)).toContain("recording.remove");
+    } finally {
+      await rm(dataDir, { recursive: true, force: true });
+    }
+  });
+
   it("backfills enabled job agents for a swarm loaded from an older database", () => {
     const { service, store } = createHarness(undefined, true);
     const agents = store.listAgents("swm_legacy");

@@ -18,6 +18,7 @@ export {
   createLiveSources,
   createLiveDialler,
   createLiveRepoFinder,
+  mediaMaxBytes,
   parseRepoUrl,
   parseGitHubLogin,
   sanitizeCheckout,

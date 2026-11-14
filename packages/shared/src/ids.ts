@@ -24,6 +24,7 @@ export type IdPrefix =
   | "cas" // company assessment
   | "cfb" // company feedback
   | "net" // contact from a partner's uploaded list
+  | "rcd" // recording
   | "hnt" // hunt: a swarm's notebook
   | "trl" // trail
   | "frn" // frontier item: a search or a page waiting on a trail
