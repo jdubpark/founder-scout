@@ -4,6 +4,7 @@ import { z } from "zod";
 import {
   BASE_CONFIG,
   COMPANY_DIMENSIONS,
+  DEFAULT_ROUTES,
   DIMENSIONS,
   EMPTY_STEERING,
   MAX_LESSON_LENGTH,
@@ -15,6 +16,8 @@ import {
   effectiveWeights,
   getJob,
   getParamDef,
+  isContributorModel,
+  mayUseContributorModel,
   numberParam,
   scoreCompany,
   scoreFounder,
@@ -476,7 +479,10 @@ function companyInput(evidence: CompanyAssessInput["evidence"]): CompanyAssessIn
 }
 
 function safeRoute(config: SwarmConfig, job: JudgingJob) {
-  return effectiveRoute(job, EMPTY_STEERING, config);
+  const route = effectiveRoute(job, EMPTY_STEERING, config);
+  return isContributorModel(route.model) && !mayUseContributorModel(job)
+    ? { ...DEFAULT_ROUTES[job] }
+    : route;
 }
 
 function taskContext(config: SwarmConfig, job: JudgingJob, deps: EvalDeps): JobContext {
@@ -824,7 +830,7 @@ function dtoFromState(cases: readonly PastCase[], split: Split | null, cache: Ca
   const eraNote = typeof contam.eraNamed === "number" && typeof contam.eraProbed === "number" && typeof contam.eraFixed === "number"
     ? ` Asked the year, the judge was within one for ${contam.eraNamed} of ${contam.eraProbed} masked cases; always answering one year would be for ${contam.eraFixed}.`
     : "";
-  const narrative = `Baseline picks past winners in ${percent(baseline?.test.clean_auc ?? null)} of held-out contemporary pairs. Current best is ${best?.id ?? "baseline"} at ${percent(best?.test.clean_auc ?? null)}; ${excludedCount} cases are left out of the headline because they were recognised or could not be checked.${state.current_round ? ` ${state.current_round} changes were tried.` : ""}${tuneNote}${refused ? ` ${refused}` : ""}${placeboNote}${eraNote}`;
+  const narrative = `Baseline picks past winners in ${percent(baseline?.test.clean_auc ?? null)} of held-out contemporary pairs. Current best is ${best?.id ?? "baseline"} at ${percent(best?.test.clean_auc ?? null)}; ${excludedCount} cases are left out of the headline because they were recognised or could not be checked.${state.current_round ? ` ${state.current_round} changes were tried.` : ""}${tuneNote}${refused ? ` ${refused}` : ""}${placeboNote}${eraNote} Contributor routes fall back to each job's default model when past cases may contain private fund notes.`;
   return {
     ...emptyDto(cases, cache, split, itemsCutOff, repetitions),
     baseline: baseline?.test.clean_auc ?? null,

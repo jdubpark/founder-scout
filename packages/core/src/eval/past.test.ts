@@ -4,10 +4,12 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   BASE_CONFIG,
+  DEFAULT_ROUTES,
   COMPANY_DIMENSIONS,
   DIMENSIONS,
   type AssessInput,
   type CompanyAssessInput,
+  type ModelRoute,
   type PastCase,
   type SwarmConfig,
 } from "@agentswarm/shared";
@@ -699,6 +701,46 @@ describe("past founders eval", () => {
     const back = await run("judge-a");
     expect(calls.length).toBe(cases.length * 4);
     expect(back.baseline).toBe(first.baseline);
+  });
+
+  it("blocks a contributor judge route for analyst, recognition, and guidance calls", async () => {
+    const cases = makeCases();
+    const files = await setup(cases);
+    const { deps, calls } = depsFor(files, { mode: "flat" });
+    const contributorRoute: ModelRoute = { provider: "meta-api", model: "muse-spark-1.3-contributor" };
+    const initialConfig: SwarmConfig = {
+      ...BASE_CONFIG,
+      routes: {
+        ...BASE_CONFIG.routes,
+        "assess.judgments": contributorRoute,
+        "assess.company": contributorRoute,
+      },
+    };
+    const directRoutes: ModelRoute[] = [];
+    let guidanceCalls = 0;
+    const flow = pastFlow(deps, {
+      initialConfig,
+      repetitions: 1,
+      probe: async ({ route, prompt }) => {
+        directRoutes.push(route);
+        return guessFor(prompt, cases, new Set());
+      },
+      proposeGuidance: async ({ route }) => {
+        guidanceCalls += 1;
+        directRoutes.push(route);
+        return [];
+      },
+    });
+
+    const result = await flow.runRounds(PAST_FOUNDERS_FLOW_ID, { brain: "live", rounds: 1, budgetUsd: 100 });
+
+    expect(calls.every((call) => call.ctx.route.model !== contributorRoute.model)).toBe(true);
+    expect(directRoutes.length).toBeGreaterThan(0);
+    expect(directRoutes.every((route) => route.model !== contributorRoute.model)).toBe(true);
+    expect(guidanceCalls).toBeGreaterThan(0);
+    expect(directRoutes.every((route) => JSON.stringify(route) === JSON.stringify(DEFAULT_ROUTES["assess.judgments"]))).toBe(true);
+    expect(calls.every((call) => JSON.stringify(call.ctx.route) === JSON.stringify(DEFAULT_ROUTES[call.job as "assess.judgments" | "assess.company"]))).toBe(true);
+    expect(result.narrative).toContain("Contributor routes fall back to each job's default model");
   });
 
   it("runs at most four cases at once and reserves the budget across overlapping calls", async () => {

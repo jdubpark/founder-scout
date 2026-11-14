@@ -56,6 +56,7 @@ describe("resolveConfig", () => {
     expect(resolveConfig({ EVAL_JUDGE: "claude-cli:claude-opus-5-5:high" }).evalJudge).toEqual({ provider: "claude-cli", model: "claude-opus-5-5", effort: "high" });
     expect(() => resolveConfig({ EVAL_JUDGE: "claude-haiku-5-5" })).toThrow(/EVAL_JUDGE must look like/);
     expect(() => resolveConfig({ EVAL_JUDGE: "claude-cli:claude-haiku-5-5:extreme" })).toThrow(/EVAL_JUDGE must look like/);
+    expect(() => resolveConfig({ EVAL_JUDGE: "meta-api:muse-spark-1.3-contributor" })).toThrow(/vendor may train on private deal notes.*use muse-spark-1\.3/);
   });
 
   it("rejects invalid integer settings", () => {

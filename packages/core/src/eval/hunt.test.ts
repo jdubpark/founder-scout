@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -42,12 +42,27 @@ describe("hunt-yield evaluation boundary", () => {
       tuned: (): Shape => ({ strong: 2, weak: 1, calls: 10 }),
       status: "reverted",
     },
-  ])("$name", async ({ tuned, status }) => {
+    {
+      name: "reverts a gain that changes the runner-call allowance without testing held-out worlds",
+      tuned: (): Shape => ({ strong: 4, weak: 0, calls: 10 }),
+      status: "reverted",
+      changeConfig: (config: SwarmConfig): SwarmConfig => ({
+        ...config,
+        params: { ...config.params, "hunt.turns": 5 },
+      }),
+    },
+  ])("$name", async (scenario) => {
+    const { tuned, status } = scenario;
     const root = await mkdtemp(path.join(tmpdir(), "agentswarm-hunt-yield-"));
     roots.push(root);
     const jobs = createJobRegistry();
+    const heldOutCandidateTrials: number[] = [];
     const trial = async ({ seed, config }: HuntTrialInput) => {
-      const shape = Number(config.params["hunt.max_depth"]) >= 3 ? tuned(seed) : BASE;
+      const changedCalls = Number(config.params["hunt.turns"] ?? 4) !== Number(BASE_CONFIG.params["hunt.turns"] ?? 4)
+        || Number(config.params["hunt.wave_size"] ?? 12) !== Number(BASE_CONFIG.params["hunt.wave_size"] ?? 12);
+      const candidate = Number(config.params["hunt.max_depth"]) >= 3 || changedCalls;
+      if (candidate && heldOut(seed)) heldOutCandidateTrials.push(seed);
+      const shape = candidate ? tuned(seed) : BASE;
       return {
         found: [
           ...Array.from({ length: shape.strong }, (_, index) => ({ simFounderId: `strong-${index}`, quality: 0.8, stage: "pre-seed" })),
@@ -73,7 +88,9 @@ describe("hunt-yield evaluation boundary", () => {
     };
     const service = createEvalService(deps, {
       huntPropose: async ({ currentConfig, evaluate }) => {
-        const config: SwarmConfig = { ...currentConfig, params: { ...currentConfig.params, "hunt.max_depth": 3 } };
+        const config: SwarmConfig = "changeConfig" in scenario && scenario.changeConfig
+          ? scenario.changeConfig(currentConfig)
+          : { ...currentConfig, params: { ...currentConfig.params, "hunt.max_depth": 3 } };
         return { key: "hunt.max_depth:3", description: "increase link depth", config, train: await evaluate(config) };
       },
     });
@@ -83,6 +100,48 @@ describe("hunt-yield evaluation boundary", () => {
     expect(result.goal.target).toBe("strong_early_found");
     expect(result.variants[1]?.status).toBe(status);
     expect(result.goal.hold).not.toContain("calls");
+    if ("changeConfig" in scenario) {
+      expect(heldOutCandidateTrials).toEqual([]);
+      expect(result.variants[1]?.rationale).toContain("alters how many runner calls");
+      expect(result.variants[1]?.rationale).toContain("like for like");
+    }
+  });
+
+  it("archives an unversioned hunt state and measures a fresh baseline", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "agentswarm-hunt-yield-"));
+    roots.push(root);
+    const flowDir = path.join(root, "hunt-yield");
+    await mkdir(flowDir, { recursive: true });
+    const oldState = {
+      baselineConfig: BASE_CONFIG,
+      variants: [{
+        id: "baseline", round: 0, description: "Old metric baseline", rationale: "Old definition.",
+        status: "baseline", config: BASE_CONFIG, createdAt: "2026-01-01T00:00:00.000Z", cases: [],
+      }],
+      bestVariant: "baseline", currentRound: 0, tried: [], updatedAt: "2026-01-01T00:00:00.000Z",
+      lastBrain: "sim", noiseFloor: 0,
+    };
+    await writeFile(path.join(flowDir, "_state.json"), JSON.stringify(oldState));
+    const jobs = createJobRegistry();
+    let trialCount = 0;
+    const service = createEvalService({
+      store: null,
+      jobs,
+      executeJob: createExecuteJob({ jobs, providers: createProviderRegistry({}) }),
+      flowsDir: root,
+      huntTrial: async () => {
+        trialCount += 1;
+        return { found: [], kept: [], runnerCalls: 1, pages: 1, searches: 0, plantedRead: 0, plantedFailed: 0, costUsd: 0, unpricedCalls: 0, models: {} };
+      },
+    });
+
+    await service.runRounds("hunt-yield", { rounds: 0, brain: "sim" });
+
+    expect(trialCount).toBe(16);
+    const entries = await readdir(flowDir);
+    const archivedName = entries.find((name) => name.startsWith("_state") && name !== "_state.json");
+    expect(archivedName).toBeDefined();
+    expect(JSON.parse(await readFile(path.join(flowDir, archivedName!), "utf8"))).toEqual(oldState);
   });
 
   it("measures a live baseline only with a budget that covers it, and never climbs on real models", async () => {
@@ -111,6 +170,47 @@ describe("hunt-yield evaluation boundary", () => {
     expect(asked.every((trial) => trial.brain === "live" && trial.budgetUsd === 1)).toBe(true);
 
     await expect(service.runRounds("hunt-yield", { rounds: 1, brain: "live", budgetUsd: 16 })).rejects.toMatchObject({ status: 409 });
+  });
+
+  it("records failed worlds as incomplete and refuses a baseline with any failed world", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "agentswarm-hunt-yield-"));
+    roots.push(root);
+    const jobs = createJobRegistry();
+    let failBaseline = true;
+    let failCandidate = false;
+    const service = createEvalService({
+      store: null,
+      jobs,
+      executeJob: createExecuteJob({ jobs, providers: createProviderRegistry({}) }),
+      flowsDir: root,
+      huntTrial: async ({ seed, config }: HuntTrialInput) => {
+        const candidate = Number(config.params["hunt.max_depth"]) >= 3;
+        if ((!candidate && failBaseline && seed === 17) || (candidate && failCandidate && seed === 929)) {
+          throw new Error("provider stopped early");
+        }
+        return { found: [], kept: [], runnerCalls: 1, pages: 1, searches: 0, plantedRead: 0, plantedFailed: 0, costUsd: 0, unpricedCalls: 0, models: {} };
+      },
+    }, {
+      huntPropose: async ({ currentConfig, evaluate }) => {
+        const config: SwarmConfig = { ...currentConfig, params: { ...currentConfig.params, "hunt.max_depth": 3 } };
+        return { key: "hunt.max_depth:3", description: "increase link depth", config, train: await evaluate(config) };
+      },
+    });
+
+    await expect(service.runRounds("hunt-yield", { rounds: 0, brain: "sim" }))
+      .rejects.toThrow(/baseline.*1.*world.*seed 17.*provider stopped early/i);
+    await expect(readFile(path.join(root, "hunt-yield", "_state.json"), "utf8"))
+      .rejects.toMatchObject({ code: "ENOENT" });
+
+    failBaseline = false;
+    await service.runRounds("hunt-yield", { rounds: 0, brain: "sim" });
+    failCandidate = true;
+    const result = await service.runRounds("hunt-yield", { rounds: 1, brain: "sim" });
+
+    expect(result.variants[1]?.status).toBe("reverted");
+    expect(result.variants[1]?.rationale).toContain("incomplete");
+    expect(result.narrative).toContain("1 world failed");
+    expect(result.narrative).toContain("provider stopped early");
   });
 });
 

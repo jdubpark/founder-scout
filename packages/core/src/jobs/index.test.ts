@@ -72,6 +72,43 @@ function markAllInputText(value: unknown): unknown {
   return value;
 }
 
+function withSimulatorSentinels(value: unknown): { input: unknown; values: string[] } {
+  const values: string[] = [];
+  const sentinel = (field: string) => {
+    const value = `SIMULATOR_ONLY_${values.length}_${field}`;
+    values.push(value);
+    return value;
+  };
+  const simValues = (value: unknown, path: string): Record<string, unknown> => {
+    const existing = value !== null && typeof value === "object" && !Array.isArray(value)
+      ? Object.fromEntries(Object.keys(value).map((key) => [key, sentinel(`${path}.${key}`)]))
+      : {};
+    for (const field of ["truth", "signals", "planted"]) existing[field] = sentinel(`${path}.${field}`);
+    return existing;
+  };
+  const visit = (value: unknown, path: string): unknown => {
+    if (Array.isArray(value)) return value.map((item, index) => visit(item, `${path}[${index}]`));
+    if (value !== null && typeof value === "object") {
+      return Object.fromEntries(Object.entries(value).map(([key, item]) => {
+        if (key === "simId" || key === "simFounderId") return [key, sentinel(`${path}.${key}`)];
+        if (key === "sim") return [key, simValues(item, `${path}.sim`)];
+        return [key, visit(item, `${path}.${key}`)];
+      }));
+    }
+    return value;
+  };
+  const marked = visit(value, "input") as Record<string, unknown>;
+  return {
+    input: {
+      ...marked,
+      simId: sentinel("input.simId"),
+      simFounderId: sentinel("input.simFounderId"),
+      sim: simValues(null, "input.sim"),
+    },
+    values,
+  };
+}
+
 function markerIsInsideFence(text: string, markerIndex: number): boolean {
   const openingStart = text.lastIndexOf("<", markerIndex);
   const openingEnd = text.indexOf(">", openingStart);
@@ -469,8 +506,8 @@ describe("job registry and prompt contracts", () => {
     const input = inputFor(id);
     const ctx = context();
     const definition = jobs.get(id);
-    const markedInput = markAllInputText(input) as never;
-    const prompt = definition.buildPrompt(markedInput, ctx);
+    const markedInput = withSimulatorSentinels(markAllInputText(input));
+    const prompt = definition.buildPrompt(markedInput.input as never, ctx);
     const output = definition.simulate(input, ctx);
     const combined = prompt.system + "\n" + prompt.prompt;
 
@@ -488,12 +525,19 @@ describe("job registry and prompt contracts", () => {
     }
     expect(markerIndexes.length).toBeGreaterThan(0);
     for (const index of markerIndexes) expect(markerIsInsideFence(prompt.prompt, index)).toBe(true);
-    expect(combined).not.toContain("SIM-ID-SECRET");
-    expect(combined).not.toContain("SIM-FOUNDER-SECRET");
-    expect(combined).not.toContain("simFounderId");
-    expect(combined).not.toContain("simId");
-    expect(combined).not.toContain("SIM-HIDDEN-TRUTH");
-    expect(combined).not.toMatch(/["'](?:simId|simFounderId|truth|signals)["']\s*:/i);
+    for (const value of markedInput.values) {
+      expect(prompt.system).not.toContain(value);
+      expect(prompt.prompt).not.toContain(value);
+    }
+    for (const key of ["simId", "simFounderId"]) {
+      expect(prompt.system).not.toContain(key);
+      expect(prompt.prompt).not.toContain(key);
+    }
+    for (const key of ["sim", "truth", "signals", "planted"]) {
+      const serializedKey = new RegExp(`["']${key}["']\\s*:`);
+      expect(prompt.system).not.toMatch(serializedKey);
+      expect(prompt.prompt).not.toMatch(serializedKey);
+    }
     expect(combined).not.toMatch(/respond\s+(?:with|in)\s+JSON/i);
     expect(definition.outputSchema.safeParse(output).success).toBe(true);
   });
