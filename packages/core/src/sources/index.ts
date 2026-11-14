@@ -17,6 +17,7 @@ import { createGitHubSearchEngine, createHnSearchEngine, createHuggingFaceSearch
 import { createLiveTranscriber } from "./transcribe";
 import { createMediaFetcher } from "./media";
 import type { Dialler } from "../contracts";
+import { createVapiDialler, type VapiDiallerOptions } from "./dialler-vapi";
 
 export { createArxivAdapter } from "./arxiv";
 export { createGitHubAdapter } from "./github";
@@ -35,9 +36,10 @@ export { sanitizeCheckout, type SanitizeResult } from "./sanitize";
 export { parseRepoUrl, parseGitHubLogin, type RepoFinderOptions } from "./repo-finder";
 export { SourceRateLimitError } from "./http";
 
-/** The vendor-neutral slot is intentionally unconfigured until a reviewed adapter is selected. */
-export function createLiveDialler(_env: NodeJS.ProcessEnv = process.env): Dialler | null {
-  return null;
+/** Constructs Vapi only when the call key and imported outbound number are configured. */
+export function createLiveDialler(env: NodeJS.ProcessEnv = process.env, options: Omit<VapiDiallerOptions, "env"> = {}): Dialler | null {
+  if (!env.VAPI_API_KEY?.trim() || !env.VAPI_PHONE_NUMBER_ID?.trim()) return null;
+  return createVapiDialler({ ...options, env });
 }
 export {
   collectLaunchPosts,

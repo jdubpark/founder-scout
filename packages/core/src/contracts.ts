@@ -398,8 +398,10 @@ export interface SimWorld {
 export interface Dialler {
   readonly vendor: string;
   status(): Promise<{ configured: boolean; detail: string }>;
-  place(request: { to: string; opening: string; instructions: string; questions: string[]; maxMinutes: number; record: boolean; reference: string }, signal?: AbortSignal): Promise<{ callId: string }>;
+  place(request: { to: string; opening: string; instructions: string; questions: string[]; closing: string; maxMinutes: number; record: boolean; reference: string; simulation?: { simId: string; kind: string; targetName: string } }, signal?: AbortSignal): Promise<{ callId: string }>;
   fetch(callId: string, signal?: AbortSignal): Promise<{ state: "queued" | "in_progress" | "completed" | "failed" | "no_answer" | "declined"; transcript: string | null; durationSec: number | null; costUsd: number | null; detail: string | null }>;
+  /** Delete vendor-side call artifacts after the service has stored its local result. */
+  forget?(callId: string, signal?: AbortSignal): Promise<void>;
 }
 
 /* ================================================================== */
@@ -969,6 +971,9 @@ export interface ServiceDeps {
   /** Live source adapters, for the settings page's status list. */
   liveSources: SourceRegistry;
   dialler?: { sim: Dialler; live: Dialler | null };
+  /** Registered caller identity and phone disclosed on an AI call. */
+  fundName?: string | null;
+  callbackNumber?: string | null;
   /** The hunt's search engines in each mode, for the Hunt page. */
   web?: { sim: WebAccess; live: WebAccess };
   /** Reviewed playbooks shown in the steering preview and used by the job registry. */

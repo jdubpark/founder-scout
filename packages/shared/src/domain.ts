@@ -534,12 +534,12 @@ export interface OutreachDraft {
 
 export interface OutreachCall {
   vendor: string;
-  callId: string;
+  callId: string | null;
   placedBy: string;
   placedAt: string;
   consent: { how: string; recording: boolean; recordedBy: string; at: string };
   numberTail: string;
-  state: "queued" | "in_progress" | "completed" | "failed" | "no_answer" | "declined";
+  state: "placing" | "queued" | "in_progress" | "completed" | "failed" | "no_answer" | "declined";
   endedAt: string | null;
   durationSec: number | null;
   costUsd: number | null;

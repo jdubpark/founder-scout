@@ -11,7 +11,7 @@ export function createSimDialler(world: SimWorld): Dialler {
     status: async () => ({ configured: true, detail: "Simulated" }),
     place: async (request) => {
       const callId = `sim-call-${++sequence}`;
-      const [simId, kind, targetName] = request.reference.split("\u0000");
+      const { simId, kind, targetName } = request.simulation ?? { simId: "", kind: "call_founder", targetName: "Founder" };
       const supported = kind === "call_founder" || kind === "call_reference" ? kind as OutreachKind : "call_founder";
       calls.set(callId, {
         state: "completed",

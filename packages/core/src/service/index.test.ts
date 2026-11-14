@@ -15,7 +15,7 @@ const fixedAt = new Date("2026-11-12T18:00:00.000Z");
 const stamp = fixedAt.toISOString();
 const cron = { isValid: (value: string) => value === "0 6 * * *", next: () => "2026-11-13T06:00:00.000Z" };
 
-function harness(defaultPools?: () => Promise<Pools>, existingSwarm = false, dialler?: ServiceDeps["dialler"]) {
+function harness(defaultPools?: () => Promise<Pools>, existingSwarm = false, dialler?: ServiceDeps["dialler"], callbackNumber: string | null = "+14155550100", fundName: string | null = "Northstar Ventures") {
   const store = openStore(":memory:");
   const refused = new Set<string>();
   let sourceConfigured = true;
@@ -75,7 +75,7 @@ function harness(defaultPools?: () => Promise<Pools>, existingSwarm = false, dia
     store.insertSwarm(swarm);
     store.insertAgent({ id: "agt_legacy_scout", swarmId: swarm.id, jobId: "scout.github", classId: "scout", name: "GitHub", status: "active", beat: null, state: {}, createdAt: stamp });
   }
-  const service = createSwarmService({ store, runs, evals, providers, liveSources, ...(dialler ? { dialler } : {}), ...(defaultPools ? { defaultPools } : {}), cron, now: () => clock });
+  const service = createSwarmService({ store, runs, evals, providers, liveSources, ...(dialler ? { dialler } : {}), fundName, callbackNumber, ...(defaultPools ? { defaultPools } : {}), cron, now: () => clock });
   return {
     store, service, refused,
     setNow: (at: Date) => { clock = at; },
@@ -149,7 +149,7 @@ function expectServiceError(promise: Promise<unknown>, status: number, field?: s
 }
 
 const opened: ReturnType<typeof harness>[] = [];
-function createHarness(defaultPools?: () => Promise<Pools>, existingSwarm = false, dialler?: ServiceDeps["dialler"]) { const item = harness(defaultPools, existingSwarm, dialler); opened.push(item); return item; }
+function createHarness(defaultPools?: () => Promise<Pools>, existingSwarm = false, dialler?: ServiceDeps["dialler"], callbackNumber?: string | null, fundName?: string | null) { const item = harness(defaultPools, existingSwarm, dialler, callbackNumber, fundName); opened.push(item); return item; }
 afterEach(() => { for (const item of opened.splice(0)) item.service.close(); });
 
 describe("createSwarmService", () => {
@@ -826,12 +826,25 @@ describe("createSwarmService", () => {
   });
 
   it("refuses unsafe call placements and never stores the full number", async () => {
-    const consent = { how: "They agreed by email to an AI call.", recording: false };
+    const consent = { how: "They agreed by email at +14155550123 to an AI call.", recording: false };
     const validInput = { to: "+14155550123", timezone: "America/Chicago", consent };
+    let placedRequest: Parameters<Dialler["place"]>[0] | undefined;
+    let throwAfterAccept = false;
+    let providerAccepts = 0;
+    let currentStore: Store | undefined;
+    let currentActionId = "";
+    let placementIntentWasStored = false;
     const dialler: Dialler = {
       vendor: "Test dialler",
       status: async () => ({ configured: true, detail: "Ready" }),
-      place: async () => ({ callId: "call-1" }),
+      place: async (request) => {
+        placedRequest = request;
+        providerAccepts += 1;
+        const intent = currentStore?.getOutreach(currentActionId);
+        placementIntentWasStored = intent?.status === "dispatched" && intent.call?.state === "placing" && intent.call.callId === null;
+        if (throwAfterAccept) throw new Error(`Provider accepted ${validInput.to} before the response was lost.`);
+        return { callId: "call-1" };
+      },
       fetch: async () => ({ state: "queued", transcript: null, durationSec: null, costUsd: null, detail: null }),
     };
     const refusals = [
@@ -840,32 +853,50 @@ describe("createSwarmService", () => {
       { name: "already placed", status: 409, alreadyPlaced: true },
       { name: "no consent text", status: 400, input: { ...validInput, consent: { ...consent, how: "" } } },
       { name: "bad number", status: 400, input: { ...validInput, to: "4155550123" } },
+      { name: "missing callback number", status: 503, noCallback: true },
+      { name: "callback number is not E.164", status: 503, callbackNumber: "4155550100" },
+      { name: "missing registered fund name", status: 503, noFundName: true },
+      { name: "prohibited personal attributes", status: 400, personalAttributes: true },
+      { name: "provider accepted before placement response was lost", status: 409, throwAfterAccept: true },
       { name: "outside hours", status: 400, input: { ...validInput, timezone: "Pacific/Kiritimati" } },
       { name: "daily ceiling", status: 409, ceiling: true },
       { name: "emergency stop", status: 409, emergency: true },
       { name: "no calling service", status: 503, noService: true },
     ];
     for (const refusal of refusals) {
-      const { service, store } = createHarness(undefined, false, refusal.noService ? undefined : { sim: dialler, live: dialler });
+      const { service, store } = createHarness(undefined, false, refusal.noService ? undefined : { sim: dialler, live: dialler }, refusal.callbackNumber ?? (refusal.noCallback ? null : undefined), refusal.noFundName ? null : undefined);
       const api = service.as("Partner");
       const swarm = await api.createSwarm({ name: "Call limits", thesis });
       const founder = founderRecord(swarm.id); store.insertFounder(founder);
+      throwAfterAccept = Boolean(refusal.throwAfterAccept);
+      providerAccepts = 0;
       const action: OutreachAction = {
         id: newId("out"), swarmId: swarm.id, founderId: founder.id,
         kind: "call_founder", target: { name: founder.name, role: null, relationship: null, channelHint: null },
-        rationale: "Approved call", draft: { subject: null, body: null, agenda: ["Discuss the product"], questions: ["What shipped?"], disclosure: "This is an AI assistant calling for the fund." },
+        rationale: "Approved call", draft: { subject: null, body: null, agenda: ["Discuss the product"], questions: refusal.personalAttributes ? ["Is the founder married?"] : ["What shipped?"], disclosure: "This is an AI assistant calling for the fund." },
         consentBasis: "They agreed to a call", status: "approved", decidedBy: "Partner", decidedAt: stamp, decisionNote: null,
         resultSummary: null, transcriptEvidenceId: null, createdByTaskId: null, createdAt: stamp, updatedAt: stamp,
         ...refusal.action,
       };
+      currentStore = store;
+      currentActionId = action.id;
       store.insertOutreach(action);
       if (refusal.alreadyPlaced) store.updateOutreach(action.id, { call: { vendor: "Test dialler", callId: "prior", placedBy: "Partner", placedAt: stamp, consent: { how: consent.how, recording: false, recordedBy: "Partner", at: stamp }, numberTail: "23", state: "completed", endedAt: stamp, durationSec: 20, costUsd: 0, detail: null } });
       if (refusal.ceiling) {
         for (let i = 0; i < 5; i += 1) store.insertOutreach({ ...action, id: newId("out"), call: { vendor: "Test dialler", callId: `prior-${i}`, placedBy: "Partner", placedAt: stamp, consent: { how: consent.how, recording: false, recordedBy: "Partner", at: stamp }, numberTail: "23", state: "completed", endedAt: stamp, durationSec: 20, costUsd: 0, detail: null } });
       }
       if (refusal.emergency) store.saveSettings({ ...store.getSettings(), killSwitch: true });
-      await expectServiceError(api.placeCall(action.id, refusal.input ?? validInput), refusal.status);
-      expect(store.getOutreach(action.id)?.call?.callId).toBe(refusal.alreadyPlaced ? "prior" : undefined);
+      if (refusal.throwAfterAccept) {
+        const failed = await api.placeCall(action.id, refusal.input ?? validInput);
+        expect(failed).toMatchObject({ status: "failed", call: { callId: null, state: "failed" } });
+        expect(JSON.stringify(failed)).not.toContain(validInput.to);
+        await expectServiceError(api.placeCall(action.id, refusal.input ?? validInput), refusal.status);
+        expect(providerAccepts).toBe(1);
+        expect(placementIntentWasStored).toBe(true);
+      } else {
+        await expectServiceError(api.placeCall(action.id, refusal.input ?? validInput), refusal.status);
+        expect(store.getOutreach(action.id)?.call?.callId).toBe(refusal.alreadyPlaced ? "prior" : undefined);
+      }
     }
 
     const { service, store } = createHarness(undefined, false, { sim: dialler, live: dialler });
@@ -877,24 +908,60 @@ describe("createSwarmService", () => {
     const placed = await api.placeCall(action.id, validInput);
     const persisted = JSON.stringify({ action: placed, audit: store.recentAudit(10) });
     expect(placed).toMatchObject({ status: "dispatched", call: { numberTail: "23", placedBy: "Partner" } });
+    expect(placedRequest?.opening).toContain("Hello. This is an AI assistant, not a person, calling for Northstar Ventures.");
+    expect(placedRequest?.closing).toBe("This call was made for Northstar Ventures. You can reach us at +14155550100. Goodbye.");
+    expect(placedRequest?.reference).toBe(action.id);
     expect(persisted).not.toContain(validInput.to);
   });
 
   it("places and syncs a simulated call into ordinary call transcript evidence", async () => {
     const world = createSimWorld({ founders: 1 });
-    const { service, store } = createHarness(undefined, false, { sim: createSimDialler(world), live: null });
+    let store: Store | undefined;
+    let transcriptWasStoredBeforeForget = false;
+    let providerFetches = 0;
+    let providerPlaces = 0;
+    const simulated = createSimDialler(world);
+    const dialler: Dialler = {
+      ...simulated,
+      async place(request, signal) { providerPlaces += 1; return simulated.place(request, signal); },
+      async fetch(callId) {
+        providerFetches += 1;
+        const result = await simulated.fetch(callId);
+        return { ...result, transcript: `${result.transcript}\nFounder: call me at +1 (415) 555-0123.`, detail: "Call ended at 415-555-9876." };
+      },
+      async forget() { transcriptWasStoredBeforeForget = Boolean(store?.listEvidence(founder.id).some((item) => item.kind === "call_transcript")); },
+    };
+    const fixture = createHarness(undefined, false, { sim: dialler, live: null });
+    const { service } = fixture;
+    store = fixture.store;
     const api = service.as("Partner");
     const swarm = await api.createSwarm({ name: "Simulated calls", thesis });
     const founder = { ...founderRecord(swarm.id), simId: world.founders()[0]!.simId }; store.insertFounder(founder);
     const action: OutreachAction = { id: newId("out"), swarmId: swarm.id, founderId: founder.id, kind: "call_founder", target: { name: founder.name, role: null, relationship: null, channelHint: null }, rationale: "Approved", draft: { subject: null, body: null, agenda: ["Discuss product"], questions: ["What shipped?"], disclosure: "AI assistant calling for the fund." }, consentBasis: "Agreed", status: "approved", decidedBy: "Partner", decidedAt: stamp, decisionNote: null, resultSummary: null, transcriptEvidenceId: null, createdByTaskId: null, createdAt: stamp, updatedAt: stamp };
     store.insertOutreach(action);
-    const placed = await api.placeCall(action.id, { to: "+14155550123", timezone: "America/Chicago", consent: { how: "They agreed by email to an AI call.", recording: true } });
+    const placed = await api.placeCall(action.id, { to: "+14155550123", timezone: "America/Chicago", consent: { how: "They agreed by email at +14155550123 to an AI call.", recording: true } });
     expect(placed.status).toBe("dispatched");
     const [synced] = await api.syncCalls(swarm.id);
     expect(synced).toMatchObject({ status: "completed", call: { state: "completed", vendor: "Simulated" } });
     const evidence = store.listEvidence(founder.id).find((item) => item.id === synced?.transcriptEvidenceId);
     expect(evidence).toMatchObject({ kind: "call_transcript", source: "call", verification: "unverified", claim: "Notes a partner wrote after this conversation.", sim: { truth: "supported" }, excerpt: expect.any(String) });
+    expect(transcriptWasStoredBeforeForget).toBe(true);
+    expect(evidence?.excerpt).not.toContain("415");
+    expect(evidence?.excerpt).not.toContain("555-0123");
+    expect(synced?.call?.detail).not.toContain("9876");
+    expect(synced?.call?.consent.how).not.toContain("14155550123");
     expect(evidence?.excerpt).not.toContain("1984");
+
+    const orphaned: OutreachAction = { ...action, id: newId("out"), status: "dispatched", call: { vendor: "Simulated", callId: null, placedBy: "Partner", placedAt: stamp, consent: { how: "They agreed by email to an AI call.", recording: false, recordedBy: "Partner", at: stamp }, numberTail: "23", state: "placing", endedAt: null, durationSec: null, costUsd: null, detail: null } };
+    store.insertOutreach(orphaned);
+    const fetchesBeforeOrphan = providerFetches;
+    const placesBeforeOrphan = providerPlaces;
+    await expectServiceError(api.placeCall(orphaned.id, { to: "+14155550123", timezone: "America/Chicago", consent: { how: "They agreed by email to an AI call.", recording: false } }), 409);
+    expect(providerPlaces).toBe(placesBeforeOrphan);
+    await api.syncCalls(swarm.id);
+    expect(store.getOutreach(orphaned.id)).toMatchObject({ status: "failed", call: { callId: null, state: "failed", detail: "The process stopped before saving a call id. Check with the calling service before trying again." } });
+    expect(providerFetches).toBe(fetchesBeforeOrphan);
+    await expectServiceError(api.placeCall(orphaned.id, { to: "+14155550123", timezone: "America/Chicago", consent: { how: "They agreed by email to an AI call.", recording: false } }), 409);
   });
 
   it("keeps personal attributes out of what a person types in", async () => {
@@ -933,10 +1000,10 @@ describe("createSwarmService", () => {
     expect(edited.draft.disclosure).toBe("Written by code.");
     expect(edited.decisionNote).toBe("Fine. [removed: personal detail]");
 
-    const done = await api.completeOutreach(action.id, { summary: "Good call. His wife joined for a minute.", transcript: "Founder: I rebuilt the index three times.\nFounder: I was born in 1984 and started coding early." });
-    expect(done.resultSummary).toBe("Good call. [removed: personal detail]");
+    const done = await api.completeOutreach(action.id, { summary: "Good call at +14155550123. His wife joined for a minute.", transcript: "Founder: call me at +1 (415) 555-0123.\nFounder: I rebuilt the index three times.\nFounder: I was born in 1984 and started coding early." });
+    expect(done.resultSummary).toBe("Good call at [removed: phone number]. [removed: personal detail]");
     const transcript = store.listEvidence(founder.id).find((item) => item.kind === "call_transcript");
-    expect(transcript?.excerpt).toBe("Founder: I rebuilt the index three times.\n[removed: personal detail]");
+    expect(transcript?.excerpt).toBe("Founder: call me at [removed: phone number].\nFounder: I rebuilt the index three times.\n[removed: personal detail]");
   });
 
   it("reports stage progress for active and finished runs", async () => {

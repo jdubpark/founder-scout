@@ -2,7 +2,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   AGENT_CLASSES, BASE_CONFIG, JOBS, MODEL_JOB_IDS, SOURCES, STAGES, isContributorModel, mayUseContributorModel, runnerPools,
-  buildEffectiveSteering, coerceParam, effectiveRoute, getParamDef, isClassId, isCompanyReasonFor, isJobId,
+  buildEffectiveSteering, coerceParam, effectiveRoute, getParamDef, isClassId, isCompanyReasonFor, isJobId, redactPhoneNumbers,
   isNeverFetchUrl, isReasonFor, newId, normalizeCompanyName, normalizeRoundLabel, normalizeScope, overlayConfig, paramsFor, scopeLabel, stageLabel,
   scopeLevel, stableId, suggestSteering, suggestionTextKey, summarizeCalls, swarmIdentity,
   type Agent, type AgentIdentity, type ApiClient, type AddTrailInput, type UpdateTrailInput, type Pools,
@@ -143,7 +143,7 @@ export function createSwarmService(deps: ServiceDeps): SwarmService {
     audit,
   };
   const seatDeps = { store, runs: deps.runs, ...(deps.web ? { web: deps.web } : {}), now, audit };
-  const callService = createCallService({ store, dialler: deps.dialler, now, audit });
+  const callService = createCallService({ store, dialler: deps.dialler, fundName: deps.fundName, callbackNumber: deps.callbackNumber, now, audit });
   const getSwarm = (id: string): Swarm => {
     const found = store.getSwarm(id);
     if (!found) fail(404, "Swarm not found. Choose a swarm that exists.");
@@ -959,9 +959,9 @@ export function createSwarmService(deps: ServiceDeps): SwarmService {
         if (action.status !== "approved" && action.status !== "dispatched") fail(409, "Only approved or dispatched outreach can be completed.");
         if (action.status === "dispatched" && action.call) fail(409, "An AI call is in progress. Sync its result before completing it.");
         // Notes from a conversation often carry personal details. They are taken out before anything is stored.
-        const summary = redactSensitive(trimmed(input.summary));
+        const summary = redactPhoneNumbers(redactSensitive(trimmed(input.summary)));
         if (!summary) fail(400, "Write a short summary of the outreach.", { summary: "Write a short summary of the outreach." });
-        const transcript = input.transcript == null ? "" : redactSensitive(trimmed(input.transcript));
+        const transcript = input.transcript == null ? "" : redactPhoneNumbers(redactSensitive(trimmed(input.transcript)));
         let evidenceId = action.transcriptEvidenceId;
         if (transcript) {
           const evidenceIdNew = newId("evd");
@@ -1331,6 +1331,6 @@ export function createApp(options: AppOptions): App {
     now: options.now,
     logger: options.logger,
   }, { pastJudge: options.evalJudge ?? null });
-  const service = createSwarmService({ store, runs, evals, providers, liveSources, dialler: { sim: createSimDialler(world), live: createLiveDialler(options.env) }, web, defaultPools, skillLibrary, cron: options.cron, now: options.now, logger: options.logger });
+  const service = createSwarmService({ store, runs, evals, providers, liveSources, dialler: { sim: createSimDialler(world), live: createLiveDialler(options.env) }, fundName: env.FUND_NAME?.trim() || null, callbackNumber: env.FUND_CALLBACK_NUMBER?.trim() || null, web, defaultPools, skillLibrary, cron: options.cron, now: options.now, logger: options.logger });
   return { service, store, providers, close: () => store.close() };
 }
