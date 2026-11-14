@@ -28,114 +28,43 @@ afterEach(() => {
 });
 
 describe("sanitizeCheckout", () => {
-  it("removes every agent-instruction file and directory wherever it appears, and keeps ordinary files", async () => {
-    write("CLAUDE.md");
-    write("CLAUDE.local.md");
-    write("AGENTS.md");
-    write("GEMINI.md");
-    write(".mcp.json");
-    write(".cursorrules");
-    write(".windsurfrules");
-    write(".claude/settings.json");
-    write(".codex/config.toml");
-    write(".cursor/rules/style.mdc");
-    write(".gemini/settings.json");
-    write(".github/copilot-instructions.md");
-    write(".git/config");
-    write("packages/app/.claude/settings.json");
-    write("docs/agents.md");
-    write("docs/claude.md");
-    write("src/index.ts", "export const ok = true;");
+  it("removes agent instructions, .git and case variants while keeping ordinary files", async () => {
+    for (const path of [
+      "CLAUDE.md", "CLAUDE.local.md", "AGENTS.md", "GEMINI.md", ".mcp.json", ".cursorrules", ".windsurfrules",
+      ".codex/config.toml", ".cursor/rules/style.mdc", ".gemini/settings.json",
+      ".github/copilot-instructions.md", "packages/app/.claude/settings.json", "docs/Claude.MD", ".Claude/Settings.json", ".git/config",
+    ]) write(path);
+    write("docs/copilot-instructions.md");
+    write("src/index.ts", "export const safe = true;");
     write(".github/workflows/ci.yml", "name: ci");
     write("README.md", "# readme");
 
     const { removed } = await sanitizeCheckout(checkout);
-
-    expect(removed).toEqual(
-      [
-        ".claude",
-        ".codex",
-        ".cursor",
-        ".cursorrules",
-        ".gemini",
-        ".git",
-        ".github/copilot-instructions.md",
-        ".mcp.json",
-        ".windsurfrules",
-        "AGENTS.md",
-        "CLAUDE.local.md",
-        "CLAUDE.md",
-        "GEMINI.md",
-        "docs/agents.md",
-        "docs/claude.md",
-        "packages/app/.claude",
-      ].sort(),
-    );
-    for (const rel of removed) {
-      expect(existsSync(join(checkout, rel))).toBe(false);
-    }
-    expect(readFileSync(join(checkout, "src/index.ts"), "utf8")).toBe("export const ok = true;");
+    expect(removed).toEqual([
+      ".Claude", ".codex", ".cursor", ".cursorrules", ".gemini", ".git",
+      ".github/copilot-instructions.md", ".mcp.json", ".windsurfrules", "AGENTS.md", "CLAUDE.local.md", "CLAUDE.md",
+      "GEMINI.md", "docs/Claude.MD", "packages/app/.claude",
+    ].sort());
+    for (const rel of removed) expect(existsSync(join(checkout, rel))).toBe(false);
+    expect(readFileSync(join(checkout, "src/index.ts"), "utf8")).toBe("export const safe = true;");
     expect(existsSync(join(checkout, ".github/workflows/ci.yml"))).toBe(true);
+    expect(existsSync(join(checkout, "docs/copilot-instructions.md"))).toBe(true);
     expect(existsSync(join(checkout, "README.md"))).toBe(true);
   });
 
-  it("matches names case-insensitively", async () => {
-    write("docs/Claude.MD");
-    write(".Claude/Settings.json");
-    const { removed } = await sanitizeCheckout(checkout);
-    expect(removed).toEqual([".Claude", "docs/Claude.MD"]);
-  });
-
-  it("does not remove a copilot instructions file outside .github", async () => {
-    write("docs/copilot-instructions.md");
-    const { removed } = await sanitizeCheckout(checkout);
-    expect(removed).toEqual([]);
-    expect(existsSync(join(checkout, "docs/copilot-instructions.md"))).toBe(true);
-  });
-
-  it("removes a symbolic link that points outside the checkout, without touching its target", async () => {
-    write("src/index.ts");
-    symlinkSync(join(outside, "secret.txt"), join(checkout, "leak.txt"));
-
-    const { removed } = await sanitizeCheckout(checkout);
-
-    expect(removed).toEqual(["leak.txt"]);
-    expect(existsSync(join(checkout, "leak.txt"))).toBe(false);
-    expect(readFileSync(join(outside, "secret.txt"), "utf8")).toBe("outside the checkout");
-  });
-
-  it("removes a relative symbolic link that escapes through parent directories", async () => {
-    write("src/index.ts");
-    symlinkSync("../../outside/secret.txt", join(checkout, "src", "escape.txt"));
-    const { removed } = await sanitizeCheckout(checkout);
-    expect(removed).toEqual(["src/escape.txt"]);
-  });
-
-  it("keeps a symbolic link that stays inside the checkout", async () => {
+  it("removes links that escape or dangle without following them, and keeps an internal link", async () => {
     write("src/index.ts", "inside");
+    write("CLAUDE.md", "untrusted instructions");
+    symlinkSync(join(outside, "secret.txt"), join(checkout, "leak.txt"));
+    symlinkSync("../../outside/secret.txt", join(checkout, "src", "escape.txt"));
     symlinkSync("src/index.ts", join(checkout, "entry.ts"));
-    const { removed } = await sanitizeCheckout(checkout);
-    expect(removed).toEqual([]);
-    expect(readFileSync(join(checkout, "entry.ts"), "utf8")).toBe("inside");
-  });
-
-  it("removes a dangling symbolic link, including one that pointed at a file just removed", async () => {
-    write("CLAUDE.md");
     symlinkSync("CLAUDE.md", join(checkout, "notes.md"));
     symlinkSync("missing.txt", join(checkout, "dangling"));
-    const { removed } = await sanitizeCheckout(checkout);
-    expect(removed).toEqual(["CLAUDE.md", "dangling", "notes.md"]);
-  });
-
-  it("does not follow a symbolic link to a directory outside the checkout", async () => {
     symlinkSync(outside, join(checkout, "linked-dir"));
-    const { removed } = await sanitizeCheckout(checkout);
-    expect(removed).toEqual(["linked-dir"]);
-    expect(existsSync(join(outside, "secret.txt"))).toBe(true);
-  });
 
-  it("returns an empty list for a clean checkout", async () => {
-    write("src/index.ts");
-    expect(await sanitizeCheckout(checkout)).toEqual({ removed: [] });
+    const { removed } = await sanitizeCheckout(checkout);
+    expect(removed).toEqual(["CLAUDE.md", "dangling", "leak.txt", "linked-dir", "notes.md", "src/escape.txt"]);
+    expect(readFileSync(join(checkout, "entry.ts"), "utf8")).toBe("inside");
+    expect(readFileSync(join(outside, "secret.txt"), "utf8")).toBe("outside the checkout");
   });
 });

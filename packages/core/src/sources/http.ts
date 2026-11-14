@@ -7,7 +7,7 @@ import { isNeverFetchUrl } from "@agentswarm/shared";
  */
 
 export const USER_AGENT = "agentswarm/0.1";
-export const REQUEST_TIMEOUT_MS = 20_000;
+const REQUEST_TIMEOUT_MS = 20_000;
 const REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308]);
 const MAX_REDIRECTS = 5;
 

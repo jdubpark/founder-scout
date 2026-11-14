@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { assertSuccessful, httpGet, REQUEST_TIMEOUT_MS, SourceRateLimitError, type HttpResult } from "./http";
-import { scriptedFetch, textResponse } from "./test-support";
+import { assertSuccessful, httpGet, parseJson, SourceRateLimitError, type HttpResult } from "./http";
+import { textResponse } from "./test-support";
 
 const NOW = Date.parse("2026-11-13T05:00:00Z");
 
@@ -8,76 +8,54 @@ function result(status: number, body = "", headers: Record<string, string> = {})
   return { status, body, headers: new Headers(headers) };
 }
 
-describe("assertSuccessful", () => {
-  it("accepts a 2xx response", () => {
+describe("shared HTTP contracts", () => {
+  it("owns success, rate-limit and ordinary HTTP classification", () => {
     expect(() => assertSuccessful("Test", result(200, "{}"), NOW)).not.toThrow();
-  });
 
-  it("treats 429 as rate limited, with the Retry-After delay", () => {
-    expect(() => assertSuccessful("Test", result(429, "", { "retry-after": "90" }), NOW)).toThrow(
-      `Test is rate limited (HTTP 429). Retry after ${new Date(NOW + 90_000).toISOString()}.`,
-    );
-  });
+    const retryAt = Math.floor(NOW / 1000) + 300;
+    let retry: unknown;
+    try { assertSuccessful("Test", result(429, "", { "retry-after": "90" }), NOW); } catch (error) { retry = error; }
+    expect(retry).toBeInstanceOf(SourceRateLimitError);
+    expect((retry as SourceRateLimitError).retryAt?.getTime()).toBe(NOW + 90_000);
 
-  it("treats a 403 with an exhausted quota as rate limited, using the reset header", () => {
-    const reset = Math.floor(NOW / 1000) + 300;
-    const error = (() => {
-      try {
-        assertSuccessful("Test", result(403, "{}", { "x-ratelimit-remaining": "0", "x-ratelimit-reset": String(reset) }), NOW);
-      } catch (e) {
-        return e;
-      }
-      return null;
-    })();
-    expect(error).toBeInstanceOf(SourceRateLimitError);
-    expect((error as SourceRateLimitError).retryAt?.getTime()).toBe(reset * 1000);
-  });
+    let exhausted: unknown;
+    try {
+      assertSuccessful("Test", result(403, "{}", { "x-ratelimit-remaining": "0", "x-ratelimit-reset": String(retryAt) }), NOW);
+    } catch (error) { exhausted = error; }
+    expect(exhausted).toBeInstanceOf(SourceRateLimitError);
+    expect((exhausted as SourceRateLimitError).retryAt?.getTime()).toBe(retryAt * 1000);
 
-  it("treats a 403 whose body says rate limit as rate limited, with no reset time", () => {
-    const error = (() => {
-      try {
-        assertSuccessful("Test", result(403, "API rate limit exceeded for 1.2.3.4"), NOW);
-      } catch (e) {
-        return e;
-      }
-      return null;
-    })();
-    expect(error).toBeInstanceOf(SourceRateLimitError);
-    expect((error as SourceRateLimitError).message).toBe("Test is rate limited (HTTP 403). Retry later; the response gave no reset time.");
-  });
-
-  it("treats an ordinary 403 as a plain HTTP failure", () => {
+    let bodyLimited: unknown;
+    try { assertSuccessful("Test", result(403, "API rate limit exceeded"), NOW); } catch (error) { bodyLimited = error; }
+    expect(bodyLimited).toBeInstanceOf(SourceRateLimitError);
+    expect((bodyLimited as SourceRateLimitError).retryAt).toBeNull();
     expect(() => assertSuccessful("Test", result(403, "Forbidden"), NOW)).toThrow("Test request failed with HTTP 403.");
-  });
-
-  it("names the status on other failures", () => {
     expect(() => assertSuccessful("Test", result(502), NOW)).toThrow("Test request failed with HTTP 502.");
   });
-});
 
-describe("httpGet", () => {
-  it("refuses never-fetch hosts before calling fetch", async () => {
-    for (const url of ["https://linkedin.com/profile", "https://www.linkedin.com/profile", "https://LINKEDIN.COM/profile"]) {
-      let called = false;
-      const fetchFn = async () => {
-        called = true;
-        throw new Error("fetch must not be called");
-      };
-
-      await expect(httpGet(fetchFn, "Test source", url)).rejects.toThrow(
-        "Test source cannot request this address because it is on the never-fetch list; nothing in this system requests it.",
-      );
-      expect(called).toBe(false);
-    }
+  it("rejects malformed JSON at the shared parsing boundary", () => {
+    expect(() => parseJson("Test", "<html>not JSON</html>")).toThrow("Test returned a body that is not valid JSON.");
   });
 
-  it("sends the agentswarm User-Agent and the caller's headers", async () => {
-    const recorder = scriptedFetch(() => textResponse("ok"));
-    await httpGet(recorder.fetch, "Test", "https://example.test/x", { headers: { Accept: "application/json" } });
-    expect(recorder.headers[0]).toMatchObject({ "User-Agent": "agentswarm/0.1", Accept: "application/json" });
+  it("refuses a never-fetch address before an initial or redirected request", async () => {
+    let called = false;
+    const initialFetch = async () => {
+      called = true;
+      throw new Error("fetch must not be called");
+    };
+    await expect(httpGet(initialFetch, "Test source", "https://www.linkedin.com/profile")).rejects.toThrow(/never-fetch list/);
+    expect(called).toBe(false);
+
+    const requested: string[] = [];
+    const redirectFetch = async (url: string) => {
+      requested.push(url);
+      return new Response(null, { status: 302, headers: { location: "https://www.linkedin.com/in/person" } });
+    };
+    await expect(httpGet(redirectFetch, "Test source", "https://example.test/start")).rejects.toThrow(/never-fetch list/);
+    expect(requested).toEqual(["https://example.test/start"]);
   });
 
-  it("follows redirects within an allowed host", async () => {
+  it("identifies itself and keeps caller headers on same-host redirects", async () => {
     const requested: string[] = [];
     const sentHeaders: Array<Record<string, string>> = [];
     const fetchFn = async (url: string, init?: RequestInit) => {
@@ -88,27 +66,14 @@ describe("httpGet", () => {
         : textResponse("done");
     };
 
-    await expect(
-      httpGet(fetchFn, "Test", "https://example.test/start", { headers: { Authorization: "Bearer secret" } }),
-    ).resolves.toMatchObject({ status: 200, body: "done" });
+    await expect(httpGet(fetchFn, "Test", "https://example.test/start", { headers: { Authorization: "Bearer secret" } }))
+      .resolves.toMatchObject({ status: 200, body: "done" });
     expect(requested).toEqual(["https://example.test/start", "https://example.test/next"]);
     expect(sentHeaders.map((headers) => headers.authorization)).toEqual(["Bearer secret", "Bearer secret"]);
+    expect(sentHeaders[0]?.["user-agent"]).toBe("agentswarm/0.1");
   });
 
-  it("refuses a redirect to a never-fetch host before requesting it", async () => {
-    const requested: string[] = [];
-    const fetchFn = async (url: string) => {
-      requested.push(url);
-      return new Response(null, { status: 302, headers: { location: "https://www.linkedin.com/in/person" } });
-    };
-
-    await expect(httpGet(fetchFn, "Test source", "https://example.test/start")).rejects.toThrow(
-      "Test source cannot request this address because it is on the never-fetch list; nothing in this system requests it.",
-    );
-    expect(requested).toEqual(["https://example.test/start"]);
-  });
-
-  it("does not send caller headers after a redirect to another host", async () => {
+  it("drops caller credentials after a redirect to another host", async () => {
     const headers: Array<Record<string, string>> = [];
     const fetchFn = async (url: string, init?: RequestInit) => {
       headers.push(Object.fromEntries(new Headers(init?.headers).entries()));
@@ -116,52 +81,45 @@ describe("httpGet", () => {
         ? new Response(null, { status: 302, headers: { location: "https://other.test/next" } })
         : textResponse("done");
     };
-
     await httpGet(fetchFn, "Test", "https://example.test/start", { headers: { Authorization: "Bearer secret" } });
     expect(headers[0]).toMatchObject({ authorization: "Bearer secret", "user-agent": "agentswarm/0.1" });
     expect(headers[1]).toEqual({ "user-agent": "agentswarm/0.1" });
   });
 
-  it("fails when a sixth redirect would be followed", async () => {
+  it("stops redirect chains at the shared limit and detects loops", async () => {
     const requested: string[] = [];
-    const fetchFn = async (url: string) => {
+    const chain = async (url: string) => {
       requested.push(url);
       const index = Number(new URL(url).pathname.slice(1));
       return new Response(null, { status: 302, headers: { location: `/${index + 1}` } });
     };
-
-    await expect(httpGet(fetchFn, "Test", "https://example.test/0")).rejects.toThrow("Test request failed: too many redirects.");
+    await expect(httpGet(chain, "Test", "https://example.test/0")).rejects.toThrow("Test request failed: too many redirects.");
     expect(requested).toEqual(Array.from({ length: 6 }, (_, index) => `https://example.test/${index}`));
+
+    const loop = async () => new Response(null, { status: 302, headers: { location: "/start" } });
+    await expect(httpGet(loop, "Test", "https://example.test/start")).rejects.toThrow("Test request failed: redirect loop.");
   });
 
-  it("fails on a redirect loop", async () => {
-    const fetchFn = async () => new Response(null, { status: 302, headers: { location: "/start" } });
-    await expect(httpGet(fetchFn, "Test", "https://example.test/start")).rejects.toThrow("Test request failed: redirect loop.");
-  });
-
-  it("rethrows the caller's own abort rather than reporting a timeout", async () => {
+  it("rethrows the caller's abort and applies the shared 20-second deadline", async () => {
     const controller = new AbortController();
-    const fetchFn = () =>
-      new Promise<Response>((_resolve, reject) => {
+    const aborted = httpGet(
+      () => new Promise<Response>((_resolve, reject) => {
         controller.signal.addEventListener("abort", () => reject(new DOMException("caller aborted", "AbortError")));
-      });
-    const pending = httpGet(fetchFn, "Test", "https://example.test/x", { signal: controller.signal });
+      }),
+      "Test",
+      "https://example.test/x",
+      { signal: controller.signal },
+    );
     controller.abort();
-    await expect(pending).rejects.toThrow("caller aborted");
-  });
+    await expect(aborted).rejects.toThrow("caller aborted");
 
-  it(
-    "gives up after the 20 second timeout and says so",
-    async () => {
-      expect(REQUEST_TIMEOUT_MS).toBe(20_000);
-      const fetchFn = (_url: string, init?: RequestInit) =>
-        new Promise<Response>((_resolve, reject) => {
-          init?.signal?.addEventListener("abort", () => reject(new DOMException("timeout", "TimeoutError")));
-        });
-      await expect(httpGet(fetchFn, "Test", "https://example.test/slow")).rejects.toThrow(
-        "Test request timed out after 20 seconds.",
-      );
-    },
-    30_000,
-  );
+    const slow = httpGet(
+      (_url, init) => new Promise<Response>((_resolve, reject) => {
+        init?.signal?.addEventListener("abort", () => reject(new DOMException("timeout", "TimeoutError")));
+      }),
+      "Test",
+      "https://example.test/slow",
+    );
+    await expect(slow).rejects.toThrow("Test request timed out after 20 seconds.");
+  }, 30_000);
 });

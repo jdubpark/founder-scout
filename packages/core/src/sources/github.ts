@@ -25,7 +25,7 @@ const SOURCE = "GitHub";
 export const GITHUB_SEARCH_URL = "https://api.github.com/search/repositories";
 export const GITHUB_API_ORIGIN = "https://api.github.com";
 /** A repository needs at least this many stars to be considered. */
-export const GITHUB_MIN_STARS = 20;
+const GITHUB_MIN_STARS = 20;
 const MAX_PER_PAGE = 100;
 const SEEN_LIMIT = 500;
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -78,7 +78,7 @@ function githubTimestamp(ms: number): string {
   return new Date(ms).toISOString().replace(/\.\d{3}Z$/, "+00:00");
 }
 
-export function buildGitHubSearchQuery(options: { createdAfterMs: number; beat: string | null }): string {
+function buildGitHubSearchQuery(options: { createdAfterMs: number; beat: string | null }): string {
   const terms = [
     `created:>=${githubTimestamp(options.createdAfterMs)}`,
     `stars:>=${GITHUB_MIN_STARS}`,

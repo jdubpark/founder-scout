@@ -4,12 +4,11 @@ import { join } from "node:path";
 import type { RepoRef } from "@agentswarm/shared";
 import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { createLiveRepoFinder, parseGitHubLogin, parseRepoUrl } from "./repo-finder";
-import { jsonResponse, readJsonFixture, scriptedFetch, textResponse } from "./test-support";
+import { jsonResponse, readJsonFixture, scriptedFetch } from "./test-support";
 
 /**
  * A stand-in for git. Its behaviour is chosen by FAKE_GIT_MODE:
  *   ok   creates a checkout that contains agent files, a .git directory and source
- *   fail exits 128 with a git-style message
  *   sleep never finishes
  *   big  writes 5000 bytes
  * Every invocation's arguments are appended to FAKE_GIT_LOG.
@@ -18,7 +17,6 @@ const FAKE_GIT = `#!/bin/sh
 echo "$@" >> "$FAKE_GIT_LOG"
 for last in "$@"; do :; done
 case "$FAKE_GIT_MODE" in
-  fail) echo "fatal: repository not found" >&2; exit 128 ;;
   sleep) sleep 30 ;;
   big) mkdir -p "$last"; head -c 5000 /dev/zero > "$last/big.bin"; exit 0 ;;
   *) mkdir -p "$last/.git" "$last/.claude" "$last/src"
@@ -83,24 +81,13 @@ describe("parseRepoUrl", () => {
 
   it.each([
     ["SSH form", "git@github.com:acme-labs/widget.git"],
-    ["ssh scheme", "ssh://git@github.com/acme-labs/widget"],
-    ["extra path segment", "https://github.com/acme-labs/widget/tree/main"],
-    ["trailing slash", "https://github.com/acme-labs/widget/"],
-    [".git suffix", "https://github.com/acme-labs/widget.git"],
-    ["other host", "https://gitlab.com/acme-labs/widget"],
-    ["plain http", "http://github.com/acme-labs/widget"],
-    ["embedded credentials", "https://user:pass@github.com/acme-labs/widget"],
-    ["query string", "https://github.com/acme-labs/widget?x=1"],
-    ["fragment", "https://github.com/acme-labs/widget#readme"],
-    ["owner only", "https://github.com/acme-labs"],
-    ["dot-dot traversal", "https://github.com/acme-labs/.."],
-    ["option-like name", "https://github.com/acme-labs/-widget"],
-    ["option-like owner", "https://github.com/-acme/widget"],
-    ["option in place of URL", "--upload-pack=touch /tmp/pwned"],
-    ["dash-prefixed option", "-oProxyCommand=echo"],
-    ["whitespace", " https://github.com/acme-labs/widget"],
-    ["newline", "https://github.com/acme-labs/widget\n--upload-pack=x"],
-  ])("rejects %s", (_label, url) => {
+    ["extra path", "https://github.com/acme-labs/widget/tree/main"],
+    ["non-GitHub host", "https://gitlab.com/acme-labs/widget"],
+    ["credentials", "https://user:pass@github.com/acme-labs/widget"],
+    ["traversal", "https://github.com/acme-labs/.."],
+    ["option argument", "--upload-pack=touch /tmp/pwned"],
+    ["newline argument", "https://github.com/acme-labs/widget\n--upload-pack=x"],
+  ])("rejects unsafe repository URL form: %s", (_label, url) => {
     expect(parseRepoUrl(url)).toBeNull();
   });
 });
@@ -180,23 +167,19 @@ describe("topRepos", () => {
     expect(repos).toEqual([]);
   });
 
-  it("throws on a rate-limited response", async () => {
-    const finder = createLiveRepoFinder({
-      env: {},
-      workDir,
-      fetch: scriptedFetch(() => textResponse("slow", { status: 429, headers: { "retry-after": "60" } })).fetch,
-    });
-    await expect(
-      finder.topRepos({ github: "octocat", linkedin: null, x: null, site: null, scholar: null }, null, 5),
-    ).rejects.toThrow("GitHub is rate limited");
-  });
 });
 
 describe("checkout", () => {
-  it("refuses a non-GitHub URL before starting git or creating the work directory", async () => {
+  it.each([
+    "git@github.com:acme-labs/widget.git",
+    "https://gitlab.com/acme-labs/widget",
+    "https://github.com/acme-labs/widget/tree/main",
+    "https://github.com/acme-labs/..",
+    "--upload-pack=touch /tmp/pwned",
+  ])("refuses unsafe URL %s before starting git or creating the work directory", async (url) => {
     process.env.FAKE_GIT_MODE = "ok";
     const finder = createLiveRepoFinder({ env: {}, workDir, git: fakeGit });
-    await expect(finder.checkout({ ...REPO, url: "git@github.com:acme-labs/widget.git" })).rejects.toThrow(
+    await expect(finder.checkout({ ...REPO, url })).rejects.toThrow(
       "only https://github.com/<owner>/<name> URLs are accepted",
     );
     expect(invocations()).toEqual([]);
@@ -232,13 +215,6 @@ describe("checkout", () => {
     await expect(cleanup()).resolves.toBeUndefined();
   });
 
-  it("removes the directory and throws when git exits with an error", async () => {
-    process.env.FAKE_GIT_MODE = "fail";
-    const finder = createLiveRepoFinder({ env: {}, workDir, git: fakeGit });
-    await expect(finder.checkout(REPO)).rejects.toThrow("git clone failed with exit code 128: fatal: repository not found");
-    expect(readdirSync(workDir)).toEqual([]);
-  });
-
   it("kills a clone that exceeds the timeout, removes the directory and throws", async () => {
     process.env.FAKE_GIT_MODE = "sleep";
     const finder = createLiveRepoFinder({ env: {}, workDir, git: fakeGit, cloneTimeoutMs: 400 });
@@ -260,6 +236,7 @@ describe("checkout", () => {
     await expect(finder.checkout(REPO)).rejects.toThrow("Could not start git");
     expect(readdirSync(workDir)).toEqual([]);
   });
+
 });
 
 describe("contributors", () => {

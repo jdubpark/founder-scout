@@ -24,8 +24,8 @@ import {
 
 const SOURCE = "arXiv";
 export const ARXIV_API_URL = "https://export.arxiv.org/api/query";
-export const ARXIV_CATEGORIES = ["cs.AI", "cs.LG", "cs.CL", "cs.RO", "cs.DC", "cs.CR", "cs.SE"] as const;
-export const ARXIV_MIN_INTERVAL_MS = 3000;
+const ARXIV_CATEGORIES = ["cs.AI", "cs.LG", "cs.CL", "cs.RO", "cs.DC", "cs.CR", "cs.SE"] as const;
+const ARXIV_MIN_INTERVAL_MS = 3000;
 const MAX_RESULTS = 100;
 
 export interface ArxivOptions {
@@ -45,7 +45,7 @@ export interface ArxivEntry {
 }
 
 /** arXiv date filters use GMT, in the form YYYYMMDDHHMM. */
-export function formatArxivDate(ms: number): string {
+function formatArxivDate(ms: number): string {
   const d = new Date(ms);
   const pad = (n: number) => String(n).padStart(2, "0");
   return (
@@ -54,7 +54,7 @@ export function formatArxivDate(ms: number): string {
   );
 }
 
-export function buildArxivQuery(options: { fromMs: number; toMs: number; beat: string | null }): string {
+function buildArxivQuery(options: { fromMs: number; toMs: number; beat: string | null }): string {
   const categories = ARXIV_CATEGORIES.map((c) => `cat:${c}`).join(" OR ");
   let query = `(${categories}) AND submittedDate:[${formatArxivDate(options.fromMs)} TO ${formatArxivDate(options.toMs)}]`;
   if (options.beat) query += ` AND all:"${options.beat}"`;
@@ -81,7 +81,7 @@ function attribute(attrs: string, name: string): string | null {
  * Parses an arXiv Atom feed into entries, in document order. Throws on a
  * non-feed body or an arXiv error entry, so the caller never sees a partial result.
  */
-export function parseArxivFeed(xml: string): ArxivEntry[] {
+function parseArxivFeed(xml: string): ArxivEntry[] {
   if (!/<feed[\s>]/.test(xml)) {
     throw new Error("arXiv returned a response that is not an Atom feed.");
   }

@@ -1,6 +1,6 @@
-import { describe, expect, it } from "vitest";
 import { brotliCompressSync, gzipSync } from "node:zlib";
 import { createServer } from "node:http";
+import { describe, expect, it } from "vitest";
 import { createPinnedLookup, createQuoteChecker, pinnedFetch } from "./quote-check";
 import type { FetchFn } from "./http";
 
@@ -19,143 +19,102 @@ function longText(extra = ""): string {
 }
 
 describe("createQuoteChecker", () => {
-  it("finds an exact quote", async () => {
+  it("finds normalized exact quotes, requires every fragment, and rejects changed words", async () => {
     const quote = "The company launched its first product in March 2024.";
-    const result = await checker(async () => page(`<p>${quote}</p>`)).check("https://example.test/story", quote);
-    expect(result.status).toBe("found");
-  });
+    await expect(checker(async () => page(`<p>${quote}</p>`)).check("https://example.test/story", quote))
+      .resolves.toMatchObject({ status: "found" });
 
-  it("requires every separated fragment to appear", async () => {
-    const quote = "The company launched its first product ... The founders expanded into Europe.";
-    const found = await checker(async () => page("<p>The company launched its first product.</p><p>The founders expanded into Europe.</p>")).check(
-      "https://example.test/story",
-      quote,
-    );
-    expect(found.status).toBe("found");
+    const normalized = await checker(async () => page("<p>She said <em>“we’re ready”</em> — after a long<br>delay.</p>"))
+      .check("https://example.test/story", "She said \"we're ready\" - after a long\ndelay.");
+    expect(normalized.status).toBe("found");
 
-    const missing = await checker(async () => page(longText("The company launched its first product."))).check(
-      "https://example.test/story",
-      quote,
-    );
+    const fragments = await checker(async () => page("<p>The company launched its first product.</p><p>The founders expanded into Europe.</p>"))
+      .check("https://example.test/story", "The company launched its first product ... The founders expanded into Europe.");
+    expect(fragments.status).toBe("found");
+    const missing = await checker(async () => page(longText("The company launched its first product.")))
+      .check("https://example.test/story", "The company launched its first product ... The founders expanded into Europe.");
     expect(missing).toMatchObject({ status: "not_found", detail: "1 of 2 quoted fragments were not found on the page." });
+
+    const exactWords = "Founders often build useful tools for small teams before expanding into larger markets with careful hiring and steady customer feedback from early adopters across several regions over many years while measuring product use and listening closely to customers who share practical needs and advice";
+    const changed = exactWords.replace("useful", "invented");
+    await expect(checker(async () => page(longText(exactWords))).check("https://example.test/story", changed))
+      .resolves.toMatchObject({ status: "not_found" });
+    await expect(checker(async () => page(longText("The company served 12 customers across several regions and continued growing steadily for many years.")))
+      .check("https://example.test/story", "The company served 40 customers across several regions and continued growing steadily for many years."))
+      .resolves.toMatchObject({ status: "not_found" });
   });
 
-  it("normalizes curly quotes, dashes, line breaks, and inline markup", async () => {
-    const result = await checker(async () => page("<p>She said <em>“we’re ready”</em> — after a long<br>delay.</p>")).check(
-      "https://example.test/story",
-      "She said \"we're ready\" - after a long\ndelay.",
-    );
-    expect(result.status).toBe("found");
-  });
-
-  it("requires exact comparison words when one word changes", async () => {
-    const sentence = "Founders often build useful tools for small teams before expanding into larger markets with careful hiring and steady customer feedback from early adopters across several regions over many years while measuring product use and listening closely to customers who share practical needs and advice";
-    const changed = sentence.replace("useful", "invented");
-    const result = await checker(async () => page(longText(sentence))).check("https://example.test/story", changed);
-    expect(result.status).toBe("not_found");
-
-    const changedNumber = await checker(async () => page(longText("The company served 12 customers across several regions and continued growing steadily for many years."))).check(
-      "https://example.test/story",
-      "The company served 40 customers across several regions and continued growing steadily for many years.",
-    );
-    expect(changedNumber.status).toBe("not_found");
-
-    const invented = await checker(async () => page(longText(sentence))).check(
-      "https://example.test/story",
-      "This entirely invented sentence describes a different company and unrelated events that never happened.",
-    );
-    expect(invented.status).toBe("not_found");
-  });
-
-  it("does not count text inside script blocks", async () => {
+  it("counts only visible text and does not join separate JSON fields into a quote", async () => {
     const quote = "A secret claim appears only inside this script block.";
-    const result = await checker(async () => page(`<script>${quote}</script>${longText()}`)).check("https://example.test/story", quote);
-    expect(result.status).toBe("not_found");
-  });
+    await expect(checker(async () => page(`<script>${quote}</script>${longText()}`)).check("https://example.test/story", quote))
+      .resolves.toMatchObject({ status: "not_found" });
 
-  it("marks HTTP errors, non-text content, and tiny pages unreachable", async () => {
-    await expect(checker(async () => page("blocked", 403)).check("https://example.test/story", "This quote has several words to check"))
-      .resolves.toMatchObject({ status: "unreachable" });
-    await expect(
-      checker(async () => page("%PDF-1.7", 200, "application/pdf")).check("https://example.test/story", "This quote has several words to check"),
-    ).resolves.toMatchObject({ status: "unreachable" });
-    await expect(
-      checker(async () => page("A tiny page.")).check("https://example.test/story", "This quote has several words to check"),
-    ).resolves.toMatchObject({ status: "unreachable", detail: "The page has too little readable text to check a quote against." });
-  });
-
-  it("reads Hacker News item text from Algolia, including nested comment HTML", async () => {
-    const fetched: string[] = [];
-    const quote = "The founder didn't stop building after the first launch.";
-    const result = await checker(async (url) => {
-      fetched.push(url);
-      return page(
-        JSON.stringify({ children: [{ text: "<p>The founder didn&#x27;t stop building after the first launch.</p>" }] }),
-        200,
-        "application/json",
-      );
-    }).check("https://news.ycombinator.com/item?id=12345678", quote);
-
-    expect(fetched).toEqual(["https://hn.algolia.com/api/v1/items/12345678"]);
-    expect(result.status).toBe("found");
-  });
-
-  it("reads GitHub blob quotes from the raw file address", async () => {
-    const fetched: string[] = [];
-    const quote = "const founderCount = team.members.length;";
-    const result = await checker(async (url) => {
-      fetched.push(url);
-      return page(`${quote}\n`, 200, "text/plain");
-    }).check("https://github.com/octocat/venture/blob/main/src/team.ts", quote);
-
-    expect(fetched).toEqual(["https://raw.githubusercontent.com/octocat/venture/main/src/team.ts"]);
-    expect(result.status).toBe("found");
-  });
-
-  it("treats the arXiv abstract as a partial stand-in", async () => {
-    const fetched: string[] = [];
-    const quote = "This abstract describes a public research paper with detailed methods and important results.";
-    const result = await checker(async (url) => {
-      fetched.push(url);
-      return page(`<p>${"ordinary public research information ".repeat(80)}</p>`);
-    }).check("https://arxiv.org/pdf/2401.01234v2.pdf", quote);
-
-    expect(fetched).toEqual(["https://arxiv.org/abs/2401.01234v2"]);
-    expect(result).toMatchObject({ status: "unreachable", detail: "Only the abstract of this paper could be read." });
-
-    const found = await checker(async () => page(`<p>${quote}</p>`)).check("https://arxiv.org/pdf/2401.01234v2.pdf", quote);
-    expect(found.status).toBe("found");
-  });
-
-  it("keeps missing quotes on complete Hacker News stand-ins as not found", async () => {
-    const body = JSON.stringify({ text: "ordinary public discussion text ".repeat(100) });
-    const result = await checker(async () => page(body, 200, "application/json")).check(
-      "https://news.ycombinator.com/item?id=12345678",
-      "A specific claim that does not appear anywhere in this discussion.",
-    );
-    expect(result.status).toBe("not_found");
-  });
-
-  it("does not join JSON string fields into a quote across field boundaries", async () => {
     const body = JSON.stringify({
       first: "The company raised capital from",
       second: "several patient investors in 2024.",
       body: "ordinary public page information ".repeat(100),
     });
-    const result = await checker(async () => page(body, 200, "application/json")).check(
+    await expect(checker(async () => page(body, 200, "application/json")).check(
       "https://example.test/story",
       "The company raised capital from several patient investors in 2024.",
-    );
+    )).resolves.toMatchObject({ status: "not_found" });
 
-    expect(result.status).toBe("not_found");
+    const hn = JSON.stringify({ text: "ordinary public discussion text ".repeat(100) });
+    await expect(checker(async () => page(hn, 200, "application/json")).check(
+      "https://news.ycombinator.com/item?id=12345678",
+      "A specific claim that does not appear anywhere in this discussion.",
+    )).resolves.toMatchObject({ status: "not_found" });
   });
 
-  it("blocks denied and private addresses before fetching them", async () => {
+  it("treats errors, non-text content and too little page text as unreachable", async () => {
+    await expect(checker(async () => page("blocked", 403)).check("https://example.test/story", "This quote has several words to check"))
+      .resolves.toMatchObject({ status: "unreachable" });
+    await expect(checker(async () => page("%PDF-1.7", 200, "application/pdf"))
+      .check("https://example.test/story", "This quote has several words to check"))
+      .resolves.toMatchObject({ status: "unreachable" });
+    await expect(checker(async () => page("A tiny page."))
+      .check("https://example.test/story", "This quote has several words to check"))
+      .resolves.toMatchObject({ status: "unreachable", detail: "The page has too little readable text to check a quote against." });
+  });
+
+  it("uses complete or partial source stand-ins for Hacker News, GitHub and arXiv", async () => {
+    const hnFetched: string[] = [];
+    const hnQuote = "The founder didn't stop building after the first launch.";
+    const hn = await checker(async (url) => {
+      hnFetched.push(url);
+      return page(JSON.stringify({ children: [{ text: "<p>The founder didn&#x27;t stop building after the first launch.</p>" }] }), 200, "application/json");
+    }).check("https://news.ycombinator.com/item?id=12345678", hnQuote);
+    expect(hnFetched).toEqual(["https://hn.algolia.com/api/v1/items/12345678"]);
+    expect(hn.status).toBe("found");
+
+    const githubFetched: string[] = [];
+    const githubQuote = "const founderCount = team.members.length;";
+    const github = await checker(async (url) => {
+      githubFetched.push(url);
+      return page(`${githubQuote}\n`, 200, "text/plain");
+    }).check("https://github.com/octocat/venture/blob/main/src/team.ts", githubQuote);
+    expect(githubFetched).toEqual(["https://raw.githubusercontent.com/octocat/venture/main/src/team.ts"]);
+    expect(github.status).toBe("found");
+
+    const arxivFetched: string[] = [];
+    const arxivQuote = "This abstract describes a public research paper with detailed methods and important results.";
+    const arxiv = await checker(async (url) => {
+      arxivFetched.push(url);
+      return page(`<p>${"ordinary public research information ".repeat(80)}</p>`);
+    }).check("https://arxiv.org/pdf/2401.01234v2.pdf", arxivQuote);
+    expect(arxivFetched).toEqual(["https://arxiv.org/abs/2401.01234v2"]);
+    expect(arxiv).toMatchObject({ status: "unreachable", detail: "Only the abstract of this paper could be read." });
+    await expect(checker(async () => page(`<p>${arxivQuote}</p>`))
+      .check("https://arxiv.org/pdf/2401.01234v2.pdf", arxivQuote)).resolves.toMatchObject({ status: "found" });
+  });
+
+  it("blocks denied, local and private addresses before initial or redirected requests", async () => {
     const blocked = [
       "https://www.linkedin.com/in/person",
       "http://127.0.0.1/",
       "http://[::1]/",
       "http://10.0.0.5/",
+      "http://localhost/",
       "https://example.test:8443/story",
     ];
     for (const url of blocked) {
@@ -168,60 +127,45 @@ describe("createQuoteChecker", () => {
       expect(fetched, url).toEqual([]);
     }
 
-    let fetched = false;
-    const resolvedPrivate = checker(
-      async () => {
-        fetched = true;
-        return page("should not be requested");
-      },
-      { resolveHost: async () => ["192.168.1.10"] },
-    );
+    let fetchedPrivateDns = false;
+    const resolvedPrivate = checker(async () => {
+      fetchedPrivateDns = true;
+      return page("should not be requested");
+    }, { resolveHost: async () => ["192.168.1.10"] });
     expect((await resolvedPrivate.check("https://example.test/story", "This quote has enough words to check")).status).toBe("unreachable");
-    expect(fetched).toBe(false);
-  });
+    expect(fetchedPrivateDns).toBe(false);
 
-  it("validates a redirect destination before fetching it", async () => {
-    const fetched: string[] = [];
-    const result = await checker(async (url) => {
-      fetched.push(url);
+    const redirected: string[] = [];
+    const redirect = await checker(async (url) => {
+      redirected.push(url);
       return new Response(null, { status: 302, headers: { location: "http://127.0.0.1/private" } });
     }).check("https://example.test/story", "This quote has enough words to check");
-    expect(result.status).toBe("unreachable");
-    expect(fetched).toEqual(["https://example.test/story"]);
+    expect(redirect.status).toBe("unreachable");
+    expect(redirected).toEqual(["https://example.test/story"]);
   });
 
-  it("refuses to follow a fourth redirect", async () => {
+  it("refuses a fourth redirect and reports pages cut off at its byte limit", async () => {
     const fetched: string[] = [];
-    const result = await checker(async (url) => {
+    const redirect = await checker(async (url) => {
       fetched.push(url);
       const index = Number(new URL(url).pathname.slice(1));
       return new Response(null, { status: 302, headers: { location: `/${index + 1}` } });
     }).check("https://example.test/0", "This quote has enough words to check");
-    expect(result).toMatchObject({ status: "unreachable", detail: "The page redirects too many times." });
+    expect(redirect).toMatchObject({ status: "unreachable", detail: "The page redirects too many times." });
     expect(fetched).toEqual([
-      "https://example.test/0",
-      "https://example.test/1",
-      "https://example.test/2",
-      "https://example.test/3",
+      "https://example.test/0", "https://example.test/1", "https://example.test/2", "https://example.test/3",
     ]);
-  });
 
-  it("reports truncated pages as unreachable unless the quote was found", async () => {
     const quote = "The quote appears before the body limit is reached.";
-    const found = await checker(async () => page(`<p>${quote}</p>${"extra readable words ".repeat(500)}`), { maxBytes: 1_700 }).check(
-      "https://example.test/story",
-      quote,
-    );
-    expect(found.status).toBe("found");
-
+    await expect(checker(async () => page(`<p>${quote}</p>${"extra readable words ".repeat(500)}`), { maxBytes: 1_700 })
+      .check("https://example.test/story", quote)).resolves.toMatchObject({ status: "found" });
     const beyondLimit = "This genuine quote begins only after the source was cut off by the byte limit.";
-    const missing = await checker(async () => page(`<p>${"ordinary public page information ".repeat(100)}</p><p>${beyondLimit}</p>`), {
-      maxBytes: 1_700,
-    }).check("https://example.test/story", beyondLimit);
-    expect(missing).toMatchObject({ status: "unreachable", detail: "The page is too long to check in full." });
+    await expect(checker(async () => page(`<p>${"ordinary public page information ".repeat(100)}</p><p>${beyondLimit}</p>`), { maxBytes: 1_700 })
+      .check("https://example.test/story", beyondLimit))
+      .resolves.toMatchObject({ status: "unreachable", detail: "The page is too long to check in full." });
   });
 
-  it("connects to a validated address while keeping the original host name", async (context) => {
+  it("connects only to the validated address while retaining the requested host name", async (context) => {
     let hostHeader = "";
     const server = createServer((_request, response) => {
       hostHeader = _request.headers.host ?? "";
@@ -235,16 +179,17 @@ describe("createQuoteChecker", () => {
       });
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "EPERM") throw error;
-      // A sandbox that forbids listening cannot run this. Say so instead of passing silently.
       context.skip();
       return;
     }
     try {
       const address = server.address();
       if (!address || typeof address === "string") throw new Error("The local server did not bind to a TCP port.");
-      const resolveHost = async () => ["127.0.0.1"];
-      const pinnedAddresses = await resolveHost();
-      const response = await pinnedFetch(`http://public-name.test:${address.port}/`, { method: "GET" }, pinnedAddresses);
+      const response = await pinnedFetch(
+        `http://public-name.test:${address.port}/`,
+        { method: "GET" },
+        ["127.0.0.1"],
+      );
       expect(await response.text()).toBe("served through the pinned address");
       expect(response.status).toBe(200);
       expect(hostHeader).toBe(`public-name.test:${address.port}`);
@@ -255,7 +200,30 @@ describe("createQuoteChecker", () => {
     }
   });
 
-  it("reads a page the server compressed without being asked, and refuses a scheme it cannot undo", async (context) => {
+  it("returns only prevalidated addresses from both Node lookup callback forms", async () => {
+    const lookup = createPinnedLookup(["93.184.216.34", "1.1.1.1"]);
+    const single = await new Promise<{ address: string; family: number }>((resolve, reject) => {
+      lookup("public-name.test", { all: false }, (error, address, family) => {
+        if (error) reject(error);
+        else if (typeof address === "string") resolve({ address, family: family ?? 0 });
+        else reject(new Error("Expected a single lookup result."));
+      });
+    });
+    const all = await new Promise<Array<{ address: string; family: number }>>((resolve, reject) => {
+      lookup("public-name.test", { all: true }, (error, addresses) => {
+        if (error) reject(error);
+        else if (Array.isArray(addresses)) resolve(addresses);
+        else reject(new Error("Expected all lookup results."));
+      });
+    });
+    expect(single).toEqual({ address: "93.184.216.34", family: 4 });
+    expect(all).toEqual([
+      { address: "93.184.216.34", family: 4 },
+      { address: "1.1.1.1", family: 4 },
+    ]);
+  });
+
+  it("decodes gzip and Brotli responses and rejects an unsupported compression", async (context) => {
     const text = "A sentence that only makes sense once the compression is undone. ".repeat(20);
     const server = createServer((request, response) => {
       if (request.url === "/gzip") {
@@ -291,33 +259,6 @@ describe("createQuoteChecker", () => {
         server.close((error) => (error ? reject(error) : resolve()));
       });
     }
-  });
-
-  it("uses the first validated DNS answer for both Node lookup callback forms", async () => {
-    let lookups = 0;
-    const resolver = async () => {
-      lookups += 1;
-      return lookups === 1 ? ["93.184.216.34"] : ["169.254.169.254"];
-    };
-    const lookup = createPinnedLookup(await resolver());
-    const single = await new Promise<{ address: string; family: number }>((resolve, reject) => {
-      lookup("public-name.test", { all: false }, (error, address, family) => {
-        if (error) reject(error);
-        else if (typeof address === "string") resolve({ address, family: family ?? 0 });
-        else reject(new Error("Expected a single lookup result."));
-      });
-    });
-    const all = await new Promise<Array<{ address: string; family: number }>>((resolve, reject) => {
-      lookup("public-name.test", { all: true }, (error, addresses) => {
-        if (error) reject(error);
-        else if (Array.isArray(addresses)) resolve(addresses);
-        else reject(new Error("Expected all lookup results."));
-      });
-    });
-
-    expect(single).toEqual({ address: "93.184.216.34", family: 4 });
-    expect(all).toEqual([{ address: "93.184.216.34", family: 4 }]);
-    expect(lookups).toBe(1);
   });
 
   it("rethrows a caller abort", async () => {

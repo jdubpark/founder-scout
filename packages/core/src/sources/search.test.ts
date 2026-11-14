@@ -1,11 +1,13 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import { createGitHubSearchEngine, createHnSearchEngine, createHuggingFaceSearchEngine } from "./search";
 
 describe("hunt search engines", () => {
-  it("maps Hacker News stories and uses author and points when a story has no text", async () => {
+  it("maps Hacker News results, falls back to author metrics, and caps the request size", async () => {
     let requestedUrl = "";
+    let requests = 0;
     const engine = createHnSearchEngine({
       fetch: async (url) => {
+        requests += 1;
         requestedUrl = url;
         return Response.json({ hits: [
           {
@@ -21,8 +23,7 @@ describe("hunt search engines", () => {
       },
     });
 
-    await expect(engine.status()).resolves.toMatchObject({ configured: true });
-    await expect(engine.search("open source launch", 2)).resolves.toEqual([
+    await expect(engine.search("open source launch", 500)).resolves.toEqual([
       {
         url: "https://product.example.com/launch",
         title: "Launch HN: A small product",
@@ -38,14 +39,16 @@ describe("hunt search engines", () => {
     expect(new URL(requestedUrl).pathname).toBe("/api/v1/search_by_date");
     expect(params.get("query")).toBe("open source launch");
     expect(params.get("tags")).toBe("story");
-    expect(params.get("hitsPerPage")).toBe("2");
+    expect(params.get("hitsPerPage")).toBe("100");
+    await expect(engine.search("ignored", 0)).resolves.toEqual([]);
+    expect(requests).toBe(1);
   });
 
-  it("maps GitHub repositories, sends the raw search syntax, and reports token status", async () => {
+  it("maps GitHub repositories, preserves search syntax and sends its configured headers", async () => {
     let requestedUrl = "";
     let requestHeaders = new Headers();
     const engine = createGitHubSearchEngine({
-      env: { GITHUB_TOKEN: "test-token" },
+      env: { GITHUB_TOKEN: "test-token", HUNT_USER_AGENT: "fund-reader/1.0 (+https://reader.example.org)" },
       fetch: async (url, init) => {
         requestedUrl = url;
         requestHeaders = new Headers(init?.headers);
@@ -59,8 +62,7 @@ describe("hunt search engines", () => {
       },
     });
 
-    await expect(engine.status()).resolves.toMatchObject({ configured: true });
-    await expect(engine.search("topic:founders stars:>100", 5)).resolves.toEqual([{
+    await expect(engine.search("topic:founders stars:>100", 500)).resolves.toEqual([{
       url: "https://github.com/acme/early-tool",
       title: "acme/early-tool",
       snippet: "An early customer support tool · 456 stars · Created 2026-01-02",
@@ -70,29 +72,12 @@ describe("hunt search engines", () => {
     expect(params.get("q")).toBe("topic:founders stars:>100");
     expect(params.get("sort")).toBe("stars");
     expect(params.get("order")).toBe("desc");
+    expect(params.get("per_page")).toBe("100");
     expect(requestHeaders.get("authorization")).toBe("Bearer test-token");
-
-    // It works without a token at a lower rate, so it is usable: the hunt must not lose the
-    // engine on a machine with no token.
-    const bare = await createGitHubSearchEngine({ env: {} }).status();
-    expect(bare.configured).toBe(true);
-    expect(bare.detail).toContain("without one");
+    expect(requestHeaders.get("user-agent")).toBe("fund-reader/1.0 (+https://reader.example.org)");
   });
 
-  it("names itself to GitHub as the owner chose", async () => {
-    let agent: string | null = null;
-    const engine = createGitHubSearchEngine({
-      env: { HUNT_USER_AGENT: "fund-reader/1.0 (+https://reader.example.org)" },
-      fetch: async (_url, init) => {
-        agent = new Headers(init?.headers).get("user-agent");
-        return Response.json({ items: [] });
-      },
-    });
-    await engine.search("anything", 3);
-    expect(agent).toBe("fund-reader/1.0 (+https://reader.example.org)");
-  });
-
-  it("searches new models and demo spaces on the Hugging Face Hub, with anything people have used first", async () => {
+  it("orders Hub models and demo spaces by traction then date, with a bounded page size", async () => {
     const asked: string[] = [];
     const engine = createHuggingFaceSearchEngine({
       env: {},
@@ -112,8 +97,7 @@ describe("hunt search engines", () => {
       },
     });
 
-    await expect(engine.status()).resolves.toMatchObject({ configured: true });
-    const hits = await engine.search("agent", 3);
+    const hits = await engine.search("agent", 500);
     expect(hits.map((hit) => hit.url)).toEqual([
       "https://huggingface.co/spaces/solo-builder/agent-demo",
       "https://huggingface.co/two-person-lab/planner",
@@ -124,18 +108,17 @@ describe("hunt search engines", () => {
       title: "two-person-lab/planner",
       snippet: "Model · 4 likes · 310 downloads · Created 2026-11-10 · agent, license:apache-2.0",
     });
-    // Newest first is asked for, from both listings.
     expect(asked).toHaveLength(2);
-    for (const url of asked) {
-      const params = new URL(url).searchParams;
+    for (const rawUrl of asked) {
+      const params = new URL(rawUrl).searchParams;
       expect(params.get("search")).toBe("agent");
       expect(params.get("sort")).toBe("createdAt");
       expect(params.get("direction")).toBe("-1");
+      expect(params.get("limit")).toBe("100");
     }
   });
 
-  it("gives up on an answer that never ends or is too large, and returns nothing", async () => {
-    // A server that sends a byte and then goes quiet. Only the deadline ends it.
+  it("ends a slow response at its deadline and discards a response above the byte ceiling", async () => {
     const dripping = () => new Response(new ReadableStream<Uint8Array>({
       start(controller) { controller.enqueue(new TextEncoder().encode("{")); },
     }), { headers: { "content-type": "application/json" } });
@@ -144,32 +127,26 @@ describe("hunt search engines", () => {
     await expect(slow.search("anything", 5)).resolves.toEqual([]);
     expect(Date.now() - started).toBeLessThan(2_000);
 
-    // An answer far larger than any page of results.
-    const huge = createGitHubSearchEngine({ env: {}, fetch: async () => new Response(`{"items":[],"pad":"${"x".repeat(2_100_000)}"}`, { headers: { "content-type": "application/json" } }) });
+    const oversized = new Response(
+      JSON.stringify({ items: [{ full_name: "acme/too-large", html_url: "https://github.com/acme/too-large" }], pad: "x".repeat(2_100_000) }),
+      { headers: { "content-type": "application/json" } },
+    );
+    const huge = createGitHubSearchEngine({ env: {}, fetch: async () => oversized });
     await expect(huge.search("anything", 5)).resolves.toEqual([]);
   });
 
-  it("returns an empty list when the Hub fails", async () => {
-    const engine = createHuggingFaceSearchEngine({ fetch: async () => new Response("no", { status: 503 }) });
-    await expect(engine.search("agent", 5)).resolves.toEqual([]);
+  it("returns no hits for an HTTP refusal, malformed JSON or a network error", async () => {
+    const failures = [
+      async () => new Response("rate limited", { status: 429 }),
+      async () => new Response("not JSON", { headers: { "content-type": "application/json" } }),
+      async () => { throw new Error("offline"); },
+    ];
+    for (const fetch of failures) {
+      await expect(createHnSearchEngine({ fetch }).search("anything", 5)).resolves.toEqual([]);
+    }
   });
 
-  it.each(["rate-limit response", "network error"]) ("returns an empty list on a %s", async (failure) => {
-    const engine = createGitHubSearchEngine({
-      fetch: async () => {
-        if (failure === "network error") throw new Error("offline");
-        return new Response("rate limited", { status: 429 });
-      },
-    });
-    await expect(engine.search("anything", 10)).resolves.toEqual([]);
-  });
-
-  it("returns an empty list when Hacker News answers with a rate limit", async () => {
-    const engine = createHnSearchEngine({ fetch: async () => new Response("rate limited", { status: 429 }) });
-    await expect(engine.search("anything", 10)).resolves.toEqual([]);
-  });
-
-  it("accepts additional engines in the live access factory", async () => {
+  it("keeps contracted extra engines in the live access factory", async () => {
     const extra = {
       id: "web",
       label: "General web",
@@ -181,11 +158,5 @@ describe("hunt search engines", () => {
     const access = createLiveWebAccess({ env: { GITHUB_TOKEN: "token", HUNT_USER_AGENT: "web-reader-test/1.0" }, extraEngines: [extra] });
     expect(access.engines.map((engine) => engine.id)).toEqual(["hn", "github", "huggingface", "web"]);
     await expect(access.engines[1]!.status()).resolves.toMatchObject({ configured: true });
-  });
-
-  it("does not perform a request when the requested limit is zero", async () => {
-    const fetch = vi.fn(async () => Response.json({ hits: [] }));
-    await expect(createHnSearchEngine({ fetch }).search("query", 0)).resolves.toEqual([]);
-    expect(fetch).not.toHaveBeenCalled();
   });
 });

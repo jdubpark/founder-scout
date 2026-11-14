@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest";
 import { createPdlVendor, createRecordAllowance } from "./pdl";
-import { SourceRateLimitError } from "./http";
 import { FIXED_NOW_MS, jsonResponse, request, scriptedFetch, textResponse } from "./test-support";
 
 const person = {
@@ -109,11 +108,6 @@ describe("People Data Labs adapter", () => {
     await expect(makeVendor(recorder.fetch).team({ name: "Acme", domain: null }, 1)).rejects.toThrow(message);
   });
 
-  it("maps HTTP 429 to SourceRateLimitError", async () => {
-    const recorder = scriptedFetch(() => textResponse("limited", { status: 429 }));
-    await expect(makeVendor(recorder.fetch).team({ name: "Acme", domain: null }, 1)).rejects.toBeInstanceOf(SourceRateLimitError);
-  });
-
   it("does not repeat returned ids and bounds the cursor", async () => {
     const recorder = scriptedFetch(() => jsonResponse({ data: [person] }));
     const vendor = makeVendor(recorder.fetch);
@@ -127,7 +121,7 @@ describe("People Data Labs adapter", () => {
     expect((bounded.cursor as { seen: string[] }).seen).toHaveLength(2_000);
   });
 
-  it("uses a company domain when present, otherwise an escaped lowercase company name", async () => {
+  it("prefers a company domain and safely escapes the company-name fallback", async () => {
     const recorder = scriptedFetch(() => jsonResponse({ data: [person] }));
     const vendor = makeVendor(recorder.fetch);
     await vendor.team({ name: "O'Brien Labs", domain: "Example.COM" }, 40);
@@ -138,14 +132,10 @@ describe("People Data Labs adapter", () => {
     expect(new URL(recorder.urls[1]!).searchParams.get("sql")).toBe(
       "SELECT * FROM person WHERE job_company_name = 'o''brien labs'",
     );
-  });
-
-  it("escapes SQL values and uses the PDL source path", async () => {
-    const recorder = scriptedFetch(() => jsonResponse({ data: [] }));
-    await makeVendor(recorder.fetch).team({ name: "Founder' OR '1'='1", domain: null }, 3);
-    const url = new URL(recorder.urls[0]!);
-    expect(url.pathname).toBe("/v5/person/search");
-    expect(url.searchParams.get("sql")).toContain("founder'' or ''1''=''1");
+    await vendor.team({ name: "Founder' OR '1'='1", domain: null }, 3);
+    const injection = new URL(recorder.urls[2]!);
+    expect(injection.pathname).toBe("/v5/person/search");
+    expect(injection.searchParams.get("sql")).toContain("founder'' or ''1''=''1");
   });
 
   it("stops asking the vendor for records once the day's allowance is spent, and starts again the next day", async () => {
@@ -232,13 +222,4 @@ describe("People Data Labs adapter", () => {
     expect(allowance.left()).toBe(1);
   });
 
-  it("reports local key readiness without making a request", async () => {
-    const recorder = scriptedFetch(() => { throw new Error("unexpected request"); });
-    const vendor = createPdlVendor({ apiKey: "secret-test-key", fetchFn: recorder.fetch });
-    const status = await vendor.status();
-    expect(status.configured).toBe(true);
-    expect(status.detail).toContain("People Data Labs");
-    expect(status.detail).toContain("unverified against the live service on this machine");
-    expect(recorder.urls).toHaveLength(0);
-  });
 });

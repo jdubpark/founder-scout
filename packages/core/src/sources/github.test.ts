@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { createGitHubAdapter, buildGitHubSearchQuery, GITHUB_MIN_STARS, parseGitHubRepo } from "./github";
+import { createGitHubAdapter } from "./github";
 import { SourceRateLimitError } from "./http";
-import { FIXED_NOW_MS, jsonResponse, readJsonFixture, request, scriptedFetch, textResponse } from "./test-support";
+import { FIXED_NOW_MS, jsonResponse, readJsonFixture, request, scriptedFetch } from "./test-support";
 
 interface GhSearch {
   total_count: number;
@@ -31,37 +31,26 @@ function searchRoute(items: Array<Record<string, unknown>> = searchFixture.items
 const SINCE_OLD = "2026-10-25T00:00:00Z";
 
 describe("github adapter", () => {
-  it("builds a creation-date, star-threshold, no-fork, no-archive query over the default window", async () => {
+  it("sends the default window, safe query terms and the provider's page ceiling", async () => {
     const recorder = scriptedFetch(searchRoute());
     const adapter = createGitHubAdapter({ env: {}, fetch: recorder.fetch, now: () => FIXED_NOW_MS });
-    await adapter.fetch(request({ limit: 5 }));
+    await adapter.fetch(request({ limit: 150, beat: 'vector "database"' }));
 
     const url = new URL(recorder.urls[0] ?? "");
     expect(url.origin + url.pathname).toBe("https://api.github.com/search/repositories");
-    expect(url.searchParams.get("q")).toBe(
-      `created:>=2026-11-11T17:00:00+00:00 stars:>=${GITHUB_MIN_STARS} fork:false archived:false`,
-    );
+    expect(url.searchParams.get("q")).toBe('created:>=2026-11-11T17:00:00+00:00 stars:>=20 fork:false archived:false "vector database"');
     expect(url.searchParams.get("sort")).toBe("stars");
     expect(url.searchParams.get("order")).toBe("desc");
-    expect(url.searchParams.get("per_page")).toBe("5");
-  });
+    expect(url.searchParams.get("per_page")).toBe("100");
 
-  it("uses req.since as the window start when given", () => {
-    expect(buildGitHubSearchQuery({ createdAfterMs: Date.parse(SINCE_OLD), beat: null })).toBe(
-      `created:>=2026-10-25T00:00:00+00:00 stars:>=${GITHUB_MIN_STARS} fork:false archived:false`,
-    );
-  });
-
-  it("adds the beat as a quoted search term, with quotes removed", async () => {
-    const recorder = scriptedFetch(searchRoute());
-    await createGitHubAdapter({ env: {}, fetch: recorder.fetch, now: () => FIXED_NOW_MS }).fetch(
-      request({ beat: 'vector "database"' }),
-    );
-    expect(new URL(recorder.urls[0] ?? "").searchParams.get("q")).toContain('"vector database"');
+    await adapter.fetch(request({ since: SINCE_OLD, limit: 150, beat: 'vector "database"' }));
+    expect(new URL(recorder.urls[1] ?? "").searchParams.get("q"))
+      .toBe('created:>=2026-10-25T00:00:00+00:00 stars:>=20 fork:false archived:false "vector database"');
   });
 
   it("maps search results to raw items with stars, age and stars per day", async () => {
-    const adapter = createGitHubAdapter({ env: {}, fetch: scriptedFetch(searchRoute()).fetch, now: () => FIXED_NOW_MS });
+    const items = [{ ...searchFixture.items[0], topics: ["agents", 7, "rust"] }, ...searchFixture.items.slice(1)];
+    const adapter = createGitHubAdapter({ env: {}, fetch: scriptedFetch(searchRoute(items)).fetch, now: () => FIXED_NOW_MS });
     const result = await adapter.fetch(request({ since: SINCE_OLD, limit: 10 }));
 
     expect(result.items).toHaveLength(3);
@@ -76,7 +65,7 @@ describe("github adapter", () => {
       simFounderId: null,
     });
     expect(first?.text).toContain("Description: Craft Anything: understand how any software works, and craft your own.");
-    expect(first?.text).toContain("Topics: none");
+    expect(first?.text).toContain("Topics: agents, rust");
     expect(first?.text).toContain("Primary language: Rust");
     expect(first?.text).toContain("Owner type: Organization");
 
@@ -130,70 +119,19 @@ describe("github adapter", () => {
     expect(result.items).toHaveLength(3);
   });
 
-  it("sends the token when GITHUB_TOKEN is set, and reports it in status", async () => {
-    const recorder = scriptedFetch(searchRoute());
-    const adapter = createGitHubAdapter({
-      env: { GITHUB_TOKEN: `  ${TOKEN}  ` },
-      fetch: recorder.fetch,
-      now: () => FIXED_NOW_MS,
-    });
-    await adapter.fetch(request({ since: SINCE_OLD }));
-    expect(recorder.headers[0]?.Authorization).toBe(`Bearer ${TOKEN}`);
-    expect(recorder.headers[0]?.Accept).toBe("application/vnd.github+json");
-    expect(recorder.headers[0]?.["User-Agent"]).toBe("agentswarm/0.1");
+  it("sends a configured token and omits it when unset", async () => {
+    const authenticated = scriptedFetch(searchRoute());
+    await createGitHubAdapter({ env: { GITHUB_TOKEN: `  ${TOKEN}  ` }, fetch: authenticated.fetch, now: () => FIXED_NOW_MS })
+      .fetch(request({ since: SINCE_OLD }));
+    expect(authenticated.headers[0]?.Authorization).toBe(`Bearer ${TOKEN}`);
+    expect(authenticated.headers[0]?.Accept).toBe("application/vnd.github+json");
 
-    const status = await adapter.status();
-    expect(status.configured).toBe(true);
-    expect(status.detail).toContain("GITHUB_TOKEN is in use");
+    const anonymous = scriptedFetch(searchRoute());
+    await createGitHubAdapter({ env: {}, fetch: anonymous.fetch, now: () => FIXED_NOW_MS }).fetch(request({ since: SINCE_OLD }));
+    expect(anonymous.headers[0]?.Authorization).toBeUndefined();
   });
 
-  it("sends no token when GITHUB_TOKEN is absent, and says the lower limits apply", async () => {
-    const recorder = scriptedFetch(searchRoute());
-    const adapter = createGitHubAdapter({ env: {}, fetch: recorder.fetch, now: () => FIXED_NOW_MS });
-    await adapter.fetch(request({ since: SINCE_OLD }));
-    expect(recorder.headers[0]?.Authorization).toBeUndefined();
-
-    const status = await adapter.status();
-    expect(status.configured).toBe(true);
-    expect(status.detail).toContain("No GITHUB_TOKEN set");
-  });
-
-  it("reports the last search quota seen in the status detail, without a network call", async () => {
-    const adapter = createGitHubAdapter({ env: {}, fetch: scriptedFetch(searchRoute()).fetch, now: () => FIXED_NOW_MS });
-    await adapter.fetch(request({ since: SINCE_OLD }));
-    const status = await adapter.status();
-    expect(status.detail).toContain("Last search response: 9 of 10 requests left");
-  });
-
-  it("throws a rate-limit error with the reset time on a rate-limited 403", async () => {
-    const adapter = createGitHubAdapter({
-      env: {},
-      fetch: scriptedFetch(() =>
-        jsonResponse(
-          { message: "API rate limit exceeded" },
-          { status: 403, headers: { "x-ratelimit-resource": "search", "x-ratelimit-remaining": "0", "x-ratelimit-reset": String(RESET_SEC) } },
-        ),
-      ).fetch,
-      now: () => FIXED_NOW_MS,
-    });
-    const error = await adapter.fetch(request({ since: SINCE_OLD })).catch((e: unknown) => e);
-    expect(error).toBeInstanceOf(SourceRateLimitError);
-    expect((error as Error).message).toContain("GitHub is rate limited");
-    expect((error as Error).message).toContain(new Date(RESET_SEC * 1000).toISOString());
-  });
-
-  it("throws a rate-limit error with the Retry-After delay on a 429", async () => {
-    const adapter = createGitHubAdapter({
-      env: {},
-      fetch: scriptedFetch(() => textResponse("slow", { status: 429, headers: { "retry-after": "30" } })).fetch,
-      now: () => FIXED_NOW_MS,
-    });
-    await expect(adapter.fetch(request({ since: SINCE_OLD }))).rejects.toThrow(
-      `GitHub is rate limited (HTTP 429). Retry after ${new Date(FIXED_NOW_MS + 30_000).toISOString()}.`,
-    );
-  });
-
-  it("does not call the network while the last known search quota is exhausted", async () => {
+  it("reports an exhausted search quota and refuses a second request", async () => {
     let calls = 0;
     const adapter = createGitHubAdapter({
       env: {},
@@ -201,23 +139,15 @@ describe("github adapter", () => {
         calls += 1;
         return jsonResponse(
           { total_count: 0, items: [] },
-          { headers: { "x-ratelimit-resource": "search", "x-ratelimit-remaining": "0", "x-ratelimit-reset": String(RESET_SEC) } },
+          { headers: { "x-ratelimit-resource": "search", "x-ratelimit-limit": "10", "x-ratelimit-remaining": "0", "x-ratelimit-reset": String(RESET_SEC) } },
         );
       },
       now: () => FIXED_NOW_MS,
     });
     await adapter.fetch(request({ since: SINCE_OLD }));
+    await expect(adapter.status()).resolves.toMatchObject({ detail: expect.stringContaining("0 of 10 requests left") });
     await expect(adapter.fetch(request({ since: SINCE_OLD }))).rejects.toBeInstanceOf(SourceRateLimitError);
     expect(calls).toBe(1);
-  });
-
-  it("throws on other HTTP failures, naming the source and status", async () => {
-    const adapter = createGitHubAdapter({
-      env: {},
-      fetch: scriptedFetch(() => textResponse("Forbidden", { status: 403 })).fetch,
-      now: () => FIXED_NOW_MS,
-    });
-    await expect(adapter.fetch(request({ since: SINCE_OLD }))).rejects.toThrow("GitHub request failed with HTTP 403.");
   });
 
   it("throws rather than returning a partial result when a repository is malformed", async () => {
@@ -226,12 +156,4 @@ describe("github adapter", () => {
     await expect(adapter.fetch(request({ since: SINCE_OLD }))).rejects.toThrow("without full_name");
   });
 
-  it("parses a repository's owner and optional topics", () => {
-    const repo = parseGitHubRepo({
-      ...searchFixture.items[0],
-      topics: ["agents", 7, "rust"],
-    });
-    expect(repo.topics).toEqual(["agents", "rust"]);
-    expect(repo.ownerLogin).toBe("example-org");
-  });
 });

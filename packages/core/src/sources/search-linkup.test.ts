@@ -3,7 +3,7 @@ import { NEVER_FETCH_HOSTS, TERMS_BARRED_HOSTS } from "@agentswarm/shared";
 import { createLinkupSearchEngine, LINKUP_SEARCH_API } from "./search-linkup";
 
 describe("Linkup web search", () => {
-  it("sends the contracted request, maps results, keeps barred links as pointers, and stops at its daily ceiling", async () => {
+  it("caps results, excludes barred hosts, keeps barred links as pointers, and enforces its daily ceiling", async () => {
     let requestUrl = "";
     let requestInit: RequestInit | undefined;
     const fetch = vi.fn(async (url: string, init?: RequestInit) => {
@@ -20,6 +20,11 @@ describe("Linkup web search", () => {
           url: "https://www.youtube.com/watch?v=abc123",
           content: "A pointer for a person to open.",
         },
+        {
+          name: "Professional network profile",
+          url: "https://www.linkedin.com/in/founder",
+          content: "This is a pointer only.",
+        },
       ] });
     });
     const engine = createLinkupSearchEngine({
@@ -28,9 +33,10 @@ describe("Linkup web search", () => {
     });
 
     await expect(engine.status()).resolves.toMatchObject({ configured: true });
-    await expect(engine.search('startup "seed stage" founder', 2)).resolves.toEqual([
+    await expect(engine.search('startup "seed stage" founder', 500)).resolves.toEqual([
       { url: "https://acme.com/founder", title: "An early founder", snippet: `${"x".repeat(299)}…` },
       { url: "https://www.youtube.com/watch?v=abc123", title: "Video link", snippet: "A pointer for a person to open." },
+      { url: "https://www.linkedin.com/in/founder", title: "Professional network profile", snippet: "This is a pointer only." },
     ]);
     expect(requestUrl).toBe(LINKUP_SEARCH_API);
     expect(requestInit?.method).toBe("POST");
@@ -39,7 +45,7 @@ describe("Linkup web search", () => {
       q: 'startup "seed stage" founder',
       depth: "fast",
       outputType: "searchResults",
-      maxResults: 2,
+      maxResults: 100,
       excludeDomains: [...NEVER_FETCH_HOSTS, ...TERMS_BARRED_HOSTS.map(({ host }) => host)],
     });
 
