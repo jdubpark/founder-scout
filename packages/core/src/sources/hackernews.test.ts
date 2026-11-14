@@ -100,4 +100,19 @@ describe("Hacker News adapter", () => {
     const adapter = createHackerNewsAdapter({ fetch: scriptedFetch(() => jsonResponse({ error: "x" })).fetch });
     await expect(adapter.fetch(request())).rejects.toThrow("unexpected response");
   });
+
+  it("passes the caller's aborted signal into the source request", async () => {
+    const controller = new AbortController();
+    controller.abort();
+    let requestSignal: AbortSignal | null | undefined;
+    const adapter = createHackerNewsAdapter({
+      fetch: async (_url, init) => {
+        requestSignal = init?.signal;
+        return jsonResponse({ hits: [] });
+      },
+    });
+
+    await adapter.fetch(request({ signal: controller.signal }));
+    expect(requestSignal?.aborted).toBe(true);
+  });
 });

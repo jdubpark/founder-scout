@@ -9,6 +9,7 @@ import { jsonResponse, readJsonFixture, scriptedFetch } from "./test-support";
 /**
  * A stand-in for git. Its behaviour is chosen by FAKE_GIT_MODE:
  *   ok   creates a checkout that contains agent files, a .git directory and source
+ *   fail exits 128 with a git-style message
  *   sleep never finishes
  *   big  writes 5000 bytes
  * Every invocation's arguments are appended to FAKE_GIT_LOG.
@@ -17,6 +18,7 @@ const FAKE_GIT = `#!/bin/sh
 echo "$@" >> "$FAKE_GIT_LOG"
 for last in "$@"; do :; done
 case "$FAKE_GIT_MODE" in
+  fail) echo "fatal: repository not found" >&2; exit 128 ;;
   sleep) sleep 30 ;;
   big) mkdir -p "$last"; head -c 5000 /dev/zero > "$last/big.bin"; exit 0 ;;
   *) mkdir -p "$last/.git" "$last/.claude" "$last/src"
@@ -231,9 +233,14 @@ describe("checkout", () => {
     expect(readdirSync(workDir)).toEqual([]);
   });
 
-  it("reports a missing git executable as a clear error and leaves nothing behind", async () => {
-    const finder = createLiveRepoFinder({ env: {}, workDir, git: join(base, "no-such-git") });
-    await expect(finder.checkout(REPO)).rejects.toThrow("Could not start git");
+  it("reports git execution failures clearly and leaves nothing behind", async () => {
+    process.env.FAKE_GIT_MODE = "fail";
+    const failed = createLiveRepoFinder({ env: {}, workDir, git: fakeGit });
+    await expect(failed.checkout(REPO)).rejects.toThrow("git clone failed with exit code 128: fatal: repository not found");
+    expect(readdirSync(workDir)).toEqual([]);
+
+    const missing = createLiveRepoFinder({ env: {}, workDir, git: join(base, "no-such-git") });
+    await expect(missing.checkout(REPO)).rejects.toThrow("Could not start git");
     expect(readdirSync(workDir)).toEqual([]);
   });
 

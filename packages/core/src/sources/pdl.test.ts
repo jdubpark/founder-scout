@@ -222,4 +222,14 @@ describe("People Data Labs adapter", () => {
     expect(allowance.left()).toBe(1);
   });
 
+  it("reports local key readiness without making a request", async () => {
+    const recorder = scriptedFetch(() => { throw new Error("unexpected request"); });
+    const vendor = createPdlVendor({ apiKey: "secret-test-key", fetchFn: recorder.fetch });
+    const status = await vendor.status();
+    expect(status.configured).toBe(true);
+    expect(status.detail).toContain("People Data Labs");
+    expect(status.detail).toContain("unverified against the live service on this machine");
+    expect(recorder.urls).toHaveLength(0);
+  });
+
 });
