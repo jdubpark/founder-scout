@@ -1,9 +1,10 @@
 # Founder Scout
 
 An agent swarm that finds startup founders for a venture investor as early as they can be seen,
-builds sourced dossiers on them and on their companies, scores both, and learns from the
-partner's Yes / No. A long-horizon navigator steers small fast runners across the open web
-(design section 16); fixed scouts read three feeds. Read the design before changing behaviour:
+builds sourced dossiers on them and their companies, scores both, and learns from the partner's
+Yes / No. A long-horizon navigator steers small runners across the open web; an outside agent can
+take its seat over MCP, and the Hunt has a simulated yield eval (design section 16). Read the
+design before changing behaviour:
 `docs/superpowers/specs/2026-11-12-founder-scout-swarm-design.md`.
 
 ## Layout
@@ -24,6 +25,8 @@ pnpm dev                                     # API on 4317, dashboard on 5317
 pnpm swarm run --days 3                      # simulated runs from the command line; each prints what its hunt read and found
 pnpm swarm past collect --from 2018-01-01 --to 2021-01-01 --yc --unicorns   # build the past-companies dataset
 pnpm swarm eval rounds --flow past-founders --rounds 0 --budget 3          # measure it; this calls models
+pnpm swarm eval rounds --flow hunt-yield --rounds 2                        # tune the hunt on simulated web
+pnpm swarm mcp --swarm SWARM_ID                                             # stdio MCP server for an outside navigator
 ```
 
 Package scripts call `../../node_modules/.bin/tsc` and `../../node_modules/.bin/tsx` on purpose: a
@@ -38,9 +41,13 @@ check it. `packages/core/src/rules.test.ts` enforces that, so add the test with 
 - **Models judge, code decides.** A model never returns a score or a decision. It answers rubric
   questions; `packages/shared/src/scoring.ts` does the rest. Tests: `packages/core/src/rules.test.ts`,
   `packages/shared/src/scoring.test.ts`.
-- **Outreach is only ever proposed.** Nothing in the engine sends or dials when sources are live.
-  The disclosure sentence on a draft is written by code and must stay uneditable. Tests:
-  `packages/core/src/engine/index.test.ts`, `packages/core/src/service/index.test.ts`.
+- **Outreach stays proposed; only a person's action can place an approved call.** The call action
+  records the caller's statement that the person agreed, requires an E.164 number, local time from
+  09:00 to 20:00, the stop switch off, and fewer than five placements on the UTC date. It stores
+  only the number's last two digits. Generated instructions limit the call to its approved agenda,
+  tell it to end on a stop request, and pass a 15-minute limit to the dialler. The disclosure on
+  the draft is written by code. The live dialler slot is empty, so no real call can be placed.
+  Tests: `packages/core/src/engine/index.test.ts`, `packages/core/src/service/index.test.ts`.
 - **Nothing requests the professional network's own site.** No adapter, no fetching, no logged-in
   automation, for linkedin.com and the other hosts in `packages/shared/src/policy.ts`. A link to one
   is a pointer for a person to open. Profile data comes from a data vendor under contract, from a
@@ -61,7 +68,8 @@ check it. `packages/core/src/rules.test.ts` enforces that, so add the test with 
 - **A company is decided by its founders and the company together.** The company rubric is in
   `packages/shared/src/company.ts`; `decideDeal` in `scoring.ts` combines the two scores. Company
   facts are evidence with a facet, filed under the lead founder; the founder analyst is not shown
-  them. A brief point that cites no verified evidence is dropped. Tests:
+  them. A brief point or moat without verified citations is dropped; live mission and tagline text
+  must match the page at its cited address. Tests:
   `packages/shared/src/company.test.ts`, `packages/core/src/engine/company-stages.test.ts`.
 - **A contact list is the uploader's own, and stays out of prompts.** Email addresses in it are
   never read. Tests: `packages/core/src/sources/connections.test.ts`,
@@ -69,11 +77,13 @@ check it. `packages/core/src/rules.test.ts` enforces that, so add the test with 
 - **Vendor records cost money outside the run's spend cap.** The People Data Labs adapter asks only
   for professional fields and has its own ceiling on records per day. Test:
   `packages/core/src/sources/pdl.test.ts`.
-- **Headless agents do not inherit unrelated secrets.** They read untrusted pages and repositories,
-  so keys for other services are removed from their environment. Test:
-  `packages/core/src/providers/env.test.ts`.
-- **Simulator fields stay out of prompts.** `simId`, `simFounderId` and `sim` exist so simulated
-  agents and evals have ground truth. Test: `packages/core/src/jobs/index.test.ts`.
+- **Headless agents do not inherit unrelated secrets or user instructions.** Claude and Codex get
+  only required environment keys; OpenCode runs a generated tool-free agent in a temporary
+  directory with an empty config directory. Tests: `packages/core/src/providers/env.test.ts`,
+  `packages/core/src/providers/opencode-cli.test.ts`.
+- **Simulator fields stay out of prompts.** `simId`, `simFounderId`, `sim` and hidden hunt truth
+  exist for checks after a job, not as model input. Tests: `packages/core/src/jobs/index.test.ts`,
+  `packages/core/src/engine/index.test.ts`, `packages/core/src/service/hunt-trial.test.ts`.
 - **Simulated data is always labelled** in the dashboard, and synthetic eval scores are never
   described as evidence about real founders. (Judgment.)
 - **A repository checkout is untrusted.** It is shallow, size-capped, stripped of agent-instruction
@@ -84,6 +94,10 @@ check it. `packages/core/src/rules.test.ts` enforces that, so add the test with 
   beyond the noise floor with no guardrail worse, or no loss at all with a guardrail clearly better.
   The synthetic flow's headline is rank correlation with hidden true quality, on purpose: outcomes
   in the simulated world are too noisy to steer by. Test: `packages/core/src/eval/index.test.ts`.
+- **The hunt yield eval compares fixed simulated worlds only.** Eight train worlds propose changes;
+  eight held-out worlds decide them, with wave size and navigator turns held fixed. The headline is
+  strong early founders kept; late-stage finds, planted-page failures and runner calls are guards.
+  Tests: `packages/core/src/eval/index.test.ts`, `packages/core/src/service/hunt-trial.test.ts`.
 - **On past companies, the latest periods choose nothing.** A change is proposed on the earliest
   periods, chosen on middle periods held back from tuning, and only reported on the latest. The
   noise floor is the larger of the judge's own spread and a bootstrap over which cases were drawn.
@@ -111,13 +125,18 @@ check it. `packages/core/src/rules.test.ts` enforces that, so add the test with 
   so two swarms cannot spend the same remainder. Test: `packages/core/src/service/index.test.ts`.
 - **A pool of context is isolated unless a crossing is listed.** Each job names the pool behind
   every one of its input fields in `packages/shared/src/context.ts`; a field with no pool does
-  not compile, and no job reads a sealed pool (contact lists, hidden truth). Add a crossing to
-  `CROSSINGS` before moving text between pools. Test: `packages/shared/src/context.test.ts`.
+  not compile, and no job reads a sealed pool (contact lists, hidden truth). Skills match only
+  fields already sent to that job. Models that train on inputs are refused for jobs with private
+  material. Add a crossing to `CROSSINGS` before moving text between pools. Tests:
+  `packages/shared/src/context.test.ts`, `packages/shared/src/skills.test.ts`,
+  `packages/core/src/service/pools.test.ts`.
 - **Code picks the pool member, and share moves only on checks the member did not make about
-  itself.** Supported items for each dollar, planted claims accepted, tasks failed. A model never
-  chooses a model, and a pinned model takes that scope out of the pool. Tests:
+  itself.** Supported items for each dollar, planted claims accepted, tasks failed. When both are
+  ready, scout and screener defaults split 50% to their ordinary route and 25% to each cheap model;
+  direct APIs take precedence over OpenCode, and a configured pool or pinned route takes precedence
+  over defaults. Tests:
   `packages/shared/src/pools.test.ts`, `packages/core/src/service/pools.test.ts`,
-  `packages/core/src/engine/index.test.ts`.
+  `packages/core/src/db/store.test.ts`, `packages/core/src/engine/index.test.ts`.
 - **Code marks an assumption supported, never a model, and never from the latest periods.** The
   ledger in `packages/shared/src/assumptions.ts` tests each statement on past companies from the
   tuning periods and on the partner's calls, and keeps the two apart. Tests:
@@ -125,8 +144,10 @@ check it. `packages/core/src/rules.test.ts` enforces that, so add the test with 
 - **The navigator steers the search and never the scoring.** It is one long-horizon agent whose
   memory is a notebook in the database. It is shown counts and labels of a few words, never a
   page. Its turn is a request that `checkTurn` checks, and it cannot write guidance for the
-  analysts or change a weight. Tests: `packages/shared/src/hunt.test.ts`,
-  `packages/core/src/engine/hunt.test.ts`, `packages/shared/src/context.test.ts`.
+  analysts or change a weight. An outside MCP agent receives the same bounded view and its turns
+  pass through the same checks. Tests: `packages/shared/src/hunt.test.ts`,
+  `packages/core/src/engine/hunt.test.ts`, `packages/core/src/service/index.test.ts`,
+  `packages/shared/src/context.test.ts`.
 - **A runner cannot add a person or an address.** A person is kept only when the name and the
   quoted words are on the page; links and search results are picked by number; a stage answer
   without the page's words is reset; a company whose page states a round later than the fund
@@ -139,19 +160,48 @@ check it. `packages/core/src/rules.test.ts` enforces that, so add the test with 
 - **The hunt reads public pages within their rules.** robots.txt is obeyed, requests to one host
   are spaced, there is no login and no cookie, a refusal is final, an address must be a named
   public host, and the sites in `TERMS_BARRED_HOSTS` are not read even where robots.txt allows.
-  Add a site to that list with the sentence that bars it. Tests:
+  This includes YouTube, Vimeo and Spotify media hosts. Add a site to that list with the sentence
+  that bars it. Tests:
   `packages/core/src/sources/web.test.ts`, `packages/shared/src/policy.test.ts`,
+  `packages/shared/src/hunt.test.ts`.
+- **A recording fetch must be a permitted direct audio or video file.** Code refuses barred or
+  private hosts, player pages, robots.txt refusals, unsafe redirects and files over the size limit.
+  Test: `packages/core/src/sources/media.test.ts`.
+- **A transcript quote must be present in the time-coded stretch.** Code drops unsupported words,
+  keeps the recording time in the evidence address, and marks the quote found before fact-checking.
+  Test: `packages/core/src/engine/index.test.ts`.
+- **Claude search hits come from its search tool result.** Assistant prose cannot add an address,
+  and code caps every search engine request at ten results. Tests:
+  `packages/core/src/providers/claude-cli.test.ts`, `packages/core/src/engine/hunt.test.ts`.
+- **Linkup search observes its separate per-day ceiling and the no-read list.** A missing key or
+  failed response yields no hits; the ceiling is held in memory and resets with the server.
+  Test: `packages/core/src/sources/search-linkup.test.ts`.
+- **Completed simulated calls become redacted, labelled evidence only when recording was chosen.**
+  The completed call item is synced; it is not retried as a new call. Test:
+  `packages/core/src/service/index.test.ts`.
+- **A hunt skill applies only to matching jobs or classes and matching task material.** Code picks
+  at most three by priority then id, within the prompt budget; `skills.off` removes an id at its
+  steering scope. Skill files must parse, name known jobs or classes and stay within 900 body
+  characters. Skills are guidance, not authority: a person's instruction wins, and a note cannot
+  direct scoring, decisions, personal-attribute use or barred-host requests. Tests:
+  `packages/shared/src/skills.test.ts`, `packages/core/src/jobs/index.test.ts`.
+- **Founders rows use matched company facts, not guesses.** Industry and round come from company
+  data, the tagline needs an exact company-page quote, and the moat needs cited verified evidence;
+  unknown values stay empty. Tests: `packages/core/src/db/store.test.ts`,
+  `packages/core/src/service/index.test.ts`, `packages/core/src/engine/company-stages.test.ts`,
   `packages/shared/src/hunt.test.ts`.
 - **A page is read once; a search runs again only in a later run or on a later day.** Test:
   `packages/core/src/db/store.test.ts`.
 - **A runner call names no effort, and that means answer fast.** DeepSeek is sent thinking off
   and Meta the lowest reasoning, because both reason by default. DeepSeek has no default
-  address. The runner pool is built only from providers that are ready, and a pool in the config
-  wins. Tests: `packages/core/src/providers/openai-compatible.test.ts`,
+  address. The runner pool can use DeepSeek Flash and Muse Ember through OpenCode or their direct
+  APIs, and only includes ready routes. Tests: `packages/core/src/providers/openai-compatible.test.ts`,
   `packages/shared/src/pools.test.ts`, `packages/core/src/service/pools.test.ts`.
 - **The server has no login.** It binds to loopback and rejects other Host names and other sites'
-  Origins (`apps/server/src/app.ts`). Keep both checks until there is a login. Test:
-  `apps/server/src/app.test.ts`.
+  Origins (`apps/server/src/app.ts`); the MCP process forwards only to this local API. Keep both
+  checks until there is a login. Tests: `apps/server/src/app.test.ts`, `apps/server/src/mcp.test.ts`.
+- **The hunt MCP server speaks newline JSON-RPC.** It reports HTTP conflicts as tool errors.
+  Test: `apps/server/src/mcp.test.ts`.
 - **Defaults are tuned on simulated founders.** The surface bar (0.58) and the simulated analyst in
   `packages/core/src/jobs` were set so the simulation surfaces about a tenth of those investigated.
   They are starting points for real runs, not findings. `packages/core/src/rules.test.ts` keeps the
