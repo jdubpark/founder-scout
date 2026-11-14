@@ -72,14 +72,18 @@ export class OpenCodeCliProvider implements ModelProvider {
     if (aborted) throw aborted;
 
     const started = Date.now();
-    const workdir = await mkdtemp(join(tmpdir(), "agentswarm-opencode-"));
-    const xdg = await mkdtemp(join(tmpdir(), "agentswarm-opencode-config-"));
-    // opencode writes every call into its data folder as a session. The call gets a folder of
-    // its own that holds nothing but a link to the saved login, and the folder is deleted
-    // afterwards: a page a runner read is not left in the person's opencode history, and the
-    // call cannot read their earlier sessions. Checked by running it on 2026-11-13.
-    const data = await mkdtemp(join(tmpdir(), "agentswarm-opencode-data-"));
+    const tempDirs: string[] = [];
     try {
+      const workdir = await mkdtemp(join(tmpdir(), "agentswarm-opencode-"));
+      tempDirs.push(workdir);
+      const xdg = await mkdtemp(join(tmpdir(), "agentswarm-opencode-config-"));
+      tempDirs.push(xdg);
+      // opencode writes every call into its data folder as a session. The call gets a folder of
+      // its own that holds nothing but a link to the saved login, and the folder is deleted
+      // afterwards: a page a runner read is not left in the person's opencode history, and the
+      // call cannot read their earlier sessions. Checked by running it on 2026-11-13.
+      const data = await mkdtemp(join(tmpdir(), "agentswarm-opencode-data-"));
+      tempDirs.push(data);
       await mkdir(join(data, "opencode"));
       await symlink(loginFile(this.env), join(data, "opencode", "auth.json"));
       const config = {
@@ -118,12 +122,8 @@ export class OpenCodeCliProvider implements ModelProvider {
       });
       return interpret(req, outcome, Date.now() - started);
     } finally {
-      await Promise.all([
-        rm(workdir, { recursive: true, force: true }),
-        rm(xdg, { recursive: true, force: true }),
-        // Removes the link, never the login file it points at.
-        rm(data, { recursive: true, force: true }),
-      ]);
+      // Removing the data directory deletes our auth link, not the saved login it points to.
+      await Promise.all(tempDirs.map((dir) => rm(dir, { recursive: true, force: true })));
     }
   }
 }

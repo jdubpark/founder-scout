@@ -147,13 +147,86 @@ describe("rebalance", () => {
 });
 
 describe("the runner pool", () => {
-  it("uses ready runner providers and keeps configured pools ahead of defaults", () => {
-    const defaults = runnerPools((provider) => provider === "deepseek-api");
-    expect(defaults["hunt.look"]?.map((item) => item.route.provider)).toEqual(["deepseek-api"]);
-    expect(runnerPools(() => false)).toEqual({});
+  it.each([
+    {
+      name: "only OpenCode is ready",
+      ready: ["opencode-cli"],
+      runners: [
+        ["deepseek-flash-opencode", "opencode-cli", "deepseek/deepseek-flash", 0.5],
+        ["muse-ember-opencode", "opencode-cli", "meta/muse-ember-1.0", 0.5],
+      ],
+      scouts: [
+        ["default", "claude-cli", "claude-haiku-5-5", 0.5],
+        ["deepseek-flash-opencode", "opencode-cli", "deepseek/deepseek-flash", 0.25],
+        ["muse-ember", "opencode-cli", "meta/muse-ember-1.0", 0.25],
+      ],
+    },
+    {
+      name: "both vendor APIs and OpenCode are ready, so vendor APIs win",
+      ready: ["deepseek-api", "meta-api", "opencode-cli"],
+      runners: [
+        ["deepseek-flash", "deepseek-api", "deepseek-flash", 0.5],
+        ["muse-ember", "meta-api", "muse-ember-1.0", 0.5],
+      ],
+      scouts: [
+        ["default", "claude-cli", "claude-haiku-5-5", 0.5],
+        ["deepseek-flash", "deepseek-api", "deepseek-flash", 0.25],
+        ["muse-ember", "meta-api", "muse-ember-1.0", 0.25],
+      ],
+    },
+    {
+      name: "only one vendor is reachable, so only hunt runners get a pool",
+      ready: ["deepseek-api"],
+      runners: [["deepseek-flash", "deepseek-api", "deepseek-flash", 1]],
+      scouts: null,
+    },
+    {
+      name: "nothing is ready, so there are no default pools",
+      ready: [],
+      runners: null,
+      scouts: null,
+    },
+    {
+      name: "a configured scout pool replaces only that job's default",
+      ready: ["deepseek-api", "meta-api", "opencode-cli"],
+      runners: [
+        ["deepseek-flash", "deepseek-api", "deepseek-flash", 0.5],
+        ["muse-ember", "meta-api", "muse-ember-1.0", 0.5],
+      ],
+      scouts: [
+        ["default", "claude-cli", "claude-haiku-5-5", 0.5],
+        ["deepseek-flash", "deepseek-api", "deepseek-flash", 0.25],
+        ["muse-ember", "meta-api", "muse-ember-1.0", 0.25],
+      ],
+      override: true,
+    },
+  ])("$name", ({ ready, runners, scouts, override }) => {
+    const available = new Set<string>(ready);
+    const defaults = runnerPools((provider) => available.has(provider));
+    const shape = (pool: PoolMember[] | undefined) => pool?.map(({ id, route, share }) => [id, route.provider, route.model, share]) ?? null;
 
-    const own = [member("own", 1)];
-    const merged = withDefaultPools({ pools: { "hunt.look": own } as Pools }, runnerPools(() => true));
-    expect(merged.pools?.["hunt.look"]).toBe(own);
+    expect(shape(defaults["hunt.look"])).toEqual(runners);
+    expect(shape(defaults["hunt.sift"])).toEqual(runners);
+    for (const job of ["scout.hackernews", "scout.github", "scout.research", "scout.talent", "screen.fit"] as const) {
+      expect(shape(defaults[job])).toEqual(scouts);
+    }
+
+    if (override) {
+      const configured: PoolMember[] = [{
+        id: "custom", route: { provider: "codex-cli", model: "gpt-6-luna" }, share: 1, status: "active", note: null,
+      }];
+      const merged = withDefaultPools({ pools: { "scout.github": configured } as Pools }, defaults);
+      expect({
+        configuredJob: shape(merged.pools?.["scout.github"]),
+        otherScout: shape(merged.pools?.["scout.research"]),
+        screening: shape(merged.pools?.["screen.fit"]),
+        runner: shape(merged.pools?.["hunt.look"]),
+      }).toEqual({
+        configuredJob: [["custom", "codex-cli", "gpt-6-luna", 1]],
+        otherScout: scouts,
+        screening: scouts,
+        runner: runners,
+      });
+    }
   });
 });

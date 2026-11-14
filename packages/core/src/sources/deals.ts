@@ -240,7 +240,7 @@ export function importDealsCsv(
     if (!summary) { result.refused.push({ line: row.line, reason: "missing required field: summary." }); continue; }
     const date = parseSeenDate(seen);
     if (!date) {
-      result.refused.push({ line: row.line, reason: `unreadable seen date "${seen}" (expected YYYY-MM-DD or YYYY-MM).` });
+      result.refused.push({ line: row.line, reason: "invalid seen column; expected date in YYYY-MM-DD or YYYY-MM form." });
       continue;
     }
     if (date.day > importedDay) {

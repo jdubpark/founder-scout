@@ -19,10 +19,12 @@ describe("past deal imports", () => {
       'Example Future Co,2030-01,"A future summary.",no,,,,,',
       'Example Unknown Co,2019-04,"A summary with no outcome.",,,,,,',
       'Example Unclear Co,2019-05,"A summary with an unclear outcome.",maybe,,,,,',
+      'NameLeakSentinel,NameLeakSentinel,"A dated summary.",yes,,,,,',
       'Example Multiline Works,2019-02,"We built an offline demo, with two signed pilots.\nThe note called it ""never left the lab"", and the team shipped again.",yes,,,Pre-seed,Seed,"Casey Madeup",passed',
     ].join("\n");
 
     const result = importDealsCsv(csv, { now: NOW, bar: "our own bar", redact: redactSensitive });
+    expect(result.refused.map(({ reason }) => reason).join("\n")).not.toContain("NameLeakSentinel");
 
     const table = [
       { line: 2, company: "Example Robotics Co", expected: { status: "imported", outcome: 1 } },
@@ -30,11 +32,12 @@ describe("past deal imports", () => {
       { line: 4, company: "Example Zero Co", expected: { status: "imported", outcome: 0 } },
       { line: 5, company: "Example No Co", expected: { status: "imported", outcome: 0 } },
       { line: 6, company: "Example Empty Notes", expected: { status: "refused", reason: "missing required field: summary." } },
-      { line: 7, company: "Example Bad Date", expected: { status: "refused", reason: 'unreadable seen date "2020-13" (expected YYYY-MM-DD or YYYY-MM).' } },
+      { line: 7, company: "Example Bad Date", expected: { status: "refused", reason: "invalid seen column; expected date in YYYY-MM-DD or YYYY-MM form." } },
       { line: 8, company: "Example Future Co", expected: { status: "refused", reason: "seen date is in the future." } },
       { line: 9, company: "Example Unknown Co", expected: { status: "left out for no outcome" } },
       { line: 10, company: "Example Unclear Co", expected: { status: "left out for no outcome" } },
-      { line: 11, company: "Example Multiline Works", expected: { status: "imported", outcome: 1 } },
+      { line: 11, company: "NameLeakSentinel", expected: { status: "refused", reason: "invalid seen column; expected date in YYYY-MM-DD or YYYY-MM form." } },
+      { line: 12, company: "Example Multiline Works", expected: { status: "imported", outcome: 1 } },
     ];
     const actual = table.map(({ line, company }) => {
       const pastCase = result.cases.find((item) => item.subject.company === company);
@@ -48,8 +51,9 @@ describe("past deal imports", () => {
     expect(result.leftOutNoOutcome).toBe(2);
     expect(result.refused).toEqual([
       { line: 6, reason: "missing required field: summary." },
-      { line: 7, reason: 'unreadable seen date "2020-13" (expected YYYY-MM-DD or YYYY-MM).' },
+      { line: 7, reason: "invalid seen column; expected date in YYYY-MM-DD or YYYY-MM form." },
       { line: 8, reason: "seen date is in the future." },
+      { line: 11, reason: "invalid seen column; expected date in YYYY-MM-DD or YYYY-MM form." },
     ]);
     expect(JSON.stringify(result.refused)).not.toMatch(/Example/);
 
