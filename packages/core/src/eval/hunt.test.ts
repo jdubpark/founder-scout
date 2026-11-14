@@ -84,4 +84,33 @@ describe("hunt-yield evaluation boundary", () => {
     expect(result.variants[1]?.status).toBe(status);
     expect(result.goal.hold).not.toContain("calls");
   });
+
+  it("measures a live baseline only with a budget that covers it, and never climbs on real models", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "agentswarm-hunt-yield-"));
+    roots.push(root);
+    const jobs = createJobRegistry();
+    const asked: Array<Pick<HuntTrialInput, "brain" | "budgetUsd">> = [];
+    const service = createEvalService({
+      store: null,
+      jobs,
+      executeJob: createExecuteJob({ jobs, providers: createProviderRegistry({}) }),
+      flowsDir: root,
+      huntTrial: async ({ brain, budgetUsd }) => {
+        asked.push({ brain, budgetUsd });
+        return { found: [], kept: [], runnerCalls: 10, pages: 1, searches: 0, plantedRead: 1, plantedFailed: 0, costUsd: 0.5, unpricedCalls: 0, models: {} };
+      },
+    });
+
+    // Two dollars over sixteen worlds would cut every hunt short, so nothing is run or spent.
+    await expect(service.runRounds("hunt-yield", { rounds: 0, brain: "live", budgetUsd: 2 })).rejects.toMatchObject({ status: 409 });
+    expect(asked).toEqual([]);
+
+    const live = await service.runRounds("hunt-yield", { rounds: 0, brain: "live", budgetUsd: 16 });
+    expect(live.callsModels).toBe(true);
+    expect(asked).toHaveLength(16);
+    expect(asked.every((trial) => trial.brain === "live" && trial.budgetUsd === 1)).toBe(true);
+
+    await expect(service.runRounds("hunt-yield", { rounds: 1, brain: "live", budgetUsd: 16 })).rejects.toMatchObject({ status: 409 });
+  });
 });
+
