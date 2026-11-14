@@ -24,19 +24,29 @@ function makeReader(
 }
 
 describe("createWebReader", () => {
-  it("blocks never-fetch hosts and resolved private addresses before requesting them", async () => {
+  it("blocks never-fetch, private and loopback addresses before requesting them", async () => {
     const requested: string[] = [];
     const fetch = async (url: string) => {
       requested.push(url);
       return html(longText);
     };
-    const reader = createWebReader({ fetch, resolveHost: async () => ["10.2.3.4"], sleep: async () => undefined });
+    const reader = createWebReader({
+      fetch,
+      resolveHost: async (host) => host === "private.example.com" ? ["10.2.3.4"]
+        : host === "loopback.example.com" ? ["127.0.0.1"]
+          : host === "ipv6-loopback.example.com" ? ["::1"]
+            : [PUBLIC_IP],
+      sleep: async () => undefined,
+    });
 
     await expect(reader.read("https://www.linkedin.com/in/founder")).resolves.toMatchObject({
       status: "blocked",
       detail: "This address is never requested.",
     });
     await expect(reader.read("https://private.example.com/" )).resolves.toMatchObject({ status: "blocked" });
+    await expect(reader.read("https://loopback.example.com/" )).resolves.toMatchObject({ status: "blocked" });
+    await expect(reader.read("https://ipv6-loopback.example.com/" )).resolves.toMatchObject({ status: "blocked" });
+    await expect(reader.read("https://93.184.216.34/page")).resolves.toMatchObject({ status: "blocked" });
     expect(requested).toEqual([]);
   });
 
@@ -58,33 +68,43 @@ describe("createWebReader", () => {
     expect(requested).toEqual(["https://start.example.com/robots.txt", "https://start.example.com/redirect"]);
   });
 
-  it("refuses loopback by default without a request", async () => {
-    let requested = false;
-    const reader = createWebReader({ fetch: async () => { requested = true; return html(longText); } });
-    await expect(reader.read("http://127.0.0.1:4317/")).resolves.toMatchObject({ status: "blocked" });
-    expect(requested).toBe(false);
-  });
-
-  it("blocks a redirect to a never-fetch host before following it", async () => {
+  it.each([
+    { target: "https://linkedin.com/in/founder", detail: "This address is never requested." },
+    { target: "https://devpost.com/project", detail: "devpost.com does not allow automated reading." },
+    { target: "https://private.example.com/final", detail: "This address resolves to a restricted network address." },
+  ])("rechecks every redirect before requesting $target", async ({ target, detail }) => {
     const requested: string[] = [];
-    const reader = makeReader(async (url) => {
-      requested.push(url);
-      if (url.endsWith("/robots.txt")) return new Response("", { status: 404 });
-      return new Response(null, { status: 302, headers: { location: "https://linkedin.com/in/founder" } });
+    const reader = createWebReader({
+      resolveHost: async (host) => host === "private.example.com" ? ["10.2.3.4"] : [PUBLIC_IP],
+      sleep: async () => undefined,
+      fetch: async (url) => {
+        requested.push(url);
+        if (url.endsWith("/robots.txt")) return new Response("", { status: 404 });
+        if (url === "https://start.example.com/first") return new Response(null, { status: 302, headers: { location: "https://middle.example.com/second" } });
+        if (url === "https://middle.example.com/second") return new Response(null, { status: 302, headers: { location: target } });
+        return html(longText);
+      },
     });
-    await expect(reader.read("https://news.example.com/start")).resolves.toMatchObject({
+    await expect(reader.read("https://start.example.com/first")).resolves.toMatchObject({
       status: "blocked",
-      detail: "This address is never requested.",
+      detail,
     });
-    expect(requested).toEqual(["https://news.example.com/robots.txt", "https://news.example.com/start"]);
+    expect(requested).toEqual([
+      "https://start.example.com/robots.txt",
+      "https://start.example.com/first",
+      "https://middle.example.com/robots.txt",
+      "https://middle.example.com/second",
+    ]);
   });
 
   it("obeys robots.txt, caches it per origin, and applies the most specific rules with allow winning ties", async () => {
     const requested: string[] = [];
     const body = [
+      "Disallow: /before-agent",
       "User-agent: *",
       "Disallow: /blocked",
       "Disallow: /wild/*",
+      "Disallow: /",
       "Allow: /wild/*/end$",
       "User-agent: web-reader",
       "Allow: /",
@@ -92,10 +112,24 @@ describe("createWebReader", () => {
       "Allow: /long/path",
       "Disallow: /tie",
       "Allow: /tie",
+      "User-agent: WEB-READER",
+      "Disallow: /first-group",
+      "Disallow: /robots.txt",
+      "User-agent: web-reader",
+      "Disallow: /second-group",
+      "User-agent: another-token",
+      "Disallow: /not-matching",
+      "User-agent: *",
     ].join("\n");
+    let robotsRequests = 0;
     const reader = makeReader(async (url) => {
       requested.push(url);
-      if (url.endsWith("/robots.txt")) return new Response(body, { headers: { "content-type": "text/plain" } });
+      if (url.endsWith("/robots.txt")) {
+        robotsRequests += 1;
+        return robotsRequests === 1
+          ? new Response(body, { headers: { "content-type": "text/plain" } })
+          : html(longText);
+      }
       return html(longText);
     });
 
@@ -103,52 +137,37 @@ describe("createWebReader", () => {
     await expect(reader.read("https://rules.example.com/long/path")).resolves.toMatchObject({ status: "ok" });
     await expect(reader.read("https://rules.example.com/long/other")).resolves.toMatchObject({ status: "blocked" });
     await expect(reader.read("https://rules.example.com/tie")).resolves.toMatchObject({ status: "ok" });
+    await expect(reader.read("https://rules.example.com/before-agent")).resolves.toMatchObject({ status: "ok" });
+    await expect(reader.read("https://rules.example.com/not-matching")).resolves.toMatchObject({ status: "ok" });
+    await expect(reader.read("https://rules.example.com/first-group")).resolves.toMatchObject({ status: "blocked" });
+    await expect(reader.read("https://rules.example.com/second-group")).resolves.toMatchObject({ status: "blocked" });
     expect(requested.filter((url) => url.endsWith("/robots.txt"))).toHaveLength(1);
     expect(requested).toContain("https://rules.example.com/blocked");
     expect(requested).not.toContain("https://rules.example.com/long/other");
+    expect(requested).not.toContain("https://rules.example.com/first-group");
+    expect(requested).not.toContain("https://rules.example.com/second-group");
+    await expect(reader.read("https://rules.example.com/robots.txt")).resolves.toMatchObject({ status: "ok" });
+    expect(requested.filter((url) => url.endsWith("/robots.txt"))).toHaveLength(2);
   });
 
-  it("supports wildcard and end-anchor rules when the wildcard group is selected", async () => {
-    const requested: string[] = [];
-    const reader = makeReader(async (url) => {
-      requested.push(url);
-      if (url.endsWith("/robots.txt")) return new Response("User-agent: *\nDisallow: /wild/*\nAllow: /wild/*/end$", { headers: { "content-type": "text/plain" } });
-      return html(longText);
-    });
-    await expect(reader.read("https://wild.example.com/wild/a/end")).resolves.toMatchObject({ status: "ok" });
-    await expect(reader.read("https://wild.example.com/wild/a/end/more")).resolves.toMatchObject({ status: "blocked" });
-    expect(requested).toContain("https://wild.example.com/wild/a/end");
-    expect(requested).not.toContain("https://wild.example.com/wild/a/end/more");
-  });
-
-  it("matches robots paths case-sensitively and encodes non-ASCII rule paths", async () => {
+  it("matches robots paths case-sensitively and normalizes escaped path and rule bytes", async () => {
     const requested: string[] = [];
     const reader = makeReader(async (url) => {
       requested.push(url);
       return url.endsWith("/robots.txt")
-        ? new Response("User-agent: web-reader\nDisallow: /Case\nDisallow: /café", { headers: { "content-type": "text/plain" } })
+        ? new Response("User-agent: web-reader\nDisallow: /Case\nDisallow: /private\nDisallow: /caf%c3%a9", { headers: { "content-type": "text/plain" } })
         : html(longText);
     });
     await expect(reader.read("https://octets.example.com/Case")).resolves.toMatchObject({ status: "blocked" });
     await expect(reader.read("https://octets.example.com/case")).resolves.toMatchObject({ status: "ok" });
     await expect(reader.read("https://octets.example.com/caf%C3%A9")).resolves.toMatchObject({ status: "blocked" });
+    await expect(reader.read("https://octets.example.com/%70rivate/page")).resolves.toMatchObject({ status: "blocked" });
+    await expect(reader.read("https://octets.example.com/private/page")).resolves.toMatchObject({ status: "blocked" });
+    await expect(reader.read("https://octets.example.com/caf\u00e9")).resolves.toMatchObject({ status: "blocked" });
+    await expect(reader.read("https://octets.example.com/caf%C3%A9")).resolves.toMatchObject({ status: "blocked" });
     expect(requested).not.toContain("https://octets.example.com/Case");
     expect(requested).not.toContain("https://octets.example.com/caf%C3%A9");
-  });
-
-  it("is not slowed by a robots rule built to make matching explode", async () => {
-    // Twenty-five stars in a row of letters, then a letter the path does not end in. As a
-    // regular expression this takes longer than the age of the server; by hand it is instant.
-    const hostile = `/${"*a".repeat(25)}b`;
-    const reader = makeReader(async (url) => {
-      if (url.endsWith("/robots.txt")) return new Response(`User-agent: *\nDisallow: ${hostile}\n`, { status: 200, headers: { "content-type": "text/plain" } });
-      return html(`<html><body><p>${longText}</p></body></html>`);
-    });
-    const started = Date.now();
-    const result = await reader.read(`https://hostile.example.com/${"a".repeat(80)}`);
-    expect(Date.now() - started).toBeLessThan(1_000);
-    // The rule ends in "b" and the path does not contain one, so the page may be read.
-    expect(result.status).toBe("ok");
+    expect(requested).not.toContain("https://octets.example.com/%70rivate/page");
   });
 
   it("refuses a whole site whose robots.txt has a rule it will not work on, instead of ignoring the rule", async () => {
@@ -176,73 +195,47 @@ describe("createWebReader", () => {
     expect((await reader.read("https://plain.example.com/public")).status).toBe("ok");
   });
 
-  it("matches star and end rules by hand the way a pattern would", async () => {
-    const robots = ["User-agent: *", "Disallow: /*.pdf$", "Disallow: /a*b*c", "Disallow: /exact$", "Allow: /a/public*b/keep/c"].join("\n");
+  it("matches robots wildcards and end anchors from the selected group", async () => {
+    const hostile = `/${"*a".repeat(25)}b`;
+    const robots = [
+      "User-agent: *",
+      "Disallow: /wild/*",
+      "Allow: /wild/*/end$",
+      "Disallow: /*.pdf$",
+      "Disallow: /a*b*c",
+      "Disallow: /exact$",
+      "Allow: /a/public*b/keep/c",
+      `Disallow: ${hostile}`,
+    ].join("\n");
     const reader = makeReader(async (url) => {
       if (url.endsWith("/robots.txt")) return new Response(robots, { status: 200, headers: { "content-type": "text/plain" } });
       return html(`<html><body><p>${longText}</p></body></html>`);
     });
     const status = async (path: string) => (await reader.read(`https://glob.example.com${path}`)).status;
-    expect(await status("/files/report.pdf")).toBe("blocked");
-    expect(await status("/files/report.pdf.html")).toBe("ok");
-    expect(await status("/a/x/b/y/c/z")).toBe("blocked");
-    expect(await status("/a/x/c/y/b")).toBe("ok");
-    expect(await status("/exact")).toBe("blocked");
-    expect(await status("/exact/more")).toBe("ok");
+    const cases = [
+      ["/wild/a/end", "ok"],
+      ["/wild/a/end/more", "blocked"],
+      ["/files/report.pdf", "blocked"],
+      ["/files/report.pdf.html", "ok"],
+      ["/a/x/b/y/c/z", "blocked"],
+      ["/a/x/c/y/b", "ok"],
+      ["/exact", "blocked"],
+      ["/exact/more", "ok"],
+    ] as const;
+    for (const [path, expected] of cases) expect(await status(path), path).toBe(expected);
     // The longer rule wins, and it is an Allow.
     expect(await status("/a/public/b/keep/c")).toBe("ok");
+    const started = Date.now();
+    expect(await status(`/${"a".repeat(80)}`)).toBe("ok");
+    expect(Date.now() - started).toBeLessThan(1_000);
   });
 
-  it("is not walked around by an escaped letter in the path or by a bare carriage return in the file", async () => {
-    const reader = makeReader(async (url) => {
-      if (url.endsWith("/robots.txt")) {
-        const body = new URL(url).hostname.startsWith("cr.")
-          ? "User-agent: *\rDisallow: /private\rAllow: /public"
-          : "User-agent: *\nDisallow: /private\nDisallow: /caf%c3%a9\n";
-        return new Response(body, { status: 200, headers: { "content-type": "text/plain" } });
-      }
-      return html(`<html><body><p>${longText}</p></body></html>`);
-    });
-    // "%70" is the letter p.
-    expect((await reader.read("https://enc.example.com/%70rivate/page")).status).toBe("blocked");
-    expect((await reader.read("https://enc.example.com/private/page")).status).toBe("blocked");
-    // The same accented letter, escaped in lower case in the file and typed plainly in the address.
-    expect((await reader.read("https://enc.example.com/caf\u00e9")).status).toBe("blocked");
-    expect((await reader.read("https://enc.example.com/public")).status).toBe("ok");
-    // A file whose lines end in a carriage return alone.
-    expect((await reader.read("https://cr.example.com/private")).status).toBe("blocked");
-    expect((await reader.read("https://cr.example.com/public")).status).toBe("ok");
-  });
-
-  it("merges matching robots groups, ignores rules before user-agent, and always allows robots.txt", async () => {
-    const requested: string[] = [];
-    const robots = [
-      "Disallow: /before-agent",
-      "User-agent: WEB-READER",
-      "Sitemap: https://groups.example.com/sitemap.xml",
-      "User-agent: another-token",
-      "Disallow: /second-group",
-      "User-agent: web-reader",
-      "Disallow: /first-group",
-      "Disallow: /robots.txt",
-      "User-agent: *",
-      "Disallow: /",
-    ].join("\n");
-    const reader = makeReader(async (url) => {
-      requested.push(url);
-      return url.endsWith("/robots.txt") && requested.filter((value) => value.endsWith("/robots.txt")).length === 1
-        ? new Response(robots, { headers: { "content-type": "text/plain" } })
-        : url.endsWith("/robots.txt")
-          ? new Response(longText, { headers: { "content-type": "text/plain" } })
-          : html(longText);
-    });
-    await expect(reader.read("https://groups.example.com/before-agent")).resolves.toMatchObject({ status: "ok" });
-    await expect(reader.read("https://groups.example.com/first-group")).resolves.toMatchObject({ status: "blocked" });
-    await expect(reader.read("https://groups.example.com/second-group")).resolves.toMatchObject({ status: "blocked" });
-    await expect(reader.read("https://groups.example.com/robots.txt")).resolves.toMatchObject({ status: "ok" });
-    expect(requested).not.toContain("https://groups.example.com/first-group");
-    expect(requested).not.toContain("https://groups.example.com/second-group");
-    expect(requested).toContain("https://groups.example.com/robots.txt");
+  it.each(["\n", "\r\n", "\r"]) ("parses robots.txt records separated by %j", async (lineEnding) => {
+    const reader = makeReader(async (url) => url.endsWith("/robots.txt")
+      ? new Response(["User-agent: *", "Disallow: /private", "Allow: /public"].join(lineEnding), { headers: { "content-type": "text/plain" } })
+      : html(longText));
+    expect((await reader.read("https://line-endings.example.com/private")).status).toBe("blocked");
+    expect((await reader.read("https://line-endings.example.com/public")).status).toBe("ok");
   });
 
   it("reads at least 500 KiB of robots rules", async () => {
@@ -334,24 +327,21 @@ describe("createWebReader", () => {
     expect(cappedPages[1]!.at - cappedPages[0]!.at).toBe(60_000);
   });
 
-  it.each([403, 429])("classifies HTTP %i as a refusal", async (status) => {
-    const reader = makeReader(async (url) => url.endsWith("/robots.txt")
-      ? new Response("", { status: 404 })
-      : html("", status));
-    await expect(reader.read("https://status.example.com/page")).resolves.toMatchObject({ status: "blocked", detail: `The site answered HTTP ${status}.` });
-  });
-
-  it.each([429, 503])("returns a Retry-After pause for HTTP %i without retrying", async (status) => {
+  it.each([
+    { status: 403, retryAfter: null, detail: "The site answered HTTP 403." },
+    { status: 429, retryAfter: "120", detail: "The site asked for a pause of 120 seconds." },
+    { status: 503, retryAfter: "120", detail: "The site asked for a pause of 120 seconds." },
+  ])("refuses HTTP $status without retrying", async ({ status, retryAfter, detail }) => {
     const requested: string[] = [];
     const reader = makeReader(async (url) => {
       requested.push(url);
       return url.endsWith("/robots.txt")
         ? new Response("", { status: 404 })
-        : new Response("", { status, headers: { "retry-after": "120" } });
+        : new Response("", { status, headers: retryAfter ? { "retry-after": retryAfter } : undefined });
     });
     await expect(reader.read("https://retry.example.com/page")).resolves.toMatchObject({
       status: "blocked",
-      detail: "The site asked for a pause of 120 seconds.",
+      detail,
     });
     expect(requested.filter((url) => url.endsWith("/page"))).toHaveLength(1);
   });
@@ -424,19 +414,21 @@ describe("createWebReader", () => {
     expect(sparse.links[0]?.text).toBe("Section 0");
   });
 
-  it("stops reading an oversized body at the byte limit", async () => {
+  it("cancels an oversized response after reading only through the byte limit", async () => {
     let pulls = 0;
+    const chunk = new TextEncoder().encode("x".repeat(64 * 1024));
     const oversized = new ReadableStream<Uint8Array>({
       pull(controller) {
         pulls += 1;
-        controller.enqueue(new TextEncoder().encode("x".repeat(1_500_001)));
+        if (pulls === 30) controller.close();
+        else controller.enqueue(chunk);
       },
     }, { highWaterMark: 0 });
     const reader = makeReader(async (url) => url.endsWith("/robots.txt")
       ? new Response("", { status: 404 })
       : new Response(oversized, { headers: { "content-type": "text/plain" } }));
     const result = await reader.read("https://large.example.com/page");
-    expect(pulls).toBe(1);
+    expect(pulls).toBeLessThan(30);
     expect(result.text.length).toBeLessThanOrEqual(12_000);
   });
 

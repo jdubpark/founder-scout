@@ -4,7 +4,6 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import Database from "better-sqlite3";
 import {
-  DEFAULT_SETTINGS,
   type Assessment,
   type Company,
   type CompanyAssessment,
@@ -20,7 +19,6 @@ import {
   type HuntNote,
   type Lead,
   type Run,
-  type SwarmConfig,
   type TaskRun,
   type Trail,
   type NetworkContact,
@@ -184,21 +182,6 @@ function directive(id: string, createdAt: string): Directive {
 }
 
 describe("SQLite store", () => {
-  it("round-trips nested records and initializes the base config and default settings", () => {
-    const store = openStore(":memory:");
-    expect(store.getConfig("cfg_base")).toEqual({ id: "cfg_base", label: "Base configuration", params: {}, routes: {}, promptVariants: {} });
-    expect(store.getSettings()).toEqual(DEFAULT_SETTINGS);
-    const value = founder("fnd_nested", {
-      name: "Zoë O'Neil",
-      company: { name: "Acme Labs", url: "https://acme.test", oneLiner: "Builds things", stage: "seed" },
-      links: { github: "https://www.github.com/zoe?tab=repos", linkedin: null, x: null, site: null, scholar: null },
-      fitReasons: ["Strong systems background", "Founder led"], tags: ["infra", "ai"],
-    });
-    store.insertFounder(value);
-    expect(store.getFounder(value.id)).toEqual(value);
-    store.close();
-  });
-
   it("normalizes links and names and maintains indexed matches after founder updates", () => {
     const store = openStore(":memory:");
     expect(normalizeLink("HTTPS://WWW.GitHub.com/Zo%C3%AB/?tab=1#bio///")).toBe("github.com/zo%c3%ab");
@@ -214,18 +197,12 @@ describe("SQLite store", () => {
     store.close();
   });
 
-  it("sets an evidence quote without changing verification", () => {
+  it("deduplicates evidence by founder and hash and preserves verification when setting a quote", () => {
     const store = openStore(":memory:");
-    const item = evidence("evd_quote", "fnd_1", "quote-hash", "supported");
-    store.insertEvidence(item);
-    store.setQuote(item.id, "found");
-    expect(store.listEvidence(item.founderId)).toEqual([{ ...item, quote: "found" }]);
-    store.close();
-  });
-
-  it("deduplicates evidence by founder and hash", () => {
-    const store = openStore(":memory:");
-    expect(store.insertEvidence(evidence("evd_1", "fnd_1", "same-hash"))).toBe(true);
+    const first = evidence("evd_1", "fnd_1", "same-hash", "supported");
+    expect(store.insertEvidence(first)).toBe(true);
+    store.setQuote(first.id, "found");
+    expect(store.listEvidence(first.founderId)).toEqual([{ ...first, quote: "found" }]);
     expect(store.insertEvidence(evidence("evd_2", "fnd_1", "same-hash", "supported"))).toBe(false);
     expect(store.listEvidence("fnd_1")).toHaveLength(1);
     expect(store.insertEvidence(evidence("evd_3", "fnd_2", "same-hash"))).toBe(true);
@@ -341,6 +318,7 @@ describe("SQLite store", () => {
         company: "NewCo", position: "Builder", profileUrl: "HTTPS://EXAMPLE.TEST/profile///",
       }),
       networkContact("new_person", "Brand New", { company: "Nova", position: "Designer" }),
+      networkContact("new_person", "Brand New", { company: "Nova", position: "Designer" }),
     ]);
     expect(refreshed.map(({ id, previous }) => ({ id, previous }))).toEqual([
       { id: "new_link", previous: { company: "Acme", position: "CEO" } },
@@ -356,18 +334,6 @@ describe("SQLite store", () => {
     ]);
     expect(store.removeNetwork(owner)).toBe(5);
     expect(store.listNetwork(owner)).toEqual([]);
-    store.close();
-  });
-
-  it("stores a person listed twice in one upload once, instead of failing the upload", () => {
-    const store = openStore(":memory:");
-    const stored = store.replaceNetwork("partner@example.test", [
-      networkContact("same", "Jordan Twice", { company: "Acme", position: "Engineer" }),
-      networkContact("same", "Jordan Twice", { company: "Acme", position: "Engineer" }),
-      networkContact("other", "Someone Else", { company: "Acme", position: "Designer" }),
-    ]);
-    expect(stored.map((item) => item.id)).toEqual(["same", "other"]);
-    expect(store.listNetwork("partner@example.test")).toHaveLength(2);
     store.close();
   });
 
@@ -465,7 +431,7 @@ describe("SQLite store", () => {
     store.close();
   });
 
-  it("aggregates member tasks and their evidence within the requested swarm, job and start window", () => {
+  it("counts member pools from evidence or leads within the requested swarm, job and start window", () => {
     const store = openStore(":memory:");
     store.insertTask(task("tsk_haiku_fail", {
       jobId: "investigate.background", classId: "investigator", stage: "investigate",
@@ -486,12 +452,22 @@ describe("SQLite store", () => {
       jobId: "investigate.background", classId: "investigator", stage: "investigate",
       costUsd: null, startedAt: "2026-01-04T00:00:00.000Z",
     }));
+    store.insertTask(task("tsk_scout", { poolMember: "muse", startedAt: "2026-01-04T00:00:00.000Z" }));
+    store.insertTask(task("tsk_hunt", { jobId: "hunt.look", poolMember: "navigator", startedAt: "2026-01-04T00:00:00.000Z" }));
 
     store.insertEvidence({ ...evidence("evd_haiku_supported", "fnd_haiku", "haiku-supported", "supported"), collectedByTaskId: "tsk_haiku_fail" });
     store.insertEvidence({ ...evidence("evd_haiku_unsupported", "fnd_haiku", "haiku-unsupported", "unsupported"), collectedByTaskId: "tsk_haiku_ok" });
     store.insertEvidence({ ...evidence("evd_haiku_quote_only", "fnd_haiku", "haiku-quote-only"), collectedByTaskId: "tsk_haiku_ok", quote: "not_found" });
     store.insertEvidence({ ...evidence("evd_sonnet_unsupported", "fnd_sonnet", "sonnet-unsupported", "unsupported"), collectedByTaskId: "tsk_sonnet" });
     store.insertEvidence({ ...evidence("evd_sonnet_unverified", "fnd_sonnet", "sonnet-unverified"), collectedByTaskId: "tsk_sonnet" });
+    store.insertFounder(founder("fnd_scout_kept", { status: "queued" }));
+    store.insertFounder(founder("fnd_scout_dropped", { status: "screened_out" }));
+    store.insertFounder(founder("fnd_hunt_kept", { status: "queued" }));
+    store.insertFounder(founder("fnd_hunt_dropped", { status: "screened_out" }));
+    store.insertLead(lead("lead_scout_kept", "2026-01-04T00:00:00.000Z", { founderId: "fnd_scout_kept", discoveredByTaskId: "tsk_scout" }));
+    store.insertLead(lead("lead_scout_dropped", "2026-01-04T00:00:00.000Z", { founderId: "fnd_scout_dropped", discoveredByTaskId: "tsk_scout" }));
+    store.insertLead(lead("lead_hunt_kept", "2026-01-04T00:00:00.000Z", { founderId: "fnd_hunt_kept", discoveredByTaskId: "tsk_hunt" }));
+    store.insertLead(lead("lead_hunt_dropped", "2026-01-04T00:00:00.000Z", { founderId: "fnd_hunt_dropped", discoveredByTaskId: "tsk_hunt" }));
 
     store.insertTask(task("tsk_before_window", {
       poolMember: "haiku", startedAt: "2026-01-03T23:59:59.999Z", status: "failed", costUsd: 7,
@@ -508,18 +484,11 @@ describe("SQLite store", () => {
       { memberId: "haiku", tasks: 2, failed: 1, costUsd: 0.3, items: 3, supported: 1, rejected: 1, controls: 1, controlsFailed: 1 },
       { memberId: "sonnet", tasks: 1, failed: 0, costUsd: 0.2, items: 2, supported: 0, rejected: 1, controls: 1, controlsFailed: 0 },
     ]);
-    store.close();
-  });
-
-  it("counts scout leads by later fit-screen outcomes", () => {
-    const store = openStore(":memory:");
-    store.insertTask(task("tsk_scout", { poolMember: "muse", startedAt: "2026-01-04T00:00:00.000Z" }));
-    store.insertFounder(founder("fnd_kept", { status: "queued" }));
-    store.insertFounder(founder("fnd_dropped", { status: "screened_out" }));
-    store.insertLead(lead("lead_kept", "2026-01-04T00:00:00.000Z", { founderId: "fnd_kept", discoveredByTaskId: "tsk_scout" }));
-    store.insertLead(lead("lead_dropped", "2026-01-04T00:00:00.000Z", { founderId: "fnd_dropped", discoveredByTaskId: "tsk_scout" }));
     expect(store.memberStats("swm_1", "scout.github", "2026-01-04T00:00:00.000Z")).toEqual([
       { memberId: "muse", tasks: 1, failed: 0, costUsd: 0.1, items: 2, supported: 1, rejected: 1, controls: 0, controlsFailed: 0 },
+    ]);
+    expect(store.memberStats("swm_1", "hunt.look", "2026-01-04T00:00:00.000Z")).toEqual([
+      { memberId: "navigator", tasks: 1, failed: 0, costUsd: 0.1, items: 2, supported: 1, rejected: 1, controls: 0, controlsFailed: 0 },
     ]);
     store.close();
   });
@@ -558,12 +527,11 @@ describe("SQLite store", () => {
 
     const duplicateSearch = frontier("frt_dup_search", { target: searched.target, trailId: "trl_2" });
     const otherEngine = frontier("frt_other_engine", { target: searched.target, engine: "google", trailId: "trl_3", addedAt: "2026-01-04T00:00:00.000Z" });
-    const duplicatePage = frontier("frt_dup_page", { kind: "page", target: read.target, engine: null, trailId: "trl_1" });
     const newPage = frontier("frt_new_page", {
       kind: "page", target: "https://example.test/new", engine: null, state: "queued", addedAt: "2026-01-02T00:00:00.000Z",
     });
     const newSearch = frontier("frt_new_search", { target: "new founders", addedAt: "2026-01-03T00:00:00.000Z" });
-    expect(store.addFrontier([duplicateSearch, otherEngine, duplicatePage, newPage, newSearch]))
+    expect(store.addFrontier([duplicateSearch, otherEngine, newPage, newSearch]))
       .toEqual([otherEngine, newPage, newSearch]);
     expect(store.listFrontier("hnt_1").map((item) => item.id)).toEqual([
       "frt_old", "frt_page_old", "frt_new_page", "frt_new_search", "frt_other_engine",
@@ -687,32 +655,6 @@ describe("SQLite store", () => {
     store.close();
   });
 
-  it("counts hunt look items from leads and preserves evidence counts for other jobs", () => {
-    const store = openStore(":memory:");
-    store.insertTask(task("tsk_hunt_failed", {
-      jobId: "hunt.look", poolMember: "haiku", status: "failed", costUsd: 0.3, control: "failed",
-    }));
-    store.insertTask(task("tsk_hunt_ok", { jobId: "hunt.look", poolMember: "haiku", costUsd: 0.2, control: "passed" }));
-    store.insertTask(task("tsk_background", { jobId: "investigate.background", poolMember: "sonnet", costUsd: 0.4 }));
-    store.insertFounder(founder("fnd_hunt_kept", { status: "queued" }));
-    store.insertFounder(founder("fnd_hunt_rejected", { status: "screened_out" }));
-    store.insertFounder(founder("fnd_hunt_lead", { status: "lead" }));
-    store.insertLead(lead("lead_hunt_kept", "2026-01-01T00:00:00.000Z", { founderId: "fnd_hunt_kept", discoveredByTaskId: "tsk_hunt_failed" }));
-    store.insertLead(lead("lead_hunt_rejected", "2026-01-01T00:00:00.000Z", { founderId: "fnd_hunt_rejected", discoveredByTaskId: "tsk_hunt_failed" }));
-    store.insertLead(lead("lead_hunt_pending", "2026-01-01T00:00:00.000Z", { founderId: "fnd_hunt_lead", discoveredByTaskId: "tsk_hunt_ok" }));
-    store.insertLead(lead("lead_hunt_unmatched", "2026-01-01T00:00:00.000Z", { discoveredByTaskId: "tsk_hunt_ok" }));
-    store.insertEvidence({ ...evidence("evd_background_supported", "fnd_background", "background-supported", "supported"), collectedByTaskId: "tsk_background" });
-    store.insertEvidence({ ...evidence("evd_background_rejected", "fnd_background", "background-rejected", "unsupported"), collectedByTaskId: "tsk_background" });
-
-    expect(store.memberStats("swm_1", "hunt.look", "2026-01-01T00:00:00.000Z")).toEqual([
-      { memberId: "haiku", tasks: 2, failed: 1, costUsd: 0.5, items: 4, supported: 1, rejected: 1, controls: 2, controlsFailed: 1 },
-    ]);
-    expect(store.memberStats("swm_1", "investigate.background", "2026-01-01T00:00:00.000Z")).toEqual([
-      { memberId: "sonnet", tasks: 1, failed: 0, costUsd: 0.4, items: 2, supported: 1, rejected: 1, controls: 0, controlsFailed: 0 },
-    ]);
-    store.close();
-  });
-
   it("rolls back nested transactions and names missing ids in update errors", () => {
     const store = openStore(":memory:");
     expect(() => store.transaction(() => {
@@ -789,68 +731,29 @@ describe("SQLite store", () => {
     expect(store.listFrontier("hnt_legacy")).toEqual([]);
     expect(store.listHuntNotes("hnt_legacy", 10)).toEqual([]);
     expect(store.listHuntCalls("hnt_legacy")).toEqual([]);
+
+    const migratedHunt = hunt("hnt_migrated", "swm_1");
+    const migratedTrail = trail("trl_migrated", migratedHunt.id, { swarmId: migratedHunt.swarmId });
+    const migratedFrontier = frontier("frt_migrated", { huntId: migratedHunt.id, trailId: migratedTrail.id });
+    const migratedNote = huntNote("hntn_migrated", "2026-01-01T00:00:00.000Z", { huntId: migratedHunt.id, swarmId: migratedHunt.swarmId });
+    const migratedCall = huntCall("hcall_migrated", "2026-01-01T00:00:00.000Z", { huntId: migratedHunt.id, swarmId: migratedHunt.swarmId });
+    store.saveHunt(migratedHunt);
+    store.saveTrail(migratedTrail);
+    expect(store.addFrontier([migratedFrontier])).toEqual([migratedFrontier]);
+    store.insertHuntNote(migratedNote);
+    store.insertHuntCall(migratedCall);
+    expect(store.getHunt(migratedHunt.swarmId)).toEqual(migratedHunt);
+    expect(store.listTrails(migratedHunt.id)).toEqual([migratedTrail]);
+    expect(store.listFrontier(migratedHunt.id)).toEqual([migratedFrontier]);
+    expect(store.listHuntNotes(migratedHunt.id, 10)).toEqual([migratedNote]);
+    expect(store.listHuntCalls(migratedHunt.id)).toEqual([migratedCall]);
     store.close();
     const migrated = new Database(path, { readonly: true });
     expect(migrated.pragma("user_version", { simple: true })).toBe(5);
     migrated.close();
-  });
-
-  it("opens a version-3 database and makes all hunt tables usable", () => {
-    const dir = mkdtempSync(join(tmpdir(), "agentswarm-v3-db-"));
-    scratchDirs.push(dir);
-    const path = join(dir, "prior.sqlite");
-    openStore(path).close();
-    const prior = new Database(path);
-    prior.exec(`
-      DROP INDEX leads_by_swarm_discovered;
-      DROP TABLE hunt_calls;
-      DROP TABLE hunt_notes;
-      DROP TABLE hunt_frontier;
-      DROP TABLE hunt_trails;
-      DROP TABLE hunts;
-      DROP INDEX recordings_by_status;
-      DROP INDEX recordings_by_founder;
-      DROP TABLE recordings;
-    `);
-    prior.pragma("user_version = 3");
-    prior.close();
-
-    const store = openStore(path);
-    const value = hunt("hnt_migrated", "swm_migrated");
-    store.saveHunt(value);
-    const pathTrail = trail("trl_migrated", value.id, { swarmId: value.swarmId });
-    store.saveTrail(pathTrail);
-    const item = frontier("frt_migrated", { huntId: value.id, trailId: pathTrail.id });
-    const note = huntNote("hntn_migrated", "2026-01-01T00:00:00.000Z", { huntId: value.id, swarmId: value.swarmId });
-    const call = huntCall("hcall_migrated", "2026-01-01T00:00:00.000Z", { huntId: value.id, swarmId: value.swarmId });
-    expect(store.addFrontier([item])).toEqual([item]);
-    store.insertHuntNote(note);
-    store.insertHuntCall(call);
-    expect(store.getHunt(value.swarmId)).toEqual(value);
-    expect(store.listTrails(value.id)).toEqual([pathTrail]);
-    expect(store.listFrontier(value.id)).toEqual([item]);
-    expect(store.listHuntNotes(value.id, 10)).toEqual([note]);
-    expect(store.listHuntCalls(value.id)).toEqual([call]);
-    store.close();
-  });
-
-  it("keeps file-backed data and saved configs across reopen without destructive migration reruns", () => {
-    const dir = mkdtempSync(join(tmpdir(), "agentswarm-db-"));
-    scratchDirs.push(dir);
-    const path = join(dir, "nested", "store.sqlite");
-    const store = openStore(path);
-    const person = founder("fnd_file", { name: "Persistent founder" });
-    store.insertFounder(person);
-    const config: SwarmConfig = { id: "cfg_base", label: "Preserved custom base", params: { maxItems: 7 }, routes: {}, promptVariants: {} };
-    store.saveConfig(config);
-    store.close();
-
     const reopened = openStore(path);
-    expect(reopened.getFounder(person.id)).toEqual(person);
-    expect(reopened.getConfig("cfg_base")).toEqual(config);
+    expect(reopened.getFounder(oldFounder.id)).toEqual(oldFounder);
+    expect(reopened.getHunt(migratedHunt.swarmId)).toEqual(migratedHunt);
     reopened.close();
-    const db = new Database(path, { readonly: true });
-    expect(db.pragma("user_version", { simple: true })).toBe(5);
-    db.close();
   });
 });

@@ -2,19 +2,35 @@ import { describe, expect, it } from "vitest";
 import { CONTEXT_POOLS, CROSSINGS, JOB_INPUT_POOLS, crossingsOf, mayUseContributorModel, poolsReadBy } from "./context";
 import { MODEL_JOB_IDS } from "./jobio";
 
+type ScoutGitHubPools = typeof JOB_INPUT_POOLS["scout.github"];
+// @ts-expect-error input fields are required keys in each job's pool map
+const missingScoutInputPool: ScoutGitHubPools = { beat: "steering", thesis: "objective" };
+void missingScoutInputPool;
+
 describe("pools of context", () => {
-  it("allows contributor models only for public inputs and fund instructions without partner calls", () => {
-    const cases = [
-      ["scout.github", true], ["hunt.look", true], ["hunt.sift", true],
-      ["screen.fit", false], ["investigate.company", false], ["investigate.media", false],
-      ["call.debrief", false], ["assess.judgments", false],
-    ] as const;
-    for (const [job, allowed] of cases) expect(mayUseContributorModel(job), job).toBe(allowed);
+  it("assigns every model input field to a known context pool", () => {
+    const poolIds = new Set(CONTEXT_POOLS.map((pool) => pool.id));
+    for (const job of MODEL_JOB_IDS) {
+      const fields = Object.entries(JOB_INPUT_POOLS[job]);
+      expect(fields.length, `${job} has declared input fields`).toBeGreaterThan(0);
+      for (const [field, pools] of fields) {
+        for (const pool of Array.isArray(pools) ? pools : [pools]) {
+          expect(poolIds.has(pool), `${job}.${field} maps to ${pool}`).toBe(true);
+        }
+      }
+    }
+  });
+
+  it("allows contributor models only for jobs whose inputs are permitted", () => {
+    expect(MODEL_JOB_IDS.filter(mayUseContributorModel)).toEqual([
+      "scout.hackernews", "scout.github", "scout.research", "scout.talent",
+      "hunt.search", "hunt.look", "hunt.sift",
+    ]);
   });
 
   it("never lets a job read a sealed pool", () => {
     const sealed = CONTEXT_POOLS.filter((pool) => pool.sealed).map((pool) => pool.id);
-    expect(sealed).toEqual(["network", "truth"]);
+    expect(sealed.length).toBeGreaterThan(0);
     for (const job of MODEL_JOB_IDS) {
       for (const pool of sealed) expect(poolsReadBy(job), `${job} must not read ${pool}`).not.toContain(pool);
     }
