@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { SIM_WEB_HOST } from "@agentswarm/shared";
 import { pinnedFetch } from "./quote-check";
 import type { FetchFn } from "./http";
-import { createWebReader, DEFAULT_GAP_MS, type WebAddressCheck } from "./web";
+import { createWebReader, DEFAULT_GAP_MS, DEFAULT_USER_AGENT, type WebAddressCheck } from "./web";
 
 const REDIRECTS = new Set([301, 302, 303, 307, 308]);
 const DEFAULT_MAX_MB = 150;
@@ -34,10 +34,11 @@ function addressRefusal(check: Extract<WebAddressCheck, { kind: "blocked" | "unr
 export function createMediaFetcher(options: MediaFetchOptions = {}) {
   const env = options.env ?? process.env;
   const fetchFn = options.fetch;
+  // The same name the page reader gives, so the site can see who is asking. robots.txt is not
+  // consulted. A recording uses the same address checks and the same gap between requests.
+  const userAgent = env.HUNT_USER_AGENT?.trim() || DEFAULT_USER_AGENT;
   const safety = createWebReader({
-    // The same name the page reader gives. A recording uses the same address checks and the
-    // same gap between requests to one host. robots.txt is not consulted.
-    userAgent: env.HUNT_USER_AGENT,
+    userAgent,
     fetch: fetchFn,
     resolveHost: options.resolveHost ?? (async (host) => host === SIM_WEB_HOST
       ? ["93.184.216.34"]
@@ -64,7 +65,7 @@ export function createMediaFetcher(options: MediaFetchOptions = {}) {
             (fetchFn ?? ((address, init) => pinnedFetch(address, init, checked.addresses)))(checked.url, {
               method: "GET",
               redirect: "manual",
-              headers: { "User-Agent": "web-reader/1.0", Accept: "audio/*, video/*" },
+              headers: { "User-Agent": userAgent, Accept: "audio/*, video/*" },
               signal: fetchOptions.signal,
             }),
           );

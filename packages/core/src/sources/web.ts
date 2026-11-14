@@ -8,7 +8,7 @@ import { defaultFetch, type FetchFn } from "./http";
 import { linkedInSessionPoolFor, type LinkedInAccount } from "./sessions";
 import { cleanPlain, decodeEntities, htmlToText } from "./util";
 
-const DEFAULT_USER_AGENT = "web-reader/1.0";
+export const DEFAULT_USER_AGENT = "web-reader/1.0";
 /** The least time between two requests to one host. robots.txt is not read and not obeyed. */
 export const DEFAULT_GAP_MS = 2_000;
 const MAX_PAGE_BYTES = 1_500_000;

@@ -31,7 +31,7 @@ describe("media fetch", () => {
   it("downloads a recording a robots.txt would disallow, and refuses a bare public IP", async () => {
     const directory = await mkdtemp(join(tmpdir(), "agentswarm-media-"));
     try {
-      const fetch = vi.fn(async (url: string) => {
+      const fetch = vi.fn(async (url: string, _init?: RequestInit) => {
         if (url === "https://pattern.example.com/robots.txt") {
           return new Response("User-agent: *\nDisallow: /*.mp3$", { status: 200, headers: { "content-type": "text/plain" } });
         }
@@ -58,6 +58,8 @@ describe("media fetch", () => {
         "https://pattern.example.com/private.mp3",
         "https://named.example.com/talk.mp3",
       ]);
+      const request = fetch.mock.calls.find(([url]) => url === "https://named.example.com/talk.mp3");
+      expect(new Headers(request?.[1]?.headers).get("user-agent")).toBe("FundScout/1.0 (+https://fund.example/bot)");
     } finally {
       await rm(directory, { recursive: true, force: true });
     }

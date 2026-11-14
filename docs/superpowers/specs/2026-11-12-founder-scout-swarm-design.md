@@ -996,10 +996,12 @@ The steps of a compliant call, from that research note, against what the code en
     address is yours to choose. A form that works: `<FundName>Scout/1.0 (+https://<fund
     site>/bot; <a role address>)`, with a page at that address saying what the reader does and how
     to ask it to stop.
-14. Which sites to add to the list the hunt does not read. The list holds the ones whose terms were
-    read; a trail will reach others.
-15. Who else is given access to the code. It is in a private GitHub repository, created
-    2026-11-13, on branch `v0-next`.
+14. A site's prose terms do not bar a host, and robots.txt is not obeyed. Whether any host should
+    be left unread for another reason is still open.
+15. Who is given write access to the code. It is in a public GitHub repository, created
+    2026-11-13, on branch `v0-next`: anyone can read it. An earlier version of this line called
+    the repository private; it was checked on 2026-11-13 and is not, and you chose to keep
+    pushing to it as public.
 
 ## 19. X through xAI, and accelerator batches
 
