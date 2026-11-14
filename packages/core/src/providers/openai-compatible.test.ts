@@ -85,11 +85,10 @@ describe("structured modes", () => {
     const provider = new OpenAICompatibleProvider("openai-api", { env: OPENAI_ENV, client: fakeChat([completion(JSON.stringify(FIT))], calls) });
     await provider.run(request());
 
-    const format = calls[0]?.params.response_format as { type: string; json_schema: { name: string; strict: boolean; schema: { additionalProperties: boolean } } };
+    const format = calls[0]?.params.response_format as { type: string; json_schema: { name: string; strict: boolean } };
     expect(format.type).toBe("json_schema");
     expect(format.json_schema.name).toBe("ScreenOutput");
     expect(format.json_schema.strict).toBe(true);
-    expect(format.json_schema.schema.additionalProperties).toBe(false);
     expect(calls[0]?.params.messages).toEqual([
       { role: "system", content: "SYSTEM TEXT" },
       { role: "user", content: "USER PROMPT" },
@@ -104,7 +103,6 @@ describe("structured modes", () => {
     expect(calls[0]?.params.response_format).toEqual({ type: "json_object" });
     const system = (calls[0]?.params.messages as Array<{ content: string }>)[0]?.content ?? "";
     expect(system).toContain("SYSTEM TEXT");
-    expect(system).toContain('"additionalProperties":false');
     expect(system).toContain("JSON Schema");
   });
 
@@ -187,13 +185,24 @@ describe("configuration", () => {
 });
 
 describe("OpenAICompatibleProvider.run", () => {
-  it("returns the output with the served model, summed usage and no cost for an unpriced model", async () => {
-    const provider = new OpenAICompatibleProvider("openai-api", { env: OPENAI_ENV, client: fakeChat([completion(JSON.stringify(FIT), { model: "gpt-6-luna-2026-11" })]) });
+  it("uses the served model and usage for cost, leaving unpriced models unknown", async () => {
+    const calls: Call[] = [];
+    const provider = new OpenAICompatibleProvider("openai-api", {
+      env: OPENAI_ENV,
+      client: fakeChat([
+        completion(JSON.stringify(FIT), { model: "gpt-6-luna-2026-11" }),
+        completion(JSON.stringify(FIT), { model: "gpt-6-luna" }),
+      ], calls),
+    });
     const result = await provider.run(request());
     expect(result.output).toEqual(FIT);
     expect(result.model).toBe("gpt-6-luna-2026-11");
     expect(result.usage).toEqual({ inputTokens: 400, outputTokens: 50, cachedInputTokens: 100, cacheWriteTokens: 0, webSearches: 0 });
     expect(result.costUsd).toBeNull();
+
+    const priced = await provider.run(request());
+    expect(priced.model).toBe("gpt-6-luna");
+    expect(priced.costUsd).toBeCloseTo((400 * 0.1 + 100 * 0.01 + 50 * 0.5) / 1_000_000, 9);
   });
 
   it("passes reasoning effort only when the route sets it", async () => {

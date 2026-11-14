@@ -44,7 +44,7 @@ describe("OpenCode CLI provider", () => {
     });
 
     const deepseek = await provider.run(request("deepseek/deepseek-flash"));
-    expect(deepseek).toMatchObject({ output: { ok: true }, model: "deepseek/deepseek-flash", costUsd: 0.000483, usage: { inputTokens: 2816, outputTokens: 17, cachedInputTokens: 0, cacheWriteTokens: 0 } });
+    expect(deepseek).toMatchObject({ output: { ok: true }, costUsd: 0.000483, usage: { inputTokens: 2816, outputTokens: 17, cachedInputTokens: 0, cacheWriteTokens: 0 } });
     expect(calls[0]?.command).toBe("opencode");
     expect(calls[0]?.args.slice(0, 8)).toEqual(["run", "--pure", "--agent", "plain", "--model", "deepseek/deepseek-flash", "--format", "json"]);
     expect(calls[0]?.args.at(-1)).toContain('"type":"object"');

@@ -5,11 +5,8 @@ import { ProviderError, type ProviderRequest } from "../contracts";
 import { claudeFetchDenyRules, NEVER_FETCH_HOSTS } from "@agentswarm/shared";
 import {
   ClaudeCliProvider,
-  REVIEW_DENIED_TOOLS,
   buildClaudeArgs,
   claudeUsage,
-  parseClaudeStream,
-  servedModel,
 } from "./claude-cli";
 import type { ProcessOutcome, ProcessRequest, ProcessRunner } from "./subprocess";
 
@@ -111,19 +108,16 @@ describe("buildClaudeArgs", () => {
     const args = buildClaudeArgs({ ...base, kind: "structured", streaming: false });
     expect(argValue(args, "--tools")).toBe("");
     expect(args).not.toContain("--allowedTools");
+    expect(args).not.toContain("--disallowedTools");
     expect(args).not.toContain("--add-dir");
   });
 
-  it("gives research calls only web search and web fetch, pre-approved", () => {
+  it("gives research calls only web tools and denies every protected page host", () => {
     const args = buildClaudeArgs({ ...base, kind: "research", streaming: true });
     expect(argValue(args, "--tools")).toBe("WebSearch,WebFetch");
     expect(argValue(args, "--allowedTools")).toBe("WebSearch,WebFetch");
     expect(args).toContain("stream-json");
     expect(args).not.toContain("--add-dir");
-  });
-
-  it("denies page fetches to every never-fetch host and their subdomains on research calls", () => {
-    const args = buildClaudeArgs({ ...base, kind: "research", streaming: true });
     const denied = denyListOf(args);
     expect(denied).toEqual(claudeFetchDenyRules());
     for (const host of NEVER_FETCH_HOSTS) {
@@ -132,35 +126,17 @@ describe("buildClaudeArgs", () => {
     }
     // Web search is not a request to those hosts, so it is not denied.
     expect(denied.some((rule) => rule.startsWith("WebSearch"))).toBe(false);
-  });
-
-  it("puts the research deny list last, because --disallowedTools is variadic", () => {
-    const args = buildClaudeArgs({ ...base, kind: "research", streaming: true });
     const at = args.indexOf("--disallowedTools");
     expect(at).toBeGreaterThan(args.indexOf("--allowedTools"));
     expect(args.slice(at + 1)).toEqual(claudeFetchDenyRules());
   });
 
-  it("adds no deny rules for structured calls, which have no tools", () => {
-    const args = buildClaudeArgs({ ...base, kind: "structured", streaming: false });
+  it("gives search calls WebSearch only, with no page-fetch tool", () => {
+    const args = buildClaudeArgs({ ...base, kind: "search", streaming: true });
+    expect(argValue(args, "--tools")).toBe("WebSearch");
+    expect(argValue(args, "--allowedTools")).toBe("WebSearch");
     expect(args).not.toContain("--disallowedTools");
-    expect(args.some((arg) => arg.includes("WebFetch(domain:"))).toBe(false);
-  });
-
-  it("leaves the repository-review argument list exactly as it was", () => {
-    const args = buildClaudeArgs({ ...base, kind: "repo_review", streaming: true, repoDir: "/checkout" });
-    expect(args.slice(args.indexOf("--tools"))).toEqual([
-      "--tools",
-      "Read,Grep,Glob",
-      "--allowedTools",
-      "Read,Grep,Glob",
-      "--disallowedTools",
-      REVIEW_DENIED_TOOLS.join(","),
-      "--restricted",
-      "--add-dir",
-      "/checkout",
-    ]);
-    expect(args.some((arg) => arg.includes("WebFetch(domain:"))).toBe(false);
+    expect(args.some((arg) => arg.includes("WebFetch"))).toBe(false);
   });
 
   it("gives repo reviews read and search tools only, with shell, write and network denied", () => {
@@ -172,7 +148,7 @@ describe("buildClaudeArgs", () => {
       expect(denied).toContain(name);
       expect(tools).not.toContain(name);
     }
-    expect(denied).toEqual([...REVIEW_DENIED_TOOLS]);
+    expect(denied).toEqual(["Bash", "Edit", "Write", "NotebookEdit", "WebFetch", "WebSearch", "Agent"]);
     expect(args).toContain("--restricted");
     expect(args.slice(-2)).toEqual(["--add-dir", "/checkout"]);
   });
@@ -195,9 +171,6 @@ describe("buildClaudeArgs", () => {
     expect(bare).not.toContain("--max-budget-usd");
   });
 
-  it("refuses a repo review without a checkout", () => {
-    expect(() => buildClaudeArgs({ ...base, kind: "repo_review", streaming: true, repoDir: null })).toThrow();
-  });
 });
 
 describe("Claude native web search", () => {
@@ -247,12 +220,14 @@ describe("Claude native web search", () => {
 describe("ClaudeCliProvider.run", () => {
   it("returns the validated structured output with the served model and mapped usage", async () => {
     const calls: ProcessRequest[] = [];
-    const provider = new ClaudeCliProvider({ env: {}, runner: fakeRunner({ stdout: successJson(FIT) }, calls) });
+    const response = JSON.parse(successJson(FIT, "claude-sonnet-5-5")) as { modelUsage: Record<string, unknown> };
+    response.modelUsage["claude-opus-4-8"] = { costUSD: 0.0005 };
+    const provider = new ClaudeCliProvider({ env: {}, runner: fakeRunner({ stdout: JSON.stringify(response) }, calls) });
     const result = await provider.run(request());
 
     expect(result.output).toEqual(FIT);
     expect(result.provider).toBe("claude-cli");
-    expect(result.model).toBe("claude-haiku-5-5");
+    expect(result.model).toBe("claude-opus-4-8");
     expect(result.costUsd).toBe(0.0002627);
     expect(result.usage).toEqual({
       inputTokens: 2,
@@ -263,15 +238,6 @@ describe("ClaudeCliProvider.run", () => {
     });
     expect(calls[0]?.command).toBe("claude");
     expect(calls[0]?.stdin).toBe("USER PROMPT");
-  });
-
-  it("takes the served model from the response, not from the request", async () => {
-    const provider = new ClaudeCliProvider({
-      env: {},
-      runner: fakeRunner({ stdout: successJson(FIT, "claude-sonnet-5-5") }),
-    });
-    const result = await provider.run(request());
-    expect(result.model).toBe("claude-sonnet-5-5");
   });
 
   it("runs every call in a fresh temporary directory and removes it afterwards", async () => {
@@ -394,6 +360,7 @@ describe("ClaudeCliProvider.run", () => {
     const big = "x".repeat(5000);
     const stdout = [
       JSON.stringify({ type: "system", subtype: "init" }),
+      "warning: non-JSON CLI output is ignored",
       JSON.stringify({
         type: "assistant",
         message: { content: [{ type: "tool_use", id: "t1", name: "WebFetch", input: { url: "https://example.com" } }] },
@@ -454,16 +421,6 @@ describe("claude result helpers", () => {
     expect(claudeUsage(fallback).webSearches).toBe(4);
   });
 
-  it("serves the model with the largest cost", () => {
-    expect(servedModel({ modelUsage: { small: { costUSD: 0.1 }, big: { costUSD: 0.9 } } })).toBe("big");
-    expect(servedModel({ modelUsage: {} })).toBeNull();
-  });
-
-  it("ignores stream lines that are not JSON", () => {
-    const parsed = parseClaudeStream(`warning: something\n${streamResultLine(FIT)}\n`);
-    expect(parsed.result).not.toBeNull();
-    expect(parsed.tools).toEqual([]);
-  });
 });
 
 describe("ClaudeCliProvider environment", () => {

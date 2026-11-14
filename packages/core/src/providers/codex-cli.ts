@@ -81,7 +81,7 @@ function num(value: unknown): number {
  * Codex reports input_tokens including the cached part, so the uncached input
  * is the difference. Usage is summed across turns.
  */
-export function codexUsage(raw: JsonObject): Usage {
+function codexUsage(raw: JsonObject): Usage {
   const input = num(raw.input_tokens);
   const cached = num(raw.cached_input_tokens);
   return {

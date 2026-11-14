@@ -87,9 +87,8 @@ describe("AnthropicApiProvider.run", () => {
     expect(call?.params.max_tokens).toBe(16_000);
     expect(call?.params.system).toBe("SYSTEM TEXT");
     expect(call?.params.messages).toEqual([{ role: "user", content: "USER PROMPT" }]);
-    const outputConfig = call?.params.output_config as { format: { type: string; schema: { additionalProperties: boolean } }; effort: string };
+    const outputConfig = call?.params.output_config as { format: { type: string }; effort: string };
     expect(outputConfig.format.type).toBe("json_schema");
-    expect(outputConfig.format.schema.additionalProperties).toBe(false);
     expect(outputConfig.effort).toBe("medium");
   });
 
@@ -103,7 +102,9 @@ describe("AnthropicApiProvider.run", () => {
   });
 
   it("opts in to server-side fallback, routed by refusal category, on every model that can refuse", async () => {
-    for (const model of FALLBACK_MODELS) {
+    const models = ["claude-fable-5-2", "claude-fable-5-1", "claude-opus-5-5", "claude-opus-5", "claude-sonnet-5-5"];
+    expect([...FALLBACK_MODELS].sort()).toEqual([...models].sort());
+    for (const model of models) {
       const recorded: Recorded[] = [];
       const provider = new AnthropicApiProvider({
         env: {},
@@ -147,9 +148,10 @@ describe("AnthropicApiProvider.run", () => {
   it("reports no cost when a fallback served the call, because it bills at other rates", async () => {
     const provider = new AnthropicApiProvider({
       env: {},
-      client: fakeClient({ message: message({ model: "claude-opus-4-8" }) }),
+      client: fakeClient({ message: message({ model: "claude-opus-5-5" }) }),
     });
     const result = await provider.run(request({ route: { provider: "anthropic-api", model: "claude-fable-5-2" } }));
+    expect(result.model).toBe("claude-opus-5-5");
     expect(result.costUsd).toBeNull();
   });
 

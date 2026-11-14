@@ -280,7 +280,7 @@ export function claudeUsage(result: JsonObject): Usage {
 }
 
 /** The served model is the modelUsage key with the largest cost. Never the requested id. */
-export function servedModel(result: JsonObject): string | null {
+function servedModel(result: JsonObject): string | null {
   const modelUsage = asObject(result.modelUsage) ?? {};
   let best: { model: string; cost: number } | null = null;
   for (const [model, entry] of Object.entries(modelUsage)) {

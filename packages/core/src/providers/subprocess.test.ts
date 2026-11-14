@@ -22,7 +22,14 @@ describe("runProcess", () => {
     // A tool that reads PWD for its project directory (opencode does) must not be pointed at
     // this repository when it was started in a scratch directory.
     const cwd = realpathSync(tmpdir());
-    const out = await runProcess({ ...base, cwd, env: { ...process.env, PWD: "/somewhere/else", OLDPWD: "/before" }, command: "sh", args: ["-c", 'printf "%s|%s" "$PWD" "${OLDPWD-unset}"'], timeoutMs: 10_000 });
+    const out = await runProcess({
+      ...base,
+      cwd,
+      env: { ...process.env, PWD: "/somewhere/else", OLDPWD: "/before" },
+      command: process.execPath,
+      args: ["-e", "process.stdout.write(process.env.PWD + '|' + (process.env.OLDPWD ?? 'unset'))"],
+      timeoutMs: 10_000,
+    });
     expect(out.stdout).toBe(`${cwd}|unset`);
   });
 

@@ -20,9 +20,11 @@ const KEYLESS = (): NodeJS.ProcessEnv => ({ PATH: emptyBin });
 
 describe("createProviderRegistry statuses", () => {
   it("returns one status per provider in PROVIDERS order", async () => {
-    const statuses = await createProviderRegistry(KEYLESS()).statuses();
+    const registry = createProviderRegistry(KEYLESS());
+    const statuses = await registry.statuses();
     expect(statuses.map((s) => s.id)).toEqual(PROVIDERS.map((p) => p.id));
     expect(statuses.every((s) => s.label.length > 0 && s.detail.length > 0)).toBe(true);
+    for (const status of statuses) expect(registry.get(status.id).id).toBe(status.id);
   });
 
   it("reports the command-line providers unconfigured when their binaries are not on PATH", async () => {
@@ -74,9 +76,8 @@ describe("createProviderRegistry statuses", () => {
 });
 
 describe("createProviderRegistry.get", () => {
-  it("returns a provider for every id, and the simulation provider refuses to run", async () => {
+  it("the simulation provider refuses to run", async () => {
     const registry = createProviderRegistry(KEYLESS());
-    for (const meta of PROVIDERS) expect(registry.get(meta.id).id).toBe(meta.id);
 
     const sim = registry.get("sim");
     await expect(

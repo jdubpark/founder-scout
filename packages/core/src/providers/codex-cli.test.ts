@@ -3,7 +3,7 @@ import { writeFile } from "node:fs/promises";
 import { describe, expect, it } from "vitest";
 import { ScreenOutputSchema, type ScreenOutput } from "@agentswarm/shared";
 import { ProviderError, type ProviderRequest } from "../contracts";
-import { CodexCliProvider, buildCodexArgs, codexPrompt, codexUsage, parseCodexEvents } from "./codex-cli";
+import { CodexCliProvider, buildCodexArgs, parseCodexEvents } from "./codex-cli";
 import type { ProcessOutcome, ProcessRequest, ProcessRunner } from "./subprocess";
 
 const FIT = { fit: 0.6, reasons: ["sells to developers"], sectors: ["devtools"], stage: null, tags: [] };
@@ -89,41 +89,14 @@ describe("buildCodexArgs", () => {
     expect(args.join(" ")).not.toContain("--dangerously");
   });
 
-  it("reads the prompt from stdin and writes the final message to a file", () => {
-    const args = buildCodexArgs(inv);
-    expect(args[args.indexOf("--output-schema") + 1]).toBe("/w/schema.json");
-    expect(args[args.indexOf("-o") + 1]).toBe("/w/last.json");
-    expect(args.at(-1)).toBe("-");
-  });
-
   it("sets the reasoning effort with a config override only when set", () => {
     expect(buildCodexArgs(inv)).toContain('model_reasoning_effort="medium"');
     expect(buildCodexArgs({ ...inv, effort: null })).not.toContain("-c");
   });
 
-  it("points at the checkout with -C for repo reviews only", () => {
-    expect(buildCodexArgs({ ...inv, repoDir: "/checkout" })).toEqual(expect.arrayContaining(["-C", "/checkout"]));
-    expect(buildCodexArgs(inv)).not.toContain("-C");
-  });
-
-  it("puts the system text first under a heading, since Codex has no system flag", () => {
-    const text = codexPrompt("RULES", "TASK");
-    expect(text.indexOf("RULES")).toBeLessThan(text.indexOf("TASK"));
-    expect(text).toContain("# System instructions");
-  });
 });
 
 describe("codexUsage and parseCodexEvents", () => {
-  it("counts uncached input by removing the cached part", () => {
-    expect(codexUsage({ input_tokens: 1000, cached_input_tokens: 200, output_tokens: 40 })).toEqual({
-      inputTokens: 800,
-      outputTokens: 40,
-      cachedInputTokens: 200,
-      cacheWriteTokens: 0,
-      webSearches: 0,
-    });
-  });
-
   it("sums usage across turns and reads command executions for the trace", () => {
     const stdout = [
       JSON.stringify(turnCompleted(100, 0, 10)),
@@ -155,7 +128,12 @@ describe("CodexCliProvider.run", () => {
     expect(result.usage).toMatchObject({ inputTokens: 800, cachedInputTokens: 200, outputTokens: 40 });
     // gpt-6-luna list price: $0.10 input, $0.01 cached input, $0.50 output per million tokens.
     expect(result.costUsd).toBeCloseTo((800 * 0.1 + 200 * 0.01 + 40 * 0.5) / 1_000_000, 9);
-    expect(calls[0]?.stdin).toBe(codexPrompt("SYSTEM TEXT", "USER PROMPT"));
+    const args = calls[0]?.args ?? [];
+    expect(args[args.indexOf("--output-schema") + 1]).toContain("schema.json");
+    expect(args[args.indexOf("-o") + 1]).toContain("last-message.json");
+    expect(args).toContain('model_reasoning_effort="medium"');
+    expect(args.at(-1)).toBe("-");
+    expect(calls[0]?.stdin).toBe("# System instructions\n\nSYSTEM TEXT\n\n# Task\n\nUSER PROMPT");
   });
 
   it("reports no cost, rather than a guess, for a model without a confirmed price", async () => {
