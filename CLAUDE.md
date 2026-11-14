@@ -144,6 +144,49 @@ check it. `packages/core/src/rules.test.ts` enforces that, so add the test with 
   `packages/shared/src/hunt.test.ts`.
 - **A page is read once; a search runs again only in a later run or on a later day.** Test:
   `packages/core/src/db/store.test.ts`.
+- **X is searched only through xAI, and what comes back is a model's report.** No page on
+  x.com is requested; its robots.txt refuses a generic reader. A post is kept only when
+  xAI's API returned its address, a founder's posts only from the account the call was held to,
+  and where xAI's own address names the account, no other account is the author. Only the xAI
+  provider runs a job with an X scope. The words, dates and counts are what Grok wrote, so X
+  evidence is stored unverified and a runner is told it is a report, until X's own API says
+  otherwise (two rules down). A search xAI answers without a price, or that times out, is
+  charged at the cap it was given. Tests:
+  `packages/core/src/jobs/x.test.ts`, `packages/core/src/providers/xai-api.test.ts`,
+  `packages/core/src/engine/hunt.test.ts`, `packages/core/src/jobs/index.test.ts`.
+- **X evidence is checked by a second xAI call, never by the fact-checker that cannot open X.**
+  That call carries its own planted false claim, and "supported" stands only for a post
+  somebody read: one xAI's API lists among what that call fetched, or one whose quoted words
+  code found in the post. A post about the company is filed with the company and is not shown
+  to the founder's reader, and nothing is read from X in a simulated run.
+  Tests: `packages/core/src/engine/index.test.ts`, `packages/core/src/engine/x-stage.test.ts`.
+- **X's own API reads only posts xAI already named, by id, and never finds anyone.** It is
+  sent nothing but post ids (`X_BEARER_TOKEN`; unset, none of this runs). A quote that is not
+  in the post, or a post X gives to another account, rejects the item before the fact-check;
+  an item that passes carries X's counts and date. A link-shaped word in a quote matches a
+  link only where the post has one. In the hunt a runner is shown the post's own words, and
+  the follower ceiling is applied to X's count. Each post read costs money outside the run's
+  spend cap, under `X_POSTS_PER_DAY`, counted when the request is sent. Tests:
+  `packages/shared/src/quote.test.ts`, `packages/core/src/sources/x-api.test.ts`,
+  `packages/core/src/engine/x-stage.test.ts`, `packages/core/src/engine/hunt.test.ts`.
+- **What is read from X is held to X's own list as well.** Besides the prohibited attributes,
+  nothing is kept about a person's money troubles, trade union membership, or an alleged or
+  actual crime: the jobs that read X are told so, and `offLimitsOnX` drops a hit, an account,
+  an item or a post read through X's API whose words state one. A company's finances are not
+  a person's. Tests: `packages/core/src/jobs/x.test.ts`, `packages/core/src/engine/hunt.test.ts`.
+- **A post X no longer shows is removed from everything that holds its words.** Evidence,
+  leads, pages held in the hunt's queue, and the output and transcript of any task that
+  carried it: `forgetXPosts` in the store does all of them at once, and stored posts are
+  re-read in turn to find them. `pnpm swarm x forget` removes one by hand. A founder whose
+  assessment cites a removed item is assessed again. A new place that keeps a post's words is
+  added to that method. Tests: `packages/core/src/db/store.test.ts`,
+  `packages/core/src/engine/x-stage.test.ts`.
+- **Accelerator batches are listed by code, within each directory's robots.txt.** Four public
+  listings, each asked after its robots.txt, with requests to one host spaced by the page
+  reader's gap or the site's crawl delay, and a listing once read is reused, not asked for
+  again. A hit is a company's name and its own site, or for a16z speedrun the programme's page
+  about it; a founder's name in a listing is not used, and Y Combinator's own site is not
+  read. Test: `packages/core/src/sources/accelerators.test.ts`.
 - **A runner call names no effort, and that means answer fast.** DeepSeek is sent thinking off
   and Meta the lowest reasoning, because both reason by default. DeepSeek has no default
   address. The runner pool is built only from providers that are ready, and a pool in the config

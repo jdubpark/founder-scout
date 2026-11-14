@@ -42,6 +42,8 @@ import {
   UserCheck,
   Users,
   type LucideIcon,
+  AtSign,
+  Video,
 } from "lucide-react";
 import type { ClassId, Decision, DirectiveKind, EvidenceFacet, EvidenceKind, SourceId } from "@agentswarm/shared";
 import { cn } from "../lib/cn";
@@ -66,6 +68,7 @@ const SOURCE_ICON: Record<SourceId, LucideIcon> = {
   arxiv: BookOpenText,
   people_data: IdCard,
   web: Globe,
+  x: AtSign,
   call: Phone,
   network: Users,
   manual: PenLine,
@@ -91,6 +94,7 @@ const EVIDENCE_ICON: Record<EvidenceKind, LucideIcon> = {
   launch: Rocket,
   talk: Mic,
   interview: Mic,
+  video: Video,
   article: Newspaper,
   funding: Banknote,
   reference: UserCheck,

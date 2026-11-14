@@ -8,7 +8,8 @@ import { defaultFetch, type FetchFn } from "./http";
 import { cleanPlain, decodeEntities, htmlToText } from "./util";
 
 const DEFAULT_USER_AGENT = "web-reader/1.0";
-const DEFAULT_GAP_MS = 2_000;
+/** The least time between two requests to one host when its robots.txt asks for none. */
+export const DEFAULT_GAP_MS = 2_000;
 const MAX_GAP_MS = 60_000;
 const MAX_PAGE_BYTES = 1_500_000;
 const MAX_ROBOTS_BYTES = 512 * 1024;
@@ -53,9 +54,25 @@ interface HostTail {
   tail: Promise<void>;
 }
 
+/** How a reader names itself to a site, and the name a robots.txt group is matched against. */
+export function readerIdentity(userAgent?: string): { userAgent: string; productToken: string } {
+  const name = userAgent?.trim() || DEFAULT_USER_AGENT;
+  return { userAgent: name, productToken: (name.split(/[\s/]/u)[0] || DEFAULT_USER_AGENT.split("/")[0]!).toLowerCase() };
+}
+
+/**
+ * What a robots.txt body says to this reader about one address: whether it may be opened, and
+ * the least time between two requests to that host (the reader's own gap, or the site's crawl
+ * delay when that is longer). For a listing that code reads outside the page reader, so that it
+ * is held to the same rules by the same parser. An empty body is a site with no robots.txt.
+ */
+export function robotsVerdict(body: string, productToken: string, url: string): { allowed: boolean; gapMs: number } {
+  const policy = parseRobots(body, productToken);
+  return { allowed: policy.allowed && robotsAllows(policy, url), gapMs: Math.max(DEFAULT_GAP_MS, policy.crawlDelayMs) };
+}
+
 export function createWebReader(options: WebReaderOptions = {}): WebReader {
-  const userAgent = options.userAgent?.trim() || DEFAULT_USER_AGENT;
-  const productToken = (userAgent.split(/[\s/]/u)[0] || DEFAULT_USER_AGENT.split("/")[0]!).toLowerCase();
+  const { userAgent, productToken } = readerIdentity(options.userAgent);
   const resolveHost = options.resolveHost ?? (async (hostname: string) => (await lookup(hostname, { all: true })).map((entry) => entry.address));
   const fetchFn = options.fetch;
   const now = options.now ?? Date.now;

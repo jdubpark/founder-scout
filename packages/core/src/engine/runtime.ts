@@ -34,6 +34,8 @@ export interface PlainTaskInput {
 export interface TaskResult<J extends ModelJobId> {
   task: TaskRun;
   output: JobOutput<J> | null;
+  /** The addresses the provider's own search tool returned in the call that gave this output. */
+  cited?: readonly string[];
 }
 
 /** Shared per-run state and task boundary used by the ordered stage handlers. */

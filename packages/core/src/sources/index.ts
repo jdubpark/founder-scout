@@ -4,7 +4,7 @@
  */
 
 import { SOURCES, type SourceId, type SourceStatus } from "@agentswarm/shared";
-import type { RepoFinder, SearchEngine, SimWorld, SourceAdapter, SourceRegistry, WebAccess } from "../contracts";
+import type { RepoFinder, SearchEngine, SimWorld, SourceAdapter, SourceRegistry, WebAccess, XPostReader } from "../contracts";
 import type { PeopleLookup } from "../contracts";
 import { createArxivAdapter } from "./arxiv";
 import { createGitHubAdapter } from "./github";
@@ -13,22 +13,26 @@ import { createPeopleDataAdapter } from "./people_data";
 import { createPdlVendor, createRecordAllowance, type RecordAllowance } from "./pdl";
 import { createLiveRepoFinder as buildRepoFinder, type RepoFinderOptions } from "./repo-finder";
 import { createWebReader } from "./web";
+import { createAcceleratorEngine } from "./accelerators";
 import { createGitHubSearchEngine, createHnSearchEngine, createHuggingFaceSearchEngine, createModelSearchEngine } from "./search";
 import { createLiveTranscriber } from "./transcribe";
 import { createMediaFetcher } from "./media";
 import type { Dialler } from "../contracts";
+import { createXPostReader } from "./x-api";
 
 export { createArxivAdapter } from "./arxiv";
 export { createGitHubAdapter } from "./github";
 export { createHackerNewsAdapter } from "./hackernews";
 export { createPeopleDataAdapter, type ProfileDataVendor } from "./people_data";
 export { createPdlVendor, createRecordAllowance, type PdlOptions, type RecordAllowance } from "./pdl";
+export { createXPostReader, type XPostReaderOptions } from "./x-api";
 export { createQuoteChecker } from "./quote-check";
 export { createLiveTranscriber, createCommandTranscriber, createHttpTranscriber } from "./transcribe";
 export { createMediaFetcher } from "./media";
 export { createWebReader, type WebReaderOptions } from "./web";
+export { createAcceleratorEngine, type AcceleratorSearchOptions } from "./accelerators";
 export { createGitHubSearchEngine, createHnSearchEngine, createHuggingFaceSearchEngine, type SearchOptions } from "./search";
-export { createModelSearchEngine } from "./search";
+export { createModelSearchEngine, createXSearchEngine } from "./search";
 export { createLinkupSearchEngine } from "./search-linkup";
 export { looksLikeFounder, parseConnectionsCsv, type ParsedContact } from "./connections";
 export { sanitizeCheckout, type SanitizeResult } from "./sanitize";
@@ -68,7 +72,7 @@ export function createLiveWebAccess(options: { env?: NodeJS.ProcessEnv; extraEng
   const env = options.env ?? process.env;
   return {
     reader: createWebReader({ userAgent: env.HUNT_USER_AGENT }),
-    engines: [createHnSearchEngine(), createGitHubSearchEngine({ env }), createHuggingFaceSearchEngine({ env }), ...(options.extraEngines ?? [])],
+    engines: [createHnSearchEngine(), createGitHubSearchEngine({ env }), createHuggingFaceSearchEngine({ env }), createAcceleratorEngine({ userAgent: env.HUNT_USER_AGENT }), ...(options.extraEngines ?? [])],
   };
 }
 
@@ -115,6 +119,19 @@ function pdlAllowance(env: NodeJS.ProcessEnv, apiKey: string): RecordAllowance {
 export function createLivePeopleLookup(env: NodeJS.ProcessEnv = process.env): PeopleLookup | null {
   const apiKey = env.PDL_API_KEY?.trim();
   return apiKey ? createPdlVendor({ apiKey, allowance: pdlAllowance(env, apiKey) }) : null;
+}
+
+// One reader per bearer token for the life of the process, so all live runs share its daily ceiling and answers.
+const xPostReaders = new Map<string, XPostReader>();
+
+export function createLiveXPostReader(env: NodeJS.ProcessEnv = process.env): XPostReader | null {
+  const token = env.X_BEARER_TOKEN?.trim();
+  if (!token) return null;
+  const existing = xPostReaders.get(token);
+  if (existing) return existing;
+  const reader = createXPostReader({ env });
+  xPostReaders.set(token, reader);
+  return reader;
 }
 
 /** Adapters that fetch from the outside world. web, call and manual have none in live mode. */

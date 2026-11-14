@@ -90,6 +90,7 @@ import type {
   Pools,
   Trail,
   Skill,
+  XScope,
 } from "@agentswarm/shared";
 
 /* ================================================================== */
@@ -109,6 +110,11 @@ export interface ProviderRequest<T> {
   schemaName: string;
   /** Checkout the agent may read. Required for repo_review. */
   repoDir?: string | null;
+  /**
+   * What the call may read on X. Set by the job, never by a prompt. Only the xAI provider can
+   * honour it, and a call that carries it is refused by every other provider.
+   */
+  x?: XScope | null;
   /** Hard spend ceiling for this one call, when the provider can enforce one. */
   maxBudgetUsd?: number | null;
   timeoutMs?: number;
@@ -126,6 +132,12 @@ export interface ProviderResult<T> {
   costUsd: number | null;
   latencyMs: number;
   trace: TraceTurn[];
+  /**
+   * The addresses the provider's own search tool returned in this call, as the vendor's API lists
+   * them apart from the model's words. Absent when the provider cannot tell the two apart.
+   * A job uses it to drop an address the model wrote that no search returned.
+   */
+  cited?: readonly string[];
 }
 
 export type ProviderErrorKind =
@@ -275,7 +287,12 @@ export interface SearchEngine {
   /** What it searches, in a line, shown to the navigator so it can write a query for it. */
   readonly searches: string;
   /** The search is done by a model with a search tool, so the hunt runs this job and reads its hits. */
-  readonly job?: "hunt.search";
+  readonly job?: "hunt.search" | "hunt.xsearch";
+  /**
+   * Code cannot open the addresses this engine returns, so each hit is kept whole and a runner
+   * reads that in place of the page (`FrontierItem.held`). True for X only.
+   */
+  readonly holdsPages?: boolean;
   status(): Promise<{ configured: boolean; detail: string }>;
   search(query: string, limit: number, options?: { simDay?: number | null; signal?: AbortSignal }): Promise<SearchHit[]>;
 }
@@ -436,6 +453,8 @@ export interface JobDefinition<J extends ModelJobId = ModelJobId> {
   buildPrompt(input: JobInput<J>, ctx: JobContext): { system: string; prompt: string };
   /** Ids of reviewed notes inserted into this task's system prompt. */
   selectedSkills?(input: JobInput<J>, ctx: JobContext): string[];
+  /** For a job that reads X: the accounts, dates and media the call is held to. */
+  xScope?(input: JobInput<J>, ctx: JobContext): XScope;
   /**
    * Deterministic stand-in for the model. Reads only what a model could see
    * plus the simulator's hidden signals, and must respond to the route and to
@@ -458,6 +477,8 @@ export interface JobExecution<J extends ModelJobId> {
   /** Reviewed skill ids included in this task's system prompt. */
   skills?: string[];
   output: JobOutput<J>;
+  /** The addresses the provider's own search tool returned in this call, when it has one. */
+  cited?: readonly string[];
   provider: ProviderId;
   model: string;
   usage: Usage;
@@ -573,6 +594,18 @@ export interface Store {
   setVerification(evidenceId: string, verification: Verification, note: string | null): void;
   /** Record whether code found an item's quoted words at the address it cites. */
   setQuote(evidenceId: string, quote: QuoteStatus): void;
+  /**
+   * Takes the words of posts X no longer shows out of everything that holds them: evidence,
+   * leads, pages held for a runner, and the output and transcript of any task that carried one.
+   * Returns the founders whose evidence changed.
+   */
+  forgetXPosts(postIds: readonly string[]): { founderIds: string[] };
+  /**
+   * Replace what an item says with what its source now says: measured counts in a title, a
+   * post's own date, or the removal of words whose source is gone. The item keeps its id, so
+   * anything that cited it still points at it.
+   */
+  updateEvidence(evidenceId: string, patch: Partial<Pick<Evidence, "title" | "excerpt" | "claim" | "publishedAt">>): void;
 
   insertAssessment(assessment: Assessment): void;
   latestAssessment(founderId: string): Assessment | null;
@@ -750,6 +783,43 @@ export interface QuoteChecker {
   check(url: string, excerpt: string, signal?: AbortSignal): Promise<{ status: QuoteStatus; detail: string }>;
 }
 
+/**
+ * One post as X's own API returned it. Read to check what xAI's model reported about a post it
+ * named, and to keep stored posts in step with X. Never used to find people.
+ */
+export interface XPost {
+  id: string;
+  /** The whole text: a long post's full text, not its first 280 characters. */
+  text: string;
+  createdAt: string | null;
+  /** The author's handle, lower-cased, without the @. */
+  handle: string;
+  /** The author's display name. */
+  name: string;
+  followers: number | null;
+  likes: number | null;
+  reposts: number | null;
+  replies: number | null;
+  /** null when X reports no view count for the post. */
+  views: number | null;
+}
+
+/**
+ * Reads posts by id through X's official API. Implemented in src/sources. X bills each post
+ * read, outside the run's spend cap, so the reader keeps its own ceiling on posts a day. It
+ * sends X nothing but post ids.
+ */
+export interface XPostReader {
+  status(): Promise<{ configured: boolean; detail: string }>;
+  /**
+   * `posts`: what X returned, by id. `gone`: ids X says do not exist or may not be shown
+   * (deleted, protected, suspended). An id in neither was not read, because the day's ceiling
+   * was reached or the request failed; the caller treats that post as unchecked. Does not
+   * throw for a refused or failed request.
+   */
+  read(ids: readonly string[], options?: { signal?: AbortSignal }): Promise<{ posts: Map<string, XPost>; gone: Set<string> }>;
+}
+
 /* ================================================================== */
 /* Professional-profile data                                            */
 /* ================================================================== */
@@ -800,6 +870,8 @@ export interface EngineDeps {
   executeJob: ExecuteJob;
   /** Quote check for live runs. Absent in tests and simulations, where sources are not real pages. */
   quotes?: QuoteChecker | null;
+  /** X's own API, for live runs, when credentials for it are set. null or absent: posts stay a model's report. */
+  xPosts?: XPostReader | null;
   /** Vendor lookups for live runs. null when no vendor is connected. */
   people?: PeopleLookup | null;
   transcriber?: { sim: Transcriber; live: Transcriber | null };
@@ -810,6 +882,11 @@ export interface EngineDeps {
   repos: { sim: RepoFinder; live: RepoFinder };
   /** How the hunt reaches the web in each source mode. Absent: a run has no hunt stage. */
   web?: { sim: WebAccess; live: WebAccess };
+  /**
+   * Whether xAI's API is connected, asked once a run. Absent or false: no founder's X account is
+   * read and no X evidence is checked, and the run says so once instead of failing a task each time.
+   */
+  xReady?: () => Promise<boolean>;
   /**
    * Pools for jobs whose config names none, resolved once when a run starts: the runner pool
    * of `runnerPools`, built from the providers that are ready. A pool in the config wins.
@@ -924,6 +1001,8 @@ export interface SwarmService {
   as(actor: string): ApiClient;
   readonly runs: RunController;
   readonly evals: EvalService;
+  /** Remove the words of posts X no longer shows and audit the request. */
+  forgetXPosts(actor: string, ids: readonly string[]): Promise<{ founders: number }>;
   /**
    * Start a scheduled run for every active swarm that is not already running. With `only`,
    * for those swarms alone, so a catch-up for one swarm does not rerun the others.

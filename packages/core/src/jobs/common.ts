@@ -1,5 +1,5 @@
 import { PROHIBITED_ATTRIBUTES } from "@agentswarm/shared";
-import type { EvidenceBrief, Thesis } from "@agentswarm/shared";
+import type { EvidenceBrief, FounderBrief, Thesis } from "@agentswarm/shared";
 
 const NATIONALITIES = "american|canadian|mexican|brazilian|argentinian|argentine|chilean|colombian|peruvian|british|english|scottish|welsh|irish|french|german|italian|spanish|portuguese|dutch|belgian|swiss|austrian|swedish|norwegian|danish|finnish|icelandic|polish|czech|hungarian|romanian|bulgarian|greek|turkish|ukrainian|russian|israeli|iranian|chinese|taiwanese|japanese|korean|indian|pakistani|bangladeshi|sri lankan|nepali|vietnamese|thai|filipino|indonesian|malaysian|singaporean|australian|new zealander|nigerian|ghanaian|kenyan|ethiopian|egyptian|moroccan|south african";
 
@@ -46,6 +46,23 @@ export function findSensitive(text: string): string[] {
 export const containsSensitive = (...values: Array<string | null | undefined>): boolean =>
   values.some((value) => value !== null && value !== undefined && findSensitive(value).length > 0);
 
+/**
+ * What X's developer terms add for anything read from X: nothing is derived or stored about a
+ * person's money troubles, trade union membership, or an alleged or actual crime. Phrase based,
+ * like `findSensitive`, and about a person: a team that ran out of money speaks of its company,
+ * and a product for people in debt is not anyone's condition.
+ */
+const X_RESTRICTED: readonly RegExp[] = [
+  /\b(?:arrested|indicted|convicted|pleaded guilty|pled guilty|found guilty|sentenced to|felony|criminal (?:record|charges?|conviction)|(?:went to|sent to|served time in|released from|is in|was in|been in) (?:prison|jail))\b/i,
+  /\b(?:I|he|she|they|the founder|the person)(?:\s*['’]m|\s+(?:am|is|was|were|went|filed for|declared))\s+(?:flat\s+|personally\s+)?(?:broke|bankrupt|bankruptcy|insolvent|in debt)\b|\bpersonal(?:ly)?\s+bankrupt(?:cy)?\b/i,
+  /\b(?:trade|labor|labour)\s+union\b|\bunion\s+(?:organi[sz]er|steward)\b/i,
+];
+
+/** Whether a text read from X states a prohibited attribute, or one of the three X adds. */
+export const offLimitsOnX = (...values: Array<string | null | undefined>): boolean =>
+  values.some((value) => typeof value === "string"
+    && (findSensitive(value).length > 0 || X_RESTRICTED.some((pattern) => pattern.test(value))));
+
 const REMOVED = "[removed: personal detail]";
 
 /** Removes every sentence that states a prohibited personal attribute. */
@@ -88,6 +105,35 @@ export function renderThesis(thesis: Thesis): string {
     stages: thesis.stages,
     geos: thesis.geos,
     avoid: thesis.avoid,
+  });
+}
+
+export function renderFounder(founder: FounderBrief): string {
+  return explicitJson({
+    id: founder.id,
+    name: founder.name,
+    headline: founder.headline,
+    location: founder.location,
+    company: {
+      name: founder.company.name,
+      url: founder.company.url,
+      oneLiner: founder.company.oneLiner,
+      stage: founder.company.stage,
+    },
+    links: {
+      github: founder.links.github,
+      linkedin: founder.links.linkedin,
+      x: founder.links.x,
+      site: founder.links.site,
+      scholar: founder.links.scholar,
+    },
+    tags: founder.tags,
+    sightings: founder.sightings.map((sighting) => ({
+      source: sighting.source,
+      title: sighting.title,
+      why: sighting.why,
+      ref: sighting.ref,
+    })),
   });
 }
 

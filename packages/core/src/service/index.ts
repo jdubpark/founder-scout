@@ -18,7 +18,7 @@ import type {
 import { ServiceError } from "../contracts";
 import { openStore } from "../db";
 import { createSimDialler, createSimRepoFinder, createSimSources, createSimWorld } from "../sim";
-import { createLiveDialler, createLivePeopleLookup, createLiveRepoFinder, createLiveSources, createQuoteChecker, createLiveWebAccess, createModelSearchEngine, createSimWebAccess, createLiveTranscriber, createMediaFetcher, looksLikeFounder, parseConnectionsCsv } from "../sources";
+import { createLiveDialler, createLivePeopleLookup, createLiveXPostReader, createLiveRepoFinder, createLiveSources, createQuoteChecker, createLiveWebAccess, createModelSearchEngine, createXSearchEngine, createSimWebAccess, createLiveTranscriber, createMediaFetcher, looksLikeFounder, parseConnectionsCsv } from "../sources";
 import { createProviderRegistry } from "../providers";
 import { createJobRegistry, createExecuteJob, findSensitive, loadSkillLibrary, redactSensitive } from "../jobs";
 import { createRunController } from "../engine";
@@ -1121,6 +1121,11 @@ export function createSwarmService(deps: ServiceDeps): SwarmService {
     as: apiFor,
     runs: deps.runs,
     evals: deps.evals,
+    async forgetXPosts(actor: string, ids: readonly string[]) {
+      const result = store.forgetXPosts(ids);
+      audit(actor, "x.forget", "x", { ids: [...ids] });
+      return { founders: result.founderIds.length };
+    },
     async runScheduled(only?: readonly string[]) {
       const settings = store.getSettings();
       if (!settings.schedule.enabled) return [];
@@ -1296,9 +1301,13 @@ export function createApp(options: AppOptions): App {
     sim: createSimWebAccess(world),
     live: createLiveWebAccess({
       env: options.env,
-      extraEngines: (options.env ?? process.env).HUNT_WEB_SEARCH === "off"
-        ? []
-        : [createModelSearchEngine({ status: () => providers.get("claude-cli").status() })],
+      extraEngines: [
+        ...((options.env ?? process.env).HUNT_WEB_SEARCH === "off"
+          ? []
+          : [createModelSearchEngine({ status: () => providers.get("claude-cli").status() })]),
+        // Listed only while an xAI key is set: an engine that is not configured is not offered to the navigator.
+        createXSearchEngine({ status: () => providers.get("xai-api").status() }),
+      ],
     }),
   };
   let defaultPoolsPromise: Promise<Pools> | null = null;
@@ -1313,7 +1322,7 @@ export function createApp(options: AppOptions): App {
   const jobs = createJobRegistry(skillLibrary);
   const executeJob = createExecuteJob({ jobs, providers });
   const env = options.env ?? process.env;
-  const runs = createRunController({ store, jobs, executeJob, quotes: createQuoteChecker(), people: createLivePeopleLookup(env), transcriber: { sim: { async status() { return { configured: true, detail: "Simulated transcription is ready." }; }, async transcribe() { throw new Error("Simulated transcription requires a simulated recording."); } }, live: createLiveTranscriber(env) }, media: createMediaFetcher({ env }), dataDir: options.dataDir, sources: { sim: simSources, live: liveSources }, repos: { sim: simRepos, live: liveRepos }, web, defaultPools, simWorld: world, fundName: options.fundName ?? "the fund", now: options.now, logger: options.logger });
+  const runs = createRunController({ store, jobs, executeJob, quotes: createQuoteChecker(), people: createLivePeopleLookup(env), xPosts: createLiveXPostReader(env), transcriber: { sim: { async status() { return { configured: true, detail: "Simulated transcription is ready." }; }, async transcribe() { throw new Error("Simulated transcription requires a simulated recording."); } }, live: createLiveTranscriber(env) }, media: createMediaFetcher({ env }), dataDir: options.dataDir, sources: { sim: simSources, live: liveSources }, repos: { sim: simRepos, live: liveRepos }, web, xReady: () => providers.get("xai-api").status().then((status) => status.configured, () => false), defaultPools, simWorld: world, fundName: options.fundName ?? "the fund", now: options.now, logger: options.logger });
   const evals = createEvalService({
     store,
     jobs,

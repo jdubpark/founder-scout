@@ -289,6 +289,11 @@ function inputFor(id: ModelJobId): AnyInput {
     } as AnyInput;
   }
   if (id === "hunt.search") return { query: "developer infrastructure", limit: 10 } as AnyInput;
+  if (id === "hunt.xsearch") return { query: "developer infrastructure", limit: 10, fromDate: "2026-11-06", toDate: "2026-11-14", maxFollowers: 25000 } as AnyInput;
+  if (id === "investigate.x") {
+    return { founder, thesis, known: knownEvidence, depth: "standard", gaps: [], handle: "ada_builds", fromDate: "2026-08-15", media: true } as AnyInput;
+  }
+  if (id === "verify.x") return { founder, evidence: knownEvidence } as VerifyInput;
   if (id === "hunt.look") {
     return {
       thesis,
@@ -493,7 +498,8 @@ describe("job registry and prompt contracts", () => {
     expect(definition.outputSchema.safeParse(output).success).toBe(true);
     expect(definition.summarizeInput(input)).not.toBe("");
     expect(definition.summarizeOutput(output)).not.toBe("");
-    if (id === "hunt.search") expect(definition.countItems(output)).toBe(0);
+    // Searching the web and reading X have no simulated stand-in: they return nothing.
+    if (id === "hunt.search" || id === "hunt.xsearch" || id === "investigate.x" || id === "verify.x") expect(definition.countItems(output)).toBe(0);
     else expect(definition.countItems(output)).toBeGreaterThanOrEqual(1);
   });
 
@@ -1546,6 +1552,10 @@ describe("job executor", () => {
     await expect(execute("investigate.background", inputFor("investigate.background") as InvestigateInput, context({
       route: { provider: "codex-cli", model: "gpt-6-luna", effort: "medium" },
     }), { brain: "live" })).rejects.toMatchObject<Partial<ProviderError>>({ kind: "unsupported" });
+    // A provider that can research still cannot read X: it would answer from memory.
+    await expect(execute("investigate.x", inputFor("investigate.x") as never, context({
+      route: { provider: "claude-cli", model: "claude-haiku-5-5", effort: "medium" },
+    }), { brain: "live" })).rejects.toMatchObject<Partial<ProviderError>>({ kind: "unsupported", message: expect.stringContaining("Only the xAI API can read X") });
   });
 
   it("loads reviewed skills and places only a host-matched note before learned guidance", async () => {

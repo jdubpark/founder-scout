@@ -43,6 +43,8 @@ import {
   normalizeCompanyName,
   normalizeRoundLabel,
   stageLabel,
+  X_POST_REMOVED,
+  xPostId,
 } from "@agentswarm/shared";
 import type { CompanyListDTO, CompanyQuery, CompanyRow } from "@agentswarm/shared";
 import type { NodeStatRow, Store } from "../contracts";
@@ -95,6 +97,14 @@ function comparableNetworkValue(value: string | null): string {
 
 function rowRecords<T>(rows: readonly RecordRow[]): T[] {
   return rows.map((row) => JSON.parse(row.record) as T);
+}
+
+/**
+ * The posts a text names, by either spelling of the path. The host is not looked at: an id
+ * this long names one post, and a mirror of that post on another host carries the same words.
+ */
+function postIdsInText(text: string): Set<string> {
+  return new Set([...text.matchAll(/\/status(?:es)?\/(\d{1,25})(?!\d)/g)].map((match) => match[1]!));
 }
 
 function updateRecord<T extends { id: string }>(
@@ -852,6 +862,102 @@ export class SqliteStore implements Store {
     if (!row) return;
     const evidence = { ...JSON.parse(row.record) as Evidence, quote };
     this.db.prepare("UPDATE evidence SET record = ? WHERE id = ?").run(serialize(evidence), evidenceId);
+  }
+
+  updateEvidence(evidenceId: string, patch: Partial<Pick<Evidence, "title" | "excerpt" | "claim" | "publishedAt">>): void {
+    const row = this.db.prepare("SELECT record FROM evidence WHERE id = ?").get(evidenceId) as RecordRow | undefined;
+    if (!row) return;
+    const evidence = { ...JSON.parse(row.record) as Evidence, ...patch };
+    this.db.prepare("UPDATE evidence SET record = ? WHERE id = ?").run(serialize(evidence), evidenceId);
+  }
+
+  forgetXPosts(postIds: readonly string[]): { founderIds: string[] } {
+    const ids = new Set(postIds.filter((id) => typeof id === "string" && /^\d{1,25}$/.test(id)));
+    if (ids.size === 0) return { founderIds: [] };
+
+    return this.transaction(() => {
+      const founderIds = new Set<string>();
+      const evidenceRows = this.db.prepare("SELECT id, record FROM evidence WHERE record LIKE '%/status%'").all() as Array<{ id: string; record: string }>;
+      const updateEvidence = this.db.prepare("UPDATE evidence SET verification = ?, record = ? WHERE id = ?");
+      for (const row of evidenceRows) {
+        const evidence = JSON.parse(row.record) as Evidence;
+        const postId = evidence.source === "x" ? xPostId(evidence.url) : null;
+        if (!postId || !ids.has(postId) || evidence.title === X_POST_REMOVED.title) continue;
+        const updated: Evidence = {
+          ...evidence,
+          title: X_POST_REMOVED.title,
+          excerpt: X_POST_REMOVED.excerpt,
+          claim: X_POST_REMOVED.claim,
+          quote: "not_found",
+          verification: "unsupported",
+          verificationNote: X_POST_REMOVED.note,
+        };
+        updateEvidence.run(updated.verification, serialize(updated), row.id);
+        founderIds.add(updated.founderId);
+      }
+
+      const leadRows = this.db.prepare("SELECT id, record FROM leads WHERE record LIKE '%/status%'").all() as Array<{ id: string; record: string }>;
+      const updateLead = this.db.prepare("UPDATE leads SET record = ? WHERE id = ?");
+      for (const row of leadRows) {
+        const lead = JSON.parse(row.record) as Lead;
+        const postId = lead.source === "x" ? xPostId(lead.sourceRef) : null;
+        if (!postId || !ids.has(postId)) continue;
+        // The stage answers carry the page's words too, and what they scored goes with them.
+        updateLead.run(serialize({
+          ...lead,
+          sourceTitle: X_POST_REMOVED.title,
+          quote: null,
+          oneLiner: null,
+          why: X_POST_REMOVED.note,
+          stage: null,
+          earliness: null,
+        }), row.id);
+      }
+
+      const frontierRows = this.db.prepare("SELECT id, state, record FROM hunt_frontier WHERE record LIKE '%/status%'").all() as Array<{
+        id: string;
+        state: FrontierItem["state"];
+        record: string;
+      }>;
+      const updateFrontier = this.db.prepare("UPDATE hunt_frontier SET state = ?, record = ? WHERE id = ?");
+      for (const row of frontierRows) {
+        const item = JSON.parse(row.record) as FrontierItem;
+        const postId = item.held ? xPostId(item.target) : null;
+        if (!postId || !ids.has(postId)) continue;
+        const state = row.state === "queued" ? "skipped" : row.state;
+        updateFrontier.run(state, serialize({ ...item, held: null, state }), row.id);
+      }
+
+      const wanted = (text: string): boolean => [...postIdsInText(text)].some((id) => ids.has(id));
+      const taskRecords = this.db.prepare("SELECT id, record FROM tasks WHERE record LIKE '%/status%'")
+        .all() as Array<{ id: string; record: string }>;
+      const taskById = new Map<string, string>();
+      const affectedTasks = new Set<string>();
+      for (const row of taskRecords) {
+        taskById.set(row.id, row.record);
+        if (wanted(row.record)) affectedTasks.add(row.id);
+      }
+      const traceRows = this.db.prepare("SELECT task_id, trace FROM task_traces WHERE trace LIKE '%/status%'")
+        .all() as Array<{ task_id: string; trace: string }>;
+      for (const row of traceRows) {
+        if (wanted(row.trace)) affectedTasks.add(row.task_id);
+      }
+
+      const readTask = this.db.prepare("SELECT record FROM tasks WHERE id = ?");
+      const updateTask = this.db.prepare("UPDATE tasks SET output_summary = ?, record = ? WHERE id = ?");
+      const removeTrace = this.db.prepare("DELETE FROM task_traces WHERE task_id = ?");
+      const taskSummary = "Removed: it carried a post that is no longer on X.";
+      for (const id of affectedTasks) {
+        const record = taskById.get(id) ?? (readTask.get(id) as RecordRow | undefined)?.record;
+        if (!record) continue;
+        const task = JSON.parse(record) as Omit<TaskRun, "trace">;
+        const error = typeof task.error === "string" && wanted(task.error) ? taskSummary : task.error;
+        updateTask.run(taskSummary, serialize({ ...task, output: null, outputSummary: taskSummary, error }), id);
+        removeTrace.run(id);
+      }
+
+      return { founderIds: [...founderIds].sort() };
+    });
   }
 
   insertAssessment(assessment: Assessment): void {

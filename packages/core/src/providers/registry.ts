@@ -11,6 +11,7 @@ import { ClaudeCliProvider } from "./claude-cli";
 import { CodexCliProvider } from "./codex-cli";
 import { OpenAICompatibleProvider } from "./openai-compatible";
 import { OpenCodeCliProvider } from "./opencode-cli";
+import { createXaiProvider } from "./xai-api";
 
 /**
  * Simulation is handled before any provider is reached, so asking for it
@@ -39,6 +40,7 @@ export function createProviderRegistry(env: NodeJS.ProcessEnv = process.env): Pr
     ["openai-api", new OpenAICompatibleProvider("openai-api", { env })],
     ["deepseek-api", new OpenAICompatibleProvider("deepseek-api", { env })],
     ["meta-api", new OpenAICompatibleProvider("meta-api", { env })],
+    ["xai-api", createXaiProvider({ env })],
   ]);
 
   const get = (id: ProviderId): ModelProvider => {

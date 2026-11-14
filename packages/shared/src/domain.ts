@@ -192,6 +192,8 @@ export type EvidenceKind =
   | "launch"
   | "talk"
   | "interview"
+  /** Words said or shown in a video attached to a post, as a model reported them. Code cannot check them. */
+  | "video"
   | "article"
   | "funding"
   | "reference"

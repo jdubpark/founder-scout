@@ -14,7 +14,6 @@ import {
   stableId,
   stringParam,
 } from "@agentswarm/shared";
-import { createRng, hashSeed } from "../sim";
 import type {
   Agent,
   AssessInput,
@@ -41,15 +40,14 @@ import type {
   ScreenInput,
   SourceId,
   StageId,
-  VerifyInput,
 } from "@agentswarm/shared";
-import { plantControl } from "../jobs";
 import type { PersonRecord } from "../contracts";
 import { runCompanyAssess, runCompanyResearch, runCompanyResolve } from "./company-stages";
 import { forEachConcurrent, type EngineRuntime } from "./runtime";
 import { runHunt } from "./hunt";
 import { normalizeLink, normalizeName } from "../db";
 import { redactSensitive } from "../jobs";
+import { runVerifyX, runXRead, verifyEvidenceBatch } from "./x-stage";
 
 const SCOUT_JOBS = [
   "scout.hackernews",
@@ -133,7 +131,7 @@ export function hashEvidence(source: SourceId, url: string | null, excerpt: stri
   return createHash("sha256").update(content).digest("hex");
 }
 
-function addEvidence(
+export function addEvidence(
   runtime: EngineRuntime,
   founderId: string,
   taskId: string,
@@ -675,7 +673,7 @@ function latestFeedback(runtime: EngineRuntime): Map<string, Feedback> {
   return latestCalls(runtime.deps.store.allFeedback(runtime.swarm.id));
 }
 
-function noCall(founderId: string, calls: ReadonlyMap<string, Feedback>): boolean {
+export function noCall(founderId: string, calls: ReadonlyMap<string, Feedback>): boolean {
   return calls.get(founderId)?.verdict === "no";
 }
 
@@ -744,7 +742,26 @@ async function enrichFromVendor(runtime: EngineRuntime, founder: Founder): Promi
   }
 }
 
-async function runInvestigate(runtime: EngineRuntime, assessmentCandidates: Set<string>): Promise<void> {
+export function openInvestigationGaps(runtime: EngineRuntime, founderId: string): GapQuestion[] {
+  const previousAssessment = runtime.deps.store.latestAssessment(founderId);
+  if (!previousAssessment) return [];
+  const previousJudgments = new Map(previousAssessment.judgments.map((judgment) => [judgment.dimension, judgment]));
+  return DIMENSIONS.flatMap((dimension) => {
+    const judgment = previousJudgments.get(dimension.id);
+    return judgment && (judgment.level === null || judgment.confidence < 0.5)
+      ? [{ dimension: dimension.id, label: dimension.label, question: dimension.question }]
+      : [];
+  });
+}
+
+function investigateDepth(runtime: EngineRuntime, founder: Founder, agent: Agent): InvestigateInput["depth"] {
+  const history = runtime.deps.store.assessmentHistory(founder.id);
+  return founder.status === "needs_evidence" && history.length === 1
+    ? "deep"
+    : stringParam("investigate.depth", runtime.resolve(agent, "investigate.depth"), runtime.config) as InvestigateInput["depth"];
+}
+
+async function runInvestigate(runtime: EngineRuntime, assessmentCandidates: Set<string>): Promise<string[]> {
   runtime.setStage("investigate");
   const limit = numberParam("investigate.max_founders", runtime.resolve(null, "investigate.max_founders"), runtime.config);
   const candidates = recheckCandidates(runtime, Math.max(0, limit));
@@ -763,26 +780,13 @@ async function runInvestigate(runtime: EngineRuntime, assessmentCandidates: Set<
     if (runtime.stopped()) return;
     const current = runtime.deps.store.getFounder(founder.id);
     if (!current) return;
-    const history = runtime.deps.store.assessmentHistory(current.id);
-    const previousAssessment = runtime.deps.store.latestAssessment(current.id);
-    const previousJudgments = new Map(previousAssessment?.judgments.map((judgment) => [judgment.dimension, judgment]));
-    const gaps: GapQuestion[] = previousAssessment
-      ? DIMENSIONS.flatMap((dimension) => {
-          const judgment = previousJudgments.get(dimension.id);
-          return judgment && (judgment.level === null || judgment.confidence < 0.5)
-            ? [{ dimension: dimension.id, label: dimension.label, question: dimension.question }]
-            : [];
-        })
-      : [];
-    const depthFor = (agent: Agent): InvestigateInput["depth"] => current.status === "needs_evidence" && history.length === 1
-      ? "deep"
-      : stringParam("investigate.depth", runtime.resolve(agent, "investigate.depth"), runtime.config) as InvestigateInput["depth"];
+    const gaps = openInvestigationGaps(runtime, current.id);
     await enrichFromVendor(runtime, current);
     const known = allEvidenceBriefs(runtime, current.id);
     const work = await Promise.all(agents.map(async (agent) => {
       if (runtime.stopped() || noCall(founder.id, latestFeedback(runtime))) return null;
       const jobId = agent.jobId as InvestigatorJobId;
-      const depth = depthFor(agent);
+      const depth = investigateDepth(runtime, current, agent);
       if (agent.status === "paused" || !getJob(jobId).enabled) {
         const result = await runtime.runJob({
           agent,
@@ -908,6 +912,7 @@ async function runInvestigate(runtime: EngineRuntime, assessmentCandidates: Set<
       runtime.addStats({ investigated: 1 });
     }
   });
+  return selected.map((founder) => founder.id);
 }
 
 async function runMedia(runtime: EngineRuntime, assessmentCandidates: Set<string>): Promise<void> {
@@ -994,106 +999,58 @@ async function runMedia(runtime: EngineRuntime, assessmentCandidates: Set<string
 async function runVerify(runtime: EngineRuntime, assessmentCandidates: Set<string>): Promise<void> {
   runtime.setStage("verify");
   const agent = runtime.agents.find((candidate) => candidate.jobId === "verify.claims");
-  if (!agent) return;
   const founders = runtime.deps.store.listFounders({ swarmId: runtime.swarm.id })
     .sort((a, b) => a.firstSeenAt.localeCompare(b.firstSeenAt) || a.id.localeCompare(b.id));
-  const quoteCheckEnabled = booleanParam("verify.quote_check", runtime.resolve(agent, "verify.quote_check"), runtime.config);
-  const controlEnabled = booleanParam("verify.control", runtime.resolve(agent, "verify.control"), runtime.config);
+  if (agent) {
+    const quoteCheckEnabled = booleanParam("verify.quote_check", runtime.resolve(agent, "verify.quote_check"), runtime.config);
+    await forEachConcurrent(founders, runtime.concurrency, runtime.stopped, async (founder) => {
+      if (runtime.stopped()) return;
+      let evidence = runtime.deps.store.listEvidence(founder.id, { verifications: ["unverified"] })
+        .filter((item) => item.source !== "x")
+        .filter((item) => item.kind !== "call_transcript" || item.url?.includes("#t=") === true);
+      if (evidence.length === 0) return;
 
-  await forEachConcurrent(founders, runtime.concurrency, runtime.stopped, async (founder) => {
-    if (runtime.stopped()) return;
-    let evidence = runtime.deps.store.listEvidence(founder.id, { verifications: ["unverified"] })
-      .filter((item) => item.kind !== "call_transcript" || item.url?.includes("#t=") === true);
-    if (evidence.length === 0) return;
-
-    if (runtime.deps.quotes && runtime.run.sources === "live" && quoteCheckEnabled) {
-      const eligible = evidence.filter((item) => {
-        if (item.source !== "web" || item.kind === "code_review" || !item.url || item.url.includes("#t=")) return false;
-        try {
-          const protocol = new URL(item.url).protocol;
-          return protocol === "http:" || protocol === "https:";
-        } catch {
-          return false;
+      if (runtime.deps.quotes && runtime.run.sources === "live" && quoteCheckEnabled) {
+        const eligible = evidence.filter((item) => {
+          if (item.source !== "web" || item.kind === "code_review" || !item.url || item.url.includes("#t=")) return false;
+          try {
+            const protocol = new URL(item.url).protocol;
+            return protocol === "http:" || protocol === "https:";
+          } catch {
+            return false;
+          }
+        });
+        let rejectedByQuote = 0;
+        await forEachConcurrent(eligible, Math.min(runtime.concurrency, 3), runtime.stopped, async (item) => {
+          if (runtime.stopped()) return;
+          let status: "found" | "not_found" | "unreachable";
+          try {
+            ({ status } = await runtime.deps.quotes!.check(item.url!, item.excerpt, runtime.signal));
+          } catch {
+            status = "unreachable";
+          }
+          runtime.deps.store.setQuote(item.id, status);
+          item.quote = status;
+          if (status === "not_found") {
+            runtime.deps.store.setVerification(item.id, "unsupported", "The quoted words are not on the page it cites.");
+            rejectedByQuote += 1;
+          }
+        });
+        if (rejectedByQuote > 0) {
+          runtime.addStats({ evidenceRejected: rejectedByQuote, quotesRejected: rejectedByQuote });
+          assessmentCandidates.add(founder.id);
         }
-      });
-      let rejectedByQuote = 0;
-      await forEachConcurrent(eligible, Math.min(runtime.concurrency, 3), runtime.stopped, async (item) => {
-        if (runtime.stopped()) return;
-        let status: "found" | "not_found" | "unreachable";
-        try {
-          ({ status } = await runtime.deps.quotes!.check(item.url!, item.excerpt, runtime.signal));
-        } catch {
-          status = "unreachable";
-        }
-        runtime.deps.store.setQuote(item.id, status);
-        item.quote = status;
-        if (status === "not_found") {
-          runtime.deps.store.setVerification(item.id, "unsupported", "The quoted words are not on the page it cites.");
-          rejectedByQuote += 1;
-        }
-      });
-      if (rejectedByQuote > 0) {
-        runtime.addStats({ evidenceRejected: rejectedByQuote, quotesRejected: rejectedByQuote });
-        assessmentCandidates.add(founder.id);
+        evidence = evidence.filter((item) => item.quote !== "not_found");
       }
-      evidence = evidence.filter((item) => item.quote !== "not_found");
-    }
-    if (evidence.length === 0 || runtime.stopped()) return;
-
-    const batchBriefs = evidence.map(evidenceBrief);
-    let controlId: string | null = null;
-    if (controlEnabled) {
-      const rng = createRng(hashSeed(runtime.run.id, agent.id, founder.id, 1));
-      const control = plantControl(batchBriefs, rng, `${runtime.run.id}:${founder.id}`);
-      if (control) {
-        const insertAt = Math.floor(rng() * (batchBriefs.length + 1));
-        controlId = control.id;
-        batchBriefs.splice(insertAt, 0, control.brief);
-      }
-    }
-
-    const input: VerifyInput = { founder: founderBrief(runtime, founder), evidence: batchBriefs };
-    const result = await runtime.runJob({ agent, stage: "verify", jobId: "verify.claims", input, founderId: founder.id });
-    if (!result || result.task.status !== "succeeded" || !result.output) return;
-
-    const controlVerdict = controlId
-      ? result.output.verdicts.find((verdict) => verdict.evidenceId === controlId)?.verdict
-      : undefined;
-    const controlFailed = controlId !== null && controlVerdict === "supported";
-    if (controlId !== null) {
-      const safeOutput = {
-        ...result.output,
-        verdicts: result.output.verdicts.filter((verdict) => verdict.evidenceId !== controlId),
-      };
-      runtime.deps.store.updateTask(result.task.id, {
-        control: controlFailed ? "failed" : "passed",
-        output: safeOutput,
-        outputSummary: runtime.deps.jobs.get("verify.claims").summarizeOutput(safeOutput),
+      if (evidence.length === 0 || runtime.stopped()) return;
+      await verifyEvidenceBatch(runtime, founder, agent, "verify.claims", evidence, assessmentCandidates, {
+        controlSeed: 1,
+        controlLabel: `${runtime.run.id}:${founder.id}`,
+        updateIdentityConfidence: true,
       });
-      if (controlFailed) runtime.addStats({ controlsFailed: 1 });
-    }
-    if (controlFailed) {
-      runtime.persist();
-      return;
-    }
-
-    const evidenceIds = new Set(evidence.map((item) => item.id));
-    const verdicts = new Map(result.output.verdicts
-      .filter((verdict) => evidenceIds.has(verdict.evidenceId))
-      .map((verdict) => [verdict.evidenceId, verdict] as const));
-    let rejected = 0;
-    for (const [evidenceId, verdict] of verdicts) {
-      runtime.deps.store.setVerification(evidenceId, verdict.verdict, verdict.note);
-      if (verdict.verdict !== "supported") rejected += 1;
-    }
-    runtime.deps.store.updateFounder(founder.id, {
-      identityConfidence: Math.min(1, Math.max(0, result.output.identityConfidence)),
-      updatedAt: runtime.now().toISOString(),
     });
-    if (rejected > 0) runtime.addStats({ evidenceRejected: rejected });
-    if (verdicts.size > 0) assessmentCandidates.add(founder.id);
-    runtime.persist();
-  });
+  }
+  await runVerifyX(runtime, assessmentCandidates);
 }
 
 function partnerNotes(runtime: EngineRuntime, founderId: string): string[] {
@@ -1233,7 +1190,7 @@ export async function runPipelineStages(runtime: EngineRuntime): Promise<void> {
   if (runtime.stopped()) return;
   await runScreen(runtime);
   if (runtime.stopped()) return;
-  await runInvestigate(runtime, assessmentCandidates);
+  const investigatedFounderIds = await runInvestigate(runtime, assessmentCandidates);
   if (runtime.stopped()) return;
   await runMedia(runtime, assessmentCandidates);
   if (runtime.stopped()) return;
@@ -1241,6 +1198,8 @@ export async function runPipelineStages(runtime: EngineRuntime): Promise<void> {
   // filed under a founder, so the fact-check below covers it with everything else.
   const companyCandidates = new Set<string>();
   await runCompanyResolve(runtime);
+  if (runtime.stopped()) return;
+  await runXRead(runtime, investigatedFounderIds, assessmentCandidates, companyCandidates);
   if (runtime.stopped()) return;
   await runCompanyResearch(runtime, companyCandidates);
   if (runtime.stopped()) return;

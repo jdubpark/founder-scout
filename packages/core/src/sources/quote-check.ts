@@ -4,7 +4,7 @@ import { request as httpRequest } from "node:http";
 import { request as httpsRequest } from "node:https";
 import { Readable } from "node:stream";
 import { createBrotliDecompress, createGunzip, createInflate } from "node:zlib";
-import { isNeverFetchHost, type QuoteStatus } from "@agentswarm/shared";
+import { isNeverFetchHost, quoteForm, quoteInText, type QuoteStatus } from "@agentswarm/shared";
 import type { QuoteChecker } from "../contracts";
 import { USER_AGENT, type FetchFn } from "./http";
 
@@ -121,17 +121,11 @@ export function createQuoteChecker(options: QuoteCheckOptions = {}): QuoteChecke
         const { text: body, truncated } = await readLimitedBody(response, maxBytes);
         throwIfAborted(callerSignal);
         const pageTexts = pageTextsForBody(contentType, body);
-        const pages = pageTexts.map(comparisonForm);
-        const readableLength = pages.reduce((total, text) => total + text.length, 0);
-        const fragments = excerpt
-          .split(/\.\.\.|…|\[\.\.\.\]/u)
-          .map(comparisonForm)
-          .filter((fragment) => fragment.split(" ").filter(Boolean).length >= 4);
+        const readableLength = pageTexts.reduce((total, text) => total + quoteForm(text).length, 0);
+        const match = quoteInText(pageTexts, excerpt);
 
-        if (fragments.length === 0) return unreachable("The quote is too short to check.");
-
-        const missing = fragments.filter((fragment) => !pages.some((page) => fragmentMatches(page, fragment))).length;
-        if (missing === 0) return { status: "found", detail: "The quoted text appears on the page." };
+        if (match.status === "too_short") return unreachable("The quote is too short to check.");
+        if (match.status === "found") return { status: "found", detail: "The quoted text appears on the page." };
         if (truncated) return unreachable("The page is too long to check in full.");
         if (partialStandInDetail) return unreachable(partialStandInDetail);
         if (readableLength < 1_500) {
@@ -139,7 +133,7 @@ export function createQuoteChecker(options: QuoteCheckOptions = {}): QuoteChecke
         }
         return {
           status: "not_found",
-          detail: `${missing} of ${fragments.length} quoted fragments were not found on the page.`,
+          detail: `${match.missing} of ${match.fragments} quoted fragments were not found on the page.`,
         };
       } catch (error) {
         if (callerSignal?.aborted) throw error;
@@ -432,14 +426,6 @@ function decodeEntities(text: string): string {
     }
     return String.fromCodePoint(codePoint);
   });
-}
-
-function comparisonForm(text: string): string {
-  return text.normalize("NFKC").toLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").trim();
-}
-
-function fragmentMatches(page: string, fragment: string): boolean {
-  return page.includes(fragment);
 }
 
 function unreachable(detail: string): CheckResult {

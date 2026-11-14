@@ -157,6 +157,29 @@ export const MODELS: readonly ModelInfo[] = [
     outputPerMTok: 20,
     cachedInputPerMTok: 0.2,
   },
+  // xAI. Prices read from docs.x.ai on 2026-11-13 (docs/research/grok-x-search.md). A call that
+  // searches X is also billed for each post and profile it fetches; the adapter reads the cost
+  // xAI reports for the call and falls back to these token prices only when none is reported.
+  {
+    id: "grok-4.7",
+    vendor: "xai",
+    label: "Grok 4.7",
+    tier: "large",
+    inputPerMTok: 2,
+    outputPerMTok: 6,
+    cachedInputPerMTok: 0.5,
+    note: "Price applies to prompts under 200K tokens. Searching X adds $5 per 1,000 posts fetched and $10 per 1,000 profiles.",
+  },
+  {
+    id: "grok-4.3",
+    vendor: "xai",
+    label: "Grok 4.3",
+    tier: "mid",
+    inputPerMTok: 1.25,
+    outputPerMTok: 2.5,
+    cachedInputPerMTok: 0.2,
+    note: "Price applies to prompts under 200K tokens. Searching X adds $5 per 1,000 posts fetched and $10 per 1,000 profiles.",
+  },
 ];
 
 const MODEL_BY_ID = new Map(MODELS.map((m) => [m.id, m]));
@@ -214,6 +237,7 @@ export const DEFAULT_MODEL_BY_PROVIDER: Record<ProviderId, string> = {
   "openai-api": "gpt-6.1-sol",
   "deepseek-api": "deepseek-flash",
   "meta-api": "muse-spark-1.3",
+  "xai-api": "grok-4.3",
 };
 
 const NOT_A_MODEL_JOB: ModelRoute = { provider: "sim", model: "none" };
@@ -236,6 +260,8 @@ export const DEFAULT_ROUTES: Record<JobId, ModelRoute> = {
   // The navigator plans over days: the strongest judgment model, on a login that needs no key.
   "hunt.navigate": { provider: "claude-cli", model: "claude-opus-5-5", effort: "high" },
   "hunt.search": { provider: "claude-cli", model: "claude-haiku-5-5", effort: "low" },
+  // Only xAI's API can search X. A sweep for new posts is wide and shallow: the cheaper model.
+  "hunt.xsearch": { provider: "xai-api", model: "grok-4.3", effort: "low" },
   // Runners are tools: the smallest capable model. This route is what runs with no key set;
   // RUNNER_POOL below is what runs once a DeepSeek or Meta key is there.
   "hunt.look": { provider: "claude-cli", model: "claude-haiku-5-5", effort: "low" },
@@ -247,11 +273,16 @@ export const DEFAULT_ROUTES: Record<JobId, ModelRoute> = {
   "investigate.company": { provider: "claude-cli", model: "claude-sonnet-5-5", effort: "medium" },
   "investigate.media": { provider: "claude-cli", model: "claude-sonnet-5-5", effort: "medium" },
   "media.read": { provider: "claude-cli", model: "claude-sonnet-5-5", effort: "medium" },
+  // Reading one founder's account, video included, is the stronger model's work.
+  "investigate.x": { provider: "xai-api", model: "grok-4.7", effort: "medium" },
   "investigate.redflags": { provider: "claude-cli", model: "claude-sonnet-5-5", effort: "medium" },
   "company.product": { provider: "claude-cli", model: "claude-sonnet-5-5", effort: "medium" },
   "company.traction": { provider: "claude-cli", model: "claude-sonnet-5-5", effort: "medium" },
   "company.team": { provider: "claude-cli", model: "claude-sonnet-5-5", effort: "medium" },
   "verify.claims": { provider: "codex-cli", model: "gpt-6.1-sol", effort: "medium" },
+  // No other vendor can read X, so the check is a second xAI call on a different model from the
+  // one that collected. The planted false claim is what tells whether it looked.
+  "verify.x": { provider: "xai-api", model: "grok-4.3", effort: "medium" },
   "assess.judgments": { provider: "claude-cli", model: "claude-opus-5-5", effort: "high" },
   "assess.memo": { provider: "claude-cli", model: "claude-opus-5-5", effort: "high" },
   "assess.company": { provider: "claude-cli", model: "claude-opus-5-5", effort: "high" },

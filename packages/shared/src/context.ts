@@ -92,6 +92,8 @@ export const JOB_INPUT_POOLS: InputPools = {
   // labels of a few words that runners wrote.
   "hunt.navigate": { thesis: "objective", brief: "steering", turn: "hunt", trails: "hunt", notes: "hunt", lastWave: "hunt", budget: "steering" },
   "hunt.search": { query: "hunt", limit: "steering" },
+  // The words of the search are the navigator's. The window and the size ceiling are settings.
+  "hunt.xsearch": { query: "hunt", limit: "steering", fromDate: "steering", toDate: "steering", maxFollowers: "steering" },
   "hunt.look": { ...RUNNER, page: "sources" },
   "hunt.sift": { ...RUNNER, query: "hunt", hits: "sources" },
   "screen.fit": { founder: "lead", thesis: "objective" },
@@ -100,11 +102,14 @@ export const JOB_INPUT_POOLS: InputPools = {
   "investigate.company": INVESTIGATE,
   "investigate.media": INVESTIGATE,
   "media.read": { founder: "founder", title: "sources", kind: "sources", stretch: "sources" },
+  // The account to read is the founder's own profile link, or one a supported post already named.
+  "investigate.x": { founder: "founder", thesis: "objective", known: "founder", depth: "steering", gaps: "questions", handle: "founder", fromDate: "steering", media: "steering" },
   "investigate.redflags": INVESTIGATE,
   "company.product": COMPANY_RESEARCH,
   "company.traction": COMPANY_RESEARCH,
   "company.team": COMPANY_RESEARCH,
   "verify.claims": { founder: "founder", evidence: ["founder", "company"] },
+  "verify.x": { founder: "founder", evidence: ["founder", "company"] },
   "assess.judgments": { founder: "founder", thesis: "objective", evidence: "founder", partnerNotes: "calls" },
   "assess.memo": { founder: "founder", thesis: "objective", evidence: "founder", judgments: "founder", summary: "founder", score: "decision" },
   "assess.company": { company: "company", thesis: "objective", evidence: "company", partnerNotes: "calls" },

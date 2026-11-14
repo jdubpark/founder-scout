@@ -348,6 +348,7 @@ export function createRunController(deps: EngineDeps): RunController {
           let totalLatency = 0;
           const traces: NonNullable<TaskRun["trace"]> = [];
           let finalOutput: JobOutput<J> | null = null;
+          let finalCited: readonly string[] | undefined;
           let finalPromptHash: string | null = null;
           let finalSkills: string[] = [];
           let finalError: unknown = null;
@@ -394,6 +395,7 @@ export function createRunController(deps: EngineDeps): RunController {
                 repair: repairMessage,
               });
               finalOutput = execution.output;
+              finalCited = execution.cited;
               finalPromptHash = execution.promptHash ?? null;
               finalSkills = execution.skills ?? finalSkills;
               totalUsage = addUsage(totalUsage, execution.usage);
@@ -470,7 +472,7 @@ export function createRunController(deps: EngineDeps): RunController {
           const updated = deps.store.getTask(steeringTask.id, { withTrace: true }) ?? { ...steeringTask, ...patch };
           if (!succeeded) stats.failures += 1;
           persist();
-          return { task: updated, output: finalOutput };
+          return { task: updated, output: finalOutput, cited: finalCited };
         } finally {
           release();
         }

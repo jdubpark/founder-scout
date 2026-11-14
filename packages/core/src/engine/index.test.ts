@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   BASE_CONFIG,
   DEFAULT_SETTINGS,
@@ -29,6 +29,7 @@ import {
   type TaskRun,
   type Thesis,
   type Usage,
+  type VerifyInput,
 } from "@agentswarm/shared";
 import { createExecuteJob, createJobRegistry } from "../jobs";
 import { openStore } from "../db";
@@ -243,6 +244,7 @@ interface HarnessOptions {
   providerError?: () => never;
   wrapExecuteJob?: (delegate: ExecuteJob) => ExecuteJob;
   transcriber?: EngineDeps["transcriber"];
+  xReady?: EngineDeps["xReady"];
 }
 
 function makeHarness(options: HarnessOptions = {}) {
@@ -285,6 +287,7 @@ function makeHarness(options: HarnessOptions = {}) {
     quotes: options.quotes,
     people: options.people,
     transcriber: options.transcriber,
+    xReady: options.xReady,
     fundName: "Northstar Ventures",
     now: () => new Date(NOW),
     sleep: async () => undefined,
@@ -1868,6 +1871,101 @@ describe("run engine", () => {
     expect(ids.has("evd_person_supported")).toBe(true);
     expect(ids.has("evd_company_fact")).toBe(false);
     expect(ids.has("evd_raw_transcript")).toBe(false);
+  });
+
+  it("keeps X evidence out of verify.claims and discards X verdicts when its planted control is accepted", async () => {
+    const world = createSimWorld({ seed: 997, founders: 2, days: 2 });
+    const runCase = async (ready: (() => Promise<boolean>) | undefined, identityXOnly = false, cited: string[] = [], quoteFound = false) => {
+      const claimsInputs: VerifyInput[] = [];
+      const xInputs: VerifyInput[] = [];
+      const xReady = ready ?? vi.fn(async () => false);
+      const harness = makeHarness({
+        simWorld: world,
+        agentJobs: ["verify.claims", "verify.x"],
+        xReady: ready ? xReady : undefined,
+        wrapExecuteJob: (delegate) => async <J extends ModelJobId>(jobId: J, input: JobInput<J>, context: JobContext, options: Parameters<ExecuteJob>[3]) => {
+          if (jobId !== "verify.claims" && jobId !== "verify.x") return delegate(jobId, input, context, { ...options, brain: "sim" });
+          const execution = await delegate(jobId, input, context, { ...options, brain: "sim" });
+          const batch = input as VerifyInput;
+          if (jobId === "verify.claims") claimsInputs.push(batch);
+          else xInputs.push(batch);
+          const suppliedIds = new Set(batch.evidence.map((item) => item.id));
+          const targetId = jobId === "verify.claims"
+            ? "evd_web_x_contract"
+            : identityXOnly ? "evd_post_x_identity_contract" : "evd_post_x_contract";
+          const verdicts = batch.evidence.map((item) => ({
+            evidenceId: item.id,
+            verdict: jobId === "verify.x"
+              ? item.id === targetId
+                ? identityXOnly ? "supported" as const : "unsupported" as const
+                : identityXOnly ? "unsupported" as const : "supported" as const
+              : item.id === targetId ? "supported" as const : "unsupported" as const,
+            note: "fixture verdict",
+          })).filter((verdict) => suppliedIds.has(verdict.evidenceId));
+          return {
+            ...execution,
+            ...(jobId === "verify.x" ? { cited } : {}),
+            output: {
+              identityConfidence: jobId === "verify.claims" ? 0.55 : 0.99,
+              verdicts,
+            } as JobOutput<J>,
+          };
+        },
+      });
+      const founder = makeFounder(world.founders()[0]!, `fnd_x_contract_${ready ? "ready" : "missing"}`, {
+        status: "queued",
+        simId: null,
+        identityConfidence: 0.71,
+      });
+      harness.store.insertFounder(founder);
+      if (!identityXOnly) harness.store.insertEvidence(makeUnverifiedEvidence("evd_web_x_contract", founder.id));
+      harness.store.insertEvidence(makeUnverifiedEvidence(identityXOnly ? "evd_post_x_identity_contract" : "evd_post_x_contract", founder.id, {
+        kind: "post",
+        source: "x",
+        url: "https://x.com/ari_founder/status/1234567890123",
+        ...(quoteFound ? { quote: "found" as const } : {}),
+      }));
+      const started = await harness.controller.start({ swarmId: SWARM_ID, trigger: "manual", brain: "sim", sources: "live" });
+      const run = await harness.controller.wait(started.id);
+      return { harness, founder, claimsInputs, xInputs, run, xReady };
+    };
+
+    const ready = vi.fn(async () => true);
+    const connected = await runCase(ready);
+    expect(connected.run.status, connected.run.error ?? "").toBe("succeeded");
+    expect(ready).toHaveBeenCalledTimes(1);
+    expect(connected.claimsInputs).toHaveLength(1);
+    expect(connected.claimsInputs[0]?.evidence.map((item) => item.id)).toContain("evd_web_x_contract");
+    expect(connected.claimsInputs[0]?.evidence.map((item) => item.id)).not.toContain("evd_post_x_contract");
+    expect(connected.xInputs).toHaveLength(1);
+    expect(connected.xInputs[0]?.evidence.map((item) => item.id)).toContain("evd_post_x_contract");
+    expect(connected.xInputs[0]?.evidence).toHaveLength(2);
+    expect(connected.harness.store.listEvidence(connected.founder.id).find((item) => item.id === "evd_post_x_contract")?.verification).toBe("unverified");
+    expect(connected.harness.store.getFounder(connected.founder.id)?.identityConfidence).toBe(0.55);
+    expect(connected.run.stats.controlsFailed).toBe(1);
+
+    for (const readiness of [undefined, async () => false]) {
+      const unavailable = await runCase(readiness);
+      expect(unavailable.claimsInputs[0]?.evidence.map((item) => item.id)).toContain("evd_web_x_contract");
+      expect(unavailable.claimsInputs[0]?.evidence.map((item) => item.id)).not.toContain("evd_post_x_contract");
+      expect(unavailable.xInputs).toHaveLength(0);
+      expect(unavailable.harness.store.listEvidence(unavailable.founder.id).find((item) => item.id === "evd_post_x_contract")?.verification).toBe("unverified");
+    }
+
+    // "Supported" stands only when xAI's API lists the post among what this call fetched.
+    const identityReady = vi.fn(async () => true);
+    const xOnly = await runCase(identityReady, true, ["https://x.com/i/status/1234567890123"]);
+    expect(xOnly.claimsInputs).toHaveLength(0);
+    expect(xOnly.xInputs).toHaveLength(1);
+    expect(xOnly.harness.store.listEvidence(xOnly.founder.id).find((item) => item.id === "evd_post_x_identity_contract")?.verification).toBe("supported");
+    expect(xOnly.harness.store.getFounder(xOnly.founder.id)?.identityConfidence).toBe(0.71);
+    const notFetched = await runCase(vi.fn(async () => true), true, ["https://x.com/i/status/9999999999999"]);
+    expect(notFetched.xInputs).toHaveLength(1);
+    expect(notFetched.harness.store.listEvidence(notFetched.founder.id).find((item) => item.id === "evd_post_x_identity_contract")?.verification).toBe("unverified");
+
+    const quoteRead = await runCase(vi.fn(async () => true), true, [], true);
+    expect(quoteRead.xInputs).toHaveLength(1);
+    expect(quoteRead.harness.store.listEvidence(quoteRead.founder.id).find((item) => item.id === "evd_post_x_identity_contract")?.verification).toBe("supported");
   });
 
   it("plans outreach for the lead founder on a company Yes, unless that founder's latest call is No", async () => {

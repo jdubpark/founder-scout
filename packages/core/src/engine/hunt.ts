@@ -9,6 +9,7 @@ import {
   getJob,
   hostOf,
   isPlantedUrl,
+  nameOnPage,
   notesForRunner,
   numberParam,
   planWave,
@@ -23,6 +24,9 @@ import {
   stringParam,
   tooLate,
   trailDigest,
+  xHandleOf,
+  xPostId,
+  xPostUrl,
   type FrontierItem,
   type Hunt,
   type HuntCall,
@@ -39,9 +43,9 @@ import {
 } from "@agentswarm/shared";
 import type { Agent, Lead, ProfileLinks } from "@agentswarm/shared";
 import { normalizeName } from "../db";
-import { redactSensitive } from "../jobs/common";
-import type { PageRead, SearchEngine, SearchHit, Store } from "../contracts";
-import { forEachConcurrent, type EngineRuntime } from "./runtime";
+import { offLimitsOnX, redactSensitive } from "../jobs/common";
+import type { PageRead, SearchEngine, SearchHit, Store, XPost } from "../contracts";
+import { forEachConcurrent, type EngineRuntime, type TaskResult } from "./runtime";
 
 /** Pages of one live site read in one wave. The rest of that site's pages wait for a later wave. */
 const PAGES_PER_HOST_PER_WAVE = 3;
@@ -50,6 +54,70 @@ const PAGES_PER_HOST_PER_WAVE = 3;
 const SEARCH_RESULTS = 10;
 
 const ZERO_STATS: TrailStats = { searches: 0, pages: 0, leads: 0, kept: 0, dropped: 0, tooLate: 0, blocked: 0, costUsd: 0 };
+
+type XPostRead = XPost | "gone" | null;
+
+interface XPostReadState {
+  configured: Promise<boolean> | null;
+  outcomes: Map<string, XPostRead>;
+  pending: Map<string, Promise<XPostRead>>;
+}
+
+const xPostReads = new WeakMap<EngineRuntime, XPostReadState>();
+
+/** Share each paid X post read across the hunt and evidence checks in one run. */
+export async function readXPosts(runtime: EngineRuntime, ids: readonly string[]): Promise<{
+  posts: Map<string, XPost>;
+  gone: Set<string>;
+}> {
+  const empty = { posts: new Map<string, XPost>(), gone: new Set<string>() };
+  const reader = runtime.deps.xPosts;
+  if (runtime.run.sources !== "live" || runtime.stopped() || !reader || ids.length === 0) return empty;
+
+  let state = xPostReads.get(runtime);
+  if (!state) {
+    state = { configured: null, outcomes: new Map(), pending: new Map() };
+    xPostReads.set(runtime, state);
+  }
+  if (!state.configured) {
+    state.configured = reader.status().then((status) => status.configured).catch(() => false);
+  }
+  if (!(await state.configured) || runtime.stopped()) return empty;
+
+  const requested = [...new Set(ids)];
+  const missing = requested.filter((id) => !state!.outcomes.has(id) && !state!.pending.has(id));
+  if (missing.length > 0 && !runtime.stopped()) {
+    const batch = reader.read(missing, { signal: runtime.signal }).then((result) => {
+      const outcomes = new Map<string, XPostRead>();
+      for (const id of missing) {
+        outcomes.set(id, result.posts.get(id) ?? (result.gone.has(id) ? "gone" : null));
+      }
+      return outcomes;
+    }).catch(() => new Map(missing.map((id) => [id, null] as const)));
+    for (const id of missing) state.pending.set(id, batch.then((outcomes) => outcomes.get(id) ?? null));
+    const outcomes = await batch;
+    for (const id of missing) {
+      state.outcomes.set(id, outcomes.get(id) ?? null);
+      state.pending.delete(id);
+    }
+  }
+
+  if (runtime.stopped()) return empty;
+  await Promise.all(requested.map((id) => state!.pending.get(id)).filter((pending): pending is Promise<XPostRead> => Boolean(pending)));
+  const posts = new Map<string, XPost>();
+  const gone = new Set<string>();
+  for (const id of requested) {
+    const outcome = state.outcomes.get(id);
+    if (outcome === "gone") gone.add(id);
+    else if (outcome) posts.set(id, outcome);
+  }
+  return { posts, gone };
+}
+
+/** Removes post words from every stored record. Returns founders whose evidence changed. */
+export function forgetPosts(runtime: EngineRuntime, postIds: Iterable<string>): string[] {
+  return runtime.deps.store.forgetXPosts([...postIds]).founderIds;
+}
 
 /** What a change to the notebook needs: where it is kept, the time, and who is asking. */
 export interface NotebookWriter {
@@ -254,12 +322,16 @@ function enqueuePickedPages(
   depth: number,
   from: FrontierItem["from"],
   maxDepth = Number.POSITIVE_INFINITY,
+  heldPages?: readonly (FrontierItem["held"] | undefined)[],
 ): number {
   if (depth > maxDepth) return 0;
   const at = runtime.now().toISOString();
   const items: FrontierItem[] = [];
   for (const pick of picks) {
-    const target = cleanUrl(urls[pick.index] ?? "");
+    const rawUrl = urls[pick.index] ?? "";
+    const held = heldPages?.[pick.index] ?? undefined;
+    const postId = held ? xPostId(rawUrl) : null;
+    const target = postId ? xPostUrl(postId, xHandleOf(rawUrl)) : cleanUrl(rawUrl);
     if (!target) continue;
     items.push({
       id: stableId("frn", `${hunt.id}:${trail.id}:${from}:${target}:${depth}`),
@@ -275,6 +347,7 @@ function enqueuePickedPages(
       state: "queued",
       addedAt: at,
       runId: runtime.run.id,
+      ...(postId && held ? { held } : {}),
     });
   }
   return runtime.deps.store.addFrontier(items).length;
@@ -537,14 +610,14 @@ export async function runHunt(runtime: EngineRuntime, simIdsByLead: Map<string, 
     // and removing after would leave a wave empty while there was work to do.
     const setAside = new Set<string>();
     for (const item of queued) {
-      if (item.kind === "page" && pausedHosts.has(hostOf(item.target) ?? "")) setAside.add(item.id);
+      if (item.kind === "page" && !item.held && pausedHosts.has(hostOf(item.target) ?? "")) setAside.add(item.id);
     }
     let wave: FrontierItem[] = [];
     for (let pass = 0; pass < 6; pass += 1) {
       wave = planWave(currentTrails, queued.filter((item) => !setAside.has(item.id)), { size: waveSize, maxDepth, pagesPerSearch });
       const hostCounts = new Map<string, number>();
       const over = wave.filter((item) => {
-        if (item.kind !== "page") return false;
+        if (item.kind !== "page" || item.held) return false;
         const host = hostOf(item.target) ?? "";
         const count = hostCounts.get(host) ?? 0;
         hostCounts.set(host, count + 1);
@@ -609,6 +682,14 @@ export async function runHunt(runtime: EngineRuntime, simIdsByLead: Map<string, 
       if (item.kind === "search") {
         const engine = item.engine ? engineById.get(item.engine) : undefined;
         const engineStatus = engine ? engineStatuses.find((entry) => entry.engine.id === engine.id)?.status : null;
+        if (engine?.job === "hunt.xsearch" && !booleanParam("x.enabled", runtime.resolve(null, "x.enabled"), runtime.config)) {
+          runtime.deps.store.setFrontierState(item.id, "done", { at: runtime.now().toISOString(), runId: asker });
+          const latest = runtime.deps.store.getTrail(trail.id) ?? trailNow;
+          runtime.deps.store.saveTrail({ ...latest, stats: { ...latest.stats, searches: latest.stats.searches + 1, blocked: latest.stats.blocked + 1 } });
+          recordTrailCall(trail.id, "search", item.target, null, "blocked", "Reading X is turned off for this swarm.");
+          waveBlocked += 1;
+          return;
+        }
         if (!engine || !engineStatus?.configured) {
           runtime.deps.store.setFrontierState(item.id, "skipped");
           runtime.deps.store.saveTrail({ ...trailNow, stats: { ...trailNow.stats, searches: trailNow.stats.searches + 1, blocked: trailNow.stats.blocked + 1 } });
@@ -618,18 +699,45 @@ export async function runHunt(runtime: EngineRuntime, simIdsByLead: Map<string, 
         }
         let hits: SearchHit[];
         let searchTaskId: string | null = null;
+        let xFollowerCeiling: number | null = null;
         let searchTaskFields: Partial<Pick<HuntCall, "model" | "costUsd" | "latencyMs">> = {};
-        if (engine.job === "hunt.search") {
-          if (!searcher) {
+        if (engine.job) {
+          const jobAgent = runtime.agents.find((agent) => agent.jobId === engine.job);
+          if (!jobAgent) {
             runtime.deps.store.setFrontierState(item.id, "done", { at: runtime.now().toISOString(), runId: asker });
             const afterSearch = runtime.deps.store.getTrail(trail.id) ?? trailNow;
             runtime.deps.store.saveTrail({ ...afterSearch, stats: { ...afterSearch.stats, searches: afterSearch.stats.searches + 1, blocked: afterSearch.stats.blocked + 1 } });
-            recordTrailCall(trail.id, "search", item.target, null, "blocked", "The web search job is unavailable.");
+            recordTrailCall(trail.id, "search", item.target, null, "blocked", engine.job === "hunt.search"
+              ? "The web search job is unavailable."
+              : "The X search job is unavailable.");
             waveBlocked += 1;
             return;
           }
-          const searched = await withinBudget("search", (allowance) =>
-            runtime.runJob({ agent: searcher, stage: "hunt", jobId: "hunt.search", input: { query: item.target, limit: SEARCH_RESULTS }, routeKey: item.target, maxBudgetUsd: allowance }));
+          const searched = await withinBudget<TaskResult<"hunt.search"> | TaskResult<"hunt.xsearch">>("search", (allowance) => {
+            if (engine.job === "hunt.search") {
+              return runtime.runJob({ agent: jobAgent, stage: "hunt", jobId: "hunt.search", input: { query: item.target, limit: SEARCH_RESULTS }, routeKey: item.target, maxBudgetUsd: allowance });
+            }
+            const searchNow = runtime.now();
+            const fromDate = new Date(searchNow.getTime() - numberParam("x.search_days", runtime.resolve(null, "x.search_days"), runtime.config) * 24 * 60 * 60 * 1000)
+              .toISOString().slice(0, 10);
+            const tomorrowUtc = new Date(Date.UTC(searchNow.getUTCFullYear(), searchNow.getUTCMonth(), searchNow.getUTCDate() + 1))
+              .toISOString().slice(0, 10);
+            xFollowerCeiling = numberParam("x.max_followers", runtime.resolve(null, "x.max_followers"), runtime.config);
+            return runtime.runJob({
+              agent: jobAgent,
+              stage: "hunt",
+              jobId: "hunt.xsearch",
+              input: {
+                query: item.target,
+                limit: SEARCH_RESULTS,
+                fromDate,
+                toDate: tomorrowUtc,
+                maxFollowers: xFollowerCeiling,
+              },
+              routeKey: item.target,
+              maxBudgetUsd: allowance,
+            });
+          });
           if (searched === "spent" || !searched) {
             runtime.deps.store.setFrontierState(item.id, "queued");
             stopWave = true;
@@ -667,7 +775,38 @@ export async function runHunt(runtime: EngineRuntime, simIdsByLead: Map<string, 
           const afterSearch = runtime.deps.store.getTrail(trail.id) ?? trailNow;
           runtime.deps.store.saveTrail({ ...afterSearch, stats: { ...afterSearch.stats, costUsd: afterSearch.stats.costUsd + searchCost } });
         }
-        const safe = safeHits(hits);
+        const seenPostIds = new Set<string>();
+        const postIds = engine.holdsPages
+          ? hits.flatMap((hit) => {
+              const id = xPostId(hit.url);
+              return id ? [id] : [];
+            })
+          : [];
+        const checkedPosts = engine.holdsPages ? await readXPosts(runtime, postIds) : { posts: new Map<string, XPost>(), gone: new Set<string>() };
+        if (checkedPosts.gone.size > 0) forgetPosts(runtime, checkedPosts.gone);
+        const safe: Array<SearchHit & { cleanUrl: string; held?: FrontierItem["held"] }> = engine.holdsPages
+          ? hits.flatMap((hit) => {
+              const id = xPostId(hit.url);
+              if (!id || seenPostIds.has(id)) return [];
+              seenPostIds.add(id);
+              if (checkedPosts.gone.has(id)) return [];
+              const post = checkedPosts.posts.get(id);
+              if (post && (post.followers === null || (xFollowerCeiling !== null && post.followers > xFollowerCeiling))) return [];
+              // The post's own words are kept and shown in place of the report, so they are
+              // held to what the report was held to.
+              if (post && offLimitsOnX(post.name, post.text)) return [];
+              const cleanUrl = xPostUrl(id, post?.handle ?? xHandleOf(hit.url));
+              // A post code read replaces what the model reported, for the sifter as for the runner.
+              const held = post
+                ? {
+                    title: `${post.name} (@${post.handle})`.slice(0, 200),
+                    text: `${post.createdAt ? `Posted ${post.createdAt.slice(0, 10)}. ` : ""}${post.text}`.slice(0, 12_000),
+                    fromX: true,
+                  }
+                : { title: hit.title, text: hit.snippet };
+              return [{ ...hit, url: cleanUrl, cleanUrl, held, title: held.title, snippet: held.text.slice(0, 2_000) }];
+            }).slice(0, SEARCH_RESULTS)
+          : safeHits(hits);
         let added = 0;
         let taskId: string | null = searchTaskId;
         let result: HuntCall["result"] = "empty";
@@ -696,7 +835,10 @@ export async function runHunt(runtime: EngineRuntime, simIdsByLead: Map<string, 
             detail = siftResult.task.error;
           } else {
             const picks = checkPicks(siftResult.output.open, safe.length, 6);
-            added = enqueuePickedPages(runtime, hunt, trailNow, picks, safe.map((hit) => hit.cleanUrl), 0, "runner");
+            const heldPages: Array<FrontierItem["held"] | undefined> | undefined = engine.holdsPages
+              ? safe.map((hit) => hit.held ?? undefined)
+              : undefined;
+            added = enqueuePickedPages(runtime, hunt, trailNow, picks, safe.map((hit) => hit.cleanUrl), 0, "runner", Number.POSITIVE_INFINITY, heldPages);
             result = added > 0 ? "ok" : "empty";
           }
         }
@@ -707,7 +849,8 @@ export async function runHunt(runtime: EngineRuntime, simIdsByLead: Map<string, 
         return;
       }
 
-      const target = cleanUrl(item.target);
+      const postId = item.held ? xPostId(item.target) : null;
+      const target = postId ? xPostUrl(postId, xHandleOf(item.target)) : item.held ? null : cleanUrl(item.target);
       if (!target) {
         runtime.deps.store.setFrontierState(item.id, "skipped");
         newRefused.push("An address that is not a public web page.");
@@ -723,43 +866,60 @@ export async function runHunt(runtime: EngineRuntime, simIdsByLead: Map<string, 
       let result: HuntCall["result"] = "empty";
       const host = hostOf(target);
       if (!host) { runtime.deps.store.setFrontierState(item.id, "skipped"); return; }
-      const unlockHost = await lockHost(host);
-      if (!unlockHost) { runtime.deps.store.setFrontierState(item.id, "queued"); return; }
+      const heldHandle = item.held ? xHandleOf(target) : null;
       let page: PageRead;
-      try {
+      const runPlantWhenDue = async (lookOrdinal: number): Promise<boolean> => {
+        if (!plantedDue(lookOrdinal, plantedEvery)) return true;
+        const plant = plantedPage(`${hunt.id}:${lookOrdinal}:${runtime.run.id}:${item.id}`);
+        const plantInput: LookInput = { thesis: runtime.swarm.thesis, intent: trail.intent, notes: notesForRunner(runtime.deps.store.listHuntNotes(hunt.id, 10000)), page: plant.page, latestStage };
+        const planted = await withinBudget("runner", (allowance) =>
+          runtime.runJob({ agent: looker, stage: "hunt", jobId: "hunt.look", input: plantInput, routeKey: plant.page.url, maxBudgetUsd: allowance }));
+        if (planted === "spent" || !planted) { stopWave = true; return false; }
+        hunt = { ...hunt, looks: hunt.looks + 1, updatedAt: runtime.now().toISOString() };
+        const control = planted.task.status === "succeeded" && planted.output ? plantedVerdict(planted.output) : null;
+        runtime.deps.store.updateTask(planted.task.id, { control });
+        callRecord(runtime, hunt, {
+          taskId: planted.task.id,
+          trailId: null,
+          turn: hunt.turn,
+          tool: "look",
+          target: plant.page.url,
+          host: hostOf(plant.page.url),
+          result: planted.task.status !== "succeeded" || !planted.output ? "failed" : planted.output.people.length ? "ok" : "empty",
+          detail: planted.task.error,
+          leads: 0,
+          dropped: 0,
+          tooLate: 0,
+          queued: 0,
+          control,
+          model: planted.task.model,
+          costUsd: planted.task.costUsd,
+          latencyMs: planted.task.latencyMs,
+        });
+        waveCalls += 1;
+        return true;
+      };
+      if (item.held && postId) {
         const lookOrdinal = nextLookOrdinal++;
-        if (plantedDue(lookOrdinal, plantedEvery)) {
-          const plant = plantedPage(`${hunt.id}:${lookOrdinal}:${runtime.run.id}:${item.id}`);
-          const plantInput: LookInput = { thesis: runtime.swarm.thesis, intent: trail.intent, notes: notesForRunner(runtime.deps.store.listHuntNotes(hunt.id, 10000)), page: plant.page, latestStage };
-          const planted = await withinBudget("runner", (allowance) =>
-            runtime.runJob({ agent: looker, stage: "hunt", jobId: "hunt.look", input: plantInput, routeKey: plant.page.url, maxBudgetUsd: allowance }));
-          if (planted === "spent" || !planted) { stopWave = true; return; }
-          hunt = { ...hunt, looks: hunt.looks + 1, updatedAt: runtime.now().toISOString() };
-          const control = planted.task.status === "succeeded" && planted.output ? plantedVerdict(planted.output) : null;
-          runtime.deps.store.updateTask(planted.task.id, { control });
-          callRecord(runtime, hunt, {
-            taskId: planted.task.id,
-            trailId: null,
-            turn: hunt.turn,
-            tool: "look",
-            target: plant.page.url,
-            host: hostOf(plant.page.url),
-            result: planted.task.status !== "succeeded" || !planted.output ? "failed" : planted.output.people.length ? "ok" : "empty",
-            detail: planted.task.error,
-            leads: 0,
-            dropped: 0,
-            tooLate: 0,
-            queued: 0,
-            control,
-            model: planted.task.model,
-            costUsd: planted.task.costUsd,
-            latencyMs: planted.task.latencyMs,
-          });
-          waveCalls += 1;
+        if (!await runPlantWhenDue(lookOrdinal)) return;
+        page = {
+          status: "ok",
+          detail: "Held from X search.",
+          url: target,
+          title: item.held.title,
+          text: `${item.held.fromX ? "A post on X, read through X's own API." : "A post on X, as xAI's search tool reported it. This system did not read the post itself."}\nAccount: ${item.held.title}${heldHandle ? ` https://x.com/${heldHandle}` : ""}\n\n${item.held.text}`,
+          links: [],
+        };
+      } else {
+        const unlockHost = await lockHost(host);
+        if (!unlockHost) { runtime.deps.store.setFrontierState(item.id, "queued"); return; }
+        try {
+          const lookOrdinal = nextLookOrdinal++;
+          if (!await runPlantWhenDue(lookOrdinal)) return;
+          page = await readPage(target, host);
+        } finally {
+          unlockHost();
         }
-        page = await readPage(target, host);
-      } finally {
-        unlockHost();
       }
       if (page.status !== "ok") {
         detail = redactSensitive(page.detail);
@@ -801,7 +961,7 @@ export async function runHunt(runtime: EngineRuntime, simIdsByLead: Map<string, 
               id: stableId("led", `${runtime.run.id}:${looked.task.id}:${page.url}:${normalizeName(personName)}:${normalizeName(companyName ?? "")}`),
               swarmId: runtime.swarm.id,
               founderId: null,
-              source: "web",
+              source: item.held ? "x" : "web",
               sourceRef: page.url,
               sourceTitle: redactSensitive(page.title),
               personName,
@@ -809,7 +969,9 @@ export async function runHunt(runtime: EngineRuntime, simIdsByLead: Map<string, 
               companyName,
               companyUrl: addressOnPage(person.companyUrl, page) ? cleanUrl(person.companyUrl ?? "") : null,
               oneLiner: person.oneLiner ? redactSensitive(person.oneLiner).trim() || null : null,
-              links,
+              links: item.held
+                ? { ...links, x: heldHandle && nameOnPage(item.held.title, personName) ? `https://x.com/${heldHandle}` : null }
+                : links,
               why: redactSensitive(person.why).trim(),
               discoveredByTaskId: looked.task.id,
               discoveredAt: runtime.now().toISOString(),

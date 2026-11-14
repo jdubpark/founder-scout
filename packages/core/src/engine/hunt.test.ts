@@ -1,10 +1,10 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { BASE_CONFIG, JOBS, isPlantedUrl, pickMember, runnerPools, SEAT_ASKER, SIM_WEB_HOST, type Agent, type JobInput, type JobOutput, type ModelJobId, type NavigateInput, type NavigateOutput, type LookInput, type LookOutput, type Pools, type SearchInput, type SearchOutput, type SiftInput, type SiftOutput, type Swarm, type SwarmConfig } from "@agentswarm/shared";
+import { BASE_CONFIG, JOBS, isPlantedUrl, pickMember, runnerPools, SEAT_ASKER, SIM_WEB_HOST, type Agent, type JobInput, type JobOutput, type ModelJobId, type NavigateInput, type NavigateOutput, type LookInput, type LookOutput, type Pools, type SearchInput, type SearchOutput, type SiftInput, type SiftOutput, type Swarm, type SwarmConfig, type XSearchInput } from "@agentswarm/shared";
 import { createExecuteJob, createJobRegistry } from "../jobs";
 import { openStore } from "../db";
 import { createSimRepoFinder, createSimSources, createSimWorld } from "../sim";
 import { createSimWebAccess } from "../sources";
-import type { ExecuteJob, JobContext, JobExecution, ModelProvider, ProviderRegistry, SearchEngine, WebReader } from "../contracts";
+import type { EngineDeps, ExecuteJob, JobContext, JobExecution, ModelProvider, ProviderRegistry, SearchEngine, WebReader, XPost, XPostReader } from "../contracts";
 import { ProviderError } from "../contracts";
 import { createRunController } from "./index";
 import { applyNavigatorTurn } from "./hunt";
@@ -34,6 +34,7 @@ interface HarnessOptions {
   wrapReader?: (reader: WebReader) => WebReader;
   defaultPools?: () => Promise<Pools>;
   engines?: readonly SearchEngine[];
+  xPosts?: EngineDeps["xPosts"];
 }
 
 function harness(configParams: Record<string, number | boolean | string> = {}, options: HarnessOptions = {}) {
@@ -93,6 +94,7 @@ function harness(configParams: Record<string, number | boolean | string> = {}, o
     sources: { sim: createSimSources(world), live: createSimSources(world) },
     repos: { sim: createSimRepoFinder(world), live: createSimRepoFinder(world) },
     web: { sim: web, live: web },
+    xPosts: options.xPosts,
     defaultPools: options.defaultPools,
     simWorld: world,
     fundName: "Northstar Ventures",
@@ -105,6 +107,7 @@ function harness(configParams: Record<string, number | boolean | string> = {}, o
 function wrapJob(delegate: ExecuteJob, options: {
   navigate?: (input: NavigateInput, output: NavigateOutput) => NavigateOutput;
   search?: (input: SearchInput, output: SearchOutput) => SearchOutput;
+  xsearch?: (input: XSearchInput, output: SearchOutput) => SearchOutput;
   look?: (input: LookInput, output: LookOutput) => LookOutput;
   sift?: (input: SiftInput, output: SiftOutput) => SiftOutput;
 }): ExecuteJob {
@@ -115,6 +118,9 @@ function wrapJob(delegate: ExecuteJob, options: {
     }
     if (jobId === "hunt.search" && options.search) {
       return { ...result, output: options.search(input as SearchInput, result.output as SearchOutput) as JobOutput<J> };
+    }
+    if (jobId === "hunt.xsearch" && options.xsearch) {
+      return { ...result, output: options.xsearch(input as XSearchInput, result.output as SearchOutput) as JobOutput<J> };
     }
     if (jobId === "hunt.look" && options.look) {
       return { ...result, output: options.look(input as LookInput, result.output as LookOutput) as JobOutput<J> };
@@ -182,6 +188,170 @@ describe("hunt engine stage", () => {
     expect(trail.stats.costUsd).toBeGreaterThanOrEqual(searchTask!.costUsd!);
     const huntCosts = store.listTasks({ runId: run.id }).filter((task) => task.stage === "hunt").map((task) => task.costUsd ?? 0);
     expect(huntCosts.reduce((sum, cost) => sum + cost, 0)).toBeLessThanOrEqual(10 + Math.max(...huntCosts));
+  });
+
+  it("uses X's own post reads for held text without web-reading X or queuing bare X addresses", async () => {
+    const postUrl = "https://x.com/averyfounder/status/12345678901";
+    const overUrl = "https://x.com/averyfounder/status/12345678902";
+    const unknownFollowersUrl = "https://x.com/averyfounder/status/12345678903";
+    const goneUrl = "https://x.com/averyfounder/status/12345678904";
+    const uncheckedUrl = "https://x.com/averyfounder/status/12345678905";
+    const privateUrl = "https://x.com/averyfounder/status/12345678906";
+    const bareXUrl = "https://x.com/averyfounder";
+    const unheldPostUrl = "https://twitter.com/averyfounder/status/12345678901";
+    const title = "Avery Founder (@averyfounder) launches Tiny Workflow";
+    const snippet = "Avery Founder: I shipped a tiny workflow tool today and the first customer is using it.";
+    const officialText = "I shipped a tiny workflow tool today and the first customer is using it.";
+    const reads: string[] = [];
+    const xPostReads: string[][] = [];
+    const xsearchInputs: XSearchInput[] = [];
+    const siftInputs: SiftInput[] = [];
+    const lookedPages: LookInput["page"][] = [];
+    const xPosts: XPostReader = {
+      status: async () => ({ configured: true, detail: "Ready." }),
+      read: async (ids) => {
+        xPostReads.push([...ids]);
+        const records: Array<[string, XPost]> = [
+          ["12345678901", {
+            id: "12345678901", text: officialText, createdAt: "2026-11-10T09:00:00.000Z", handle: "averyfounder", name: "Avery Founder",
+            followers: 1400, likes: 34, reposts: 2, replies: 1, views: 700,
+          }],
+          ["12345678902", {
+            id: "12345678902", text: "Over the limit.", createdAt: "2026-11-10T09:00:00.000Z", handle: "averyfounder", name: "Avery Founder",
+            followers: 1501, likes: null, reposts: null, replies: null, views: null,
+          }],
+          ["12345678903", {
+            id: "12345678903", text: "Follower count is unavailable.", createdAt: "2026-11-10T09:00:00.000Z", handle: "averyfounder", name: "Avery Founder",
+            followers: null, likes: null, reposts: null, replies: null, views: null,
+          }],
+          // The report left out what the post itself says about its author.
+          ["12345678906", {
+            id: "12345678906", text: "I am 19 years old and I shipped a second tool today.", createdAt: "2026-11-10T09:00:00.000Z", handle: "averyfounder", name: "Avery Founder",
+            followers: 1400, likes: null, reposts: null, replies: null, views: null,
+          }],
+        ];
+        const posts = new Map<string, XPost>(records.filter(([id]) => ids.includes(id)));
+        return { posts, gone: new Set(ids.filter((id) => id === "12345678904")) };
+      },
+    };
+    const engine: SearchEngine = {
+      id: "x",
+      label: "X",
+      searches: "Recent posts on X.",
+      job: "hunt.xsearch",
+      holdsPages: true,
+      status: async () => ({ configured: true, detail: "Ready." }),
+      search: async () => { throw new Error("X search must use its job."); },
+    };
+    const { store, controller } = harness({
+      "hunt.turns": 2,
+      "hunt.wave_size": 2,
+      "hunt.max_depth": 0,
+      "hunt.planted_every": 4,
+      "x.search_days": 4,
+      "x.max_followers": 1500,
+    }, {
+      engines: [engine],
+      xPosts,
+      wrapReader: () => ({
+        read: async (url) => {
+          reads.push(url);
+          return { status: "blocked", detail: "A page was unexpectedly read.", url, title: "", text: "", links: [] };
+        },
+      }),
+      wrapExecuteJob: (delegate) => wrapJob(delegate, {
+        navigate: (_input, output) => ({ ...output, open: [], extend: [], close: [], focus: [], notes: [], done: false }),
+        xsearch: (input, output) => {
+          xsearchInputs.push(input);
+          return { ...output, hits: [
+            { url: postUrl, title, snippet },
+            { url: overUrl, title: "Over follower limit", snippet: "This post is over the limit." },
+            { url: unknownFollowersUrl, title: "Unknown followers", snippet: "This post has no follower count." },
+            { url: goneUrl, title: "Removed post", snippet: "This post was removed." },
+            { url: uncheckedUrl, title: "Unchecked post", snippet: "The API did not return this id." },
+            { url: privateUrl, title: "A second tool", snippet: "I shipped a second tool today." },
+            { url: bareXUrl, title: "Avery Founder", snippet: "A bare account link has no post text." },
+          ] };
+        },
+        sift: (input, output) => {
+          siftInputs.push(input);
+          return { ...output, open: [
+            { index: 0, label: "Launch post", priority: 1 },
+            { index: 1, label: "Unchecked post", priority: 2 },
+          ] };
+        },
+        look: (input, output) => {
+          if (isPlantedUrl(input.page.url)) return { ...output, people: [] };
+          lookedPages.push(input.page);
+          return { ...output, people: [{
+            name: "Avery Founder",
+            role: "Founder",
+            companyName: "Tiny Workflow",
+            companyUrl: null,
+            oneLiner: "Built a tiny workflow tool.",
+            links: { github: null, linkedin: null, x: null, site: null, scholar: null },
+            why: "The held post describes a first customer.",
+            quote: "I shipped a tiny workflow tool today and the first customer is using it.",
+          }] };
+        },
+      }),
+    });
+
+    const at = NOW.toISOString();
+    store.saveHunt({ id: "hnt_xsearch", swarmId: SWARM_ID, turn: 0, looks: 3, createdAt: at, updatedAt: at });
+    store.saveTrail({
+      id: "trl_xsearch", huntId: "hnt_xsearch", swarmId: SWARM_ID, name: "Small launches", intent: "Find founders describing their launch.",
+      status: "open", openedBy: "person", weight: 3, pinned: true,
+      stats: { searches: 0, pages: 0, leads: 0, kept: 0, dropped: 0, tooLate: 0, blocked: 0, costUsd: 0 },
+      openedAt: at, closedAt: null, closedWhy: null,
+    });
+    store.addFrontier([
+      { id: "frn_xsearch", huntId: "hnt_xsearch", trailId: "trl_xsearch", kind: "search", target: "founder first launch", engine: "x", label: "Starting search", priority: 1, depth: 0, from: "person", state: "queued", addedAt: at },
+      { id: "frn_bare_x", huntId: "hnt_xsearch", trailId: "trl_xsearch", kind: "page", target: unheldPostUrl, engine: null, label: "Unheld X post", priority: 1, depth: 0, from: "person", state: "queued", addedAt: at },
+    ]);
+
+    const started = await controller.start({ swarmId: SWARM_ID, trigger: "manual", brain: "sim", sources: "live", budgetUsd: 40 });
+    const run = await controller.wait(started.id);
+    expect(run.status).toBe("succeeded");
+
+    expect(xsearchInputs[0]).toEqual({ query: "founder first launch", limit: 10, fromDate: "2026-11-08", toDate: "2026-11-13", maxFollowers: 1500 });
+    expect(siftInputs[0]?.hits).toEqual([
+      // A post code read is shown to the sifter in X's own words; one it could not read, as reported.
+      { index: 0, url: postUrl, title: "Avery Founder (@averyfounder)", snippet: `Posted 2026-11-10. ${officialText}` },
+      { index: 1, url: uncheckedUrl, title: "Unchecked post", snippet: "The API did not return this id." },
+    ]);
+    const pagesByUrl = new Map(lookedPages.map((page) => [page.url, page] as const));
+    expect(pagesByUrl.get(postUrl)).toEqual({
+      url: postUrl,
+      title: "Avery Founder (@averyfounder)",
+      text: `A post on X, read through X's own API.\nAccount: Avery Founder (@averyfounder) https://x.com/averyfounder\n\nPosted 2026-11-10. ${officialText}`,
+      links: [],
+    });
+    expect(pagesByUrl.get(uncheckedUrl)).toEqual({
+      url: uncheckedUrl,
+      title: "Unchecked post",
+      text: `A post on X, as xAI's search tool reported it. This system did not read the post itself.\nAccount: Unchecked post https://x.com/averyfounder\n\nThe API did not return this id.`,
+      links: [],
+    });
+    expect(xPostReads).toEqual([[
+      "12345678901", "12345678902", "12345678903", "12345678904", "12345678905", "12345678906",
+    ]]);
+    expect(reads).not.toContain(postUrl);
+    expect(reads).not.toContain(bareXUrl);
+    expect(reads).not.toContain(unheldPostUrl);
+    const frontier = store.listFrontier("hnt_xsearch");
+    expect(frontier.find((item) => item.id === "frn_bare_x")?.state).toBe("skipped");
+    expect(frontier.find((item) => item.target === postUrl)?.held).toEqual({
+      title: "Avery Founder (@averyfounder)",
+      text: `Posted 2026-11-10. ${officialText}`,
+      fromX: true,
+    });
+    expect(frontier.some((item) => [overUrl, unknownFollowersUrl, goneUrl, privateUrl].includes(item.target))).toBe(false);
+    expect(frontier.find((item) => item.target === uncheckedUrl)?.held).toEqual({ title: "Unchecked post", text: "The API did not return this id." });
+    expect(store.listHuntCalls("hnt_xsearch").some((call) => call.control === "passed")).toBe(true);
+    const lead = store.listLeads({ swarmId: SWARM_ID }).find((item) => item.sourceRef === postUrl);
+    expect(lead).toMatchObject({ source: "x", sourceTitle: "Avery Founder (@averyfounder)", quote: officialText });
+    expect(lead?.links.x).toBe("https://x.com/averyfounder");
   });
 
   it("finds sourced simulated web leads and sends them through matching and screening", async () => {
