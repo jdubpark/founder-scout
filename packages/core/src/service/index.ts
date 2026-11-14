@@ -1367,7 +1367,7 @@ export function createApp(options: AppOptions): App {
     flowsDir: options.flowsDir,
     datasetsDir: options.datasetsDir ?? join(options.flowsDir, "..", "datasets"),
     providers,
-    huntTrial: createHuntTrial(options.env),
+    huntTrial: createHuntTrial(options.env, { skillLibrary, defaultPools }),
     sensitive: findSensitive,
     now: options.now,
     logger: options.logger,

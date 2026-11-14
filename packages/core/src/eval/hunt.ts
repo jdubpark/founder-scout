@@ -13,11 +13,13 @@ const DESCRIPTION = "For the same number of runner calls on a simulated web, doe
 const DATA_NOTE = "This is a simulated web. It tunes how the hunt spends its calls and compares models on equal footing. It says nothing about real founders.";
 const PARAMETERS = ["hunt.pages_per_search", "hunt.stale_after", "hunt.max_depth"] as const;
 const METRICS: EvalMetricDef[] = [
-  { id: "strong_early_found", label: "Strong early founders found", better: "higher", description: "Share of strong early founders shown by the simulated web that the hunt kept." },
-  { id: "late_kept", label: "Late-stage people kept", better: "lower", description: "Share of kept people from companies past the latest stage." },
+  { id: "strong_early_per_100_calls", label: "Strong early founders per 100 runner calls", better: "higher", description: "Distinct runner-reported founders with hidden quality at least 0.6 and true stage at or before seed, per 100 runner calls." },
+  { id: "late_found", label: "Late-stage founders found", better: "lower", description: "Share of runner-reported people whose true company stage is past the configured latest stage." },
+  { id: "weak_found", label: "Weak founders found", better: "lower", description: "Share of runner-reported people with hidden founder quality under 0.4." },
   { id: "planted_failed", label: "Planted pages failed", better: "lower", description: "Planted pages a runner fell for, per planted page read." },
   { id: "calls", label: "Runner calls", better: "lower", description: "Runner model calls used by one case." },
 ];
+const REPORT_METRICS = ["found_people", "kept_people"] as const;
 const SEEDS = [17, 83, 191, 307, 419, 557, 683, 809, 929, 1049, 1181, 1301, 1427, 1543, 1667, 1783];
 /** Days in one trial, and what a simulated trial may pretend to spend: enough that the settings, not the money, decide what it reads. */
 const TRIAL_DAYS = 3;
@@ -37,25 +39,55 @@ export interface HuntEvalOptions {
 
 const configPath = (root: string, variant: Variant) => path.join(root, `${variant.id}.json`);
 const reportPath = (root: string) => path.join(root, "_state.json");
-function caseMetrics(result: HuntTrialResult): Metrics {
-  const earlyKept = new Set(result.kept.filter((person) => person.early).map((person) => person.simFounderId));
-  const found = result.strongEarlyFounderIds.filter((id) => earlyKept.has(id)).length;
+function stageRank(stage: string): number {
+  const normalized = stage.toLocaleLowerCase().replace(/[_-]+/g, " ").trim();
+  if (normalized === "pre seed") return 0;
+  if (normalized === "seed") return 1;
+  if (/^series [a-z]$/.test(normalized)) return 2 + normalized.charCodeAt(normalized.length - 1) - 97;
+  return 0;
+}
+function latestStageRank(config: SwarmConfig): number {
+  return stageRank(String(config.params["hunt.latest_stage"] ?? "seed"));
+}
+function caseMetrics(result: HuntTrialResult, config: SwarmConfig): Metrics {
+  // Legacy stubs may omit found; production trials always provide it. The compatibility path
+  // keeps existing eval-service tests working while new trial results measure before screening.
+  const people = result.found ?? result.kept;
+  const unique = [...new Map(people.map((person) => [person.simFounderId, person])).values()];
+  const isEarly = (person: typeof unique[number]) => stageRank(person.stage ?? (person.early ? "seed" : "series a")) <= 1;
+  const strongEarly = unique.filter((person) => person.quality >= 0.6 && isEarly(person)).length;
+  const calls = result.runnerCalls;
+  const per100 = calls > 0 ? (strongEarly / calls) * 100 : 0;
+  const latest = latestStageRank(config);
   return {
-    strong_early_found: result.strongEarlyAvailable ? found / result.strongEarlyAvailable : 0,
-    late_kept: result.kept.length ? result.lateKept / result.kept.length : 0,
+    strong_early_per_100_calls: per100,
+    // Legacy alias is emitted only as a value for earlier callers; it is not a goal or metric definition.
+    strong_early_found: per100,
+    late_found: unique.length ? unique.filter((person) => stageRank(person.stage ?? (person.early ? "seed" : "series a")) > latest).length / unique.length : 0,
+    weak_found: unique.length ? unique.filter((person) => person.quality < 0.4).length / unique.length : 0,
     planted_failed: result.plantedRead ? result.plantedFailed / result.plantedRead : 0,
-    calls: result.runnerCalls,
+    calls,
+    found_people: unique.length,
+    kept_people: new Set(result.kept.map((person) => person.simFounderId)).size,
   };
 }
 function means(rows: readonly CaseResult[]): Metrics {
-  return Object.fromEntries(METRICS.map((metric) => [metric.id, round3(avg(rows.map((row) => row.metrics[metric.id] ?? 0)))]));
+  const ids = [...METRICS.map((metric) => metric.id), ...REPORT_METRICS, "strong_early_found"];
+  return Object.fromEntries(ids.map((id) => [id, round3(avg(rows.map((row) => row.metrics[id] ?? 0)))]));
 }
 function bootstrapNoise(rows: readonly CaseResult[], seed: number): number {
   if (rows.length < 2) return 0;
   const rng = createRng(hashSeed(seed, "hunt-yield", "bootstrap"));
-  const draws = Array.from({ length: 500 }, () => avg(Array.from({ length: rows.length }, () => rows[Math.floor(rng() * rows.length)]!.metrics.strong_early_found ?? 0)));
+  const draws = Array.from({ length: 1000 }, () => avg(Array.from({ length: rows.length }, () => rows[Math.floor(rng() * rows.length)]!.metrics.strong_early_per_100_calls ?? 0)));
   const center = avg(draws);
   return Math.sqrt(avg(draws.map((value) => (value - center) ** 2)));
+}
+function bootstrapInterval(values: readonly number[], seed: number): [number, number] | null {
+  if (values.length === 0) return null;
+  if (values.length === 1) return [values[0]!, values[0]!];
+  const rng = createRng(hashSeed(seed, "hunt-yield", "interval"));
+  const draws = Array.from({ length: 2000 }, () => avg(Array.from({ length: values.length }, () => values[Math.floor(rng() * values.length)]!))).sort((a, b) => a - b);
+  return [draws[Math.floor((draws.length - 1) * 0.025)]!, draws[Math.ceil((draws.length - 1) * 0.975)]!];
 }
 function candidates(config: SwarmConfig, tried: string[]): Array<{ key: string; description: string; config: SwarmConfig }> {
   const result: Array<{ key: string; description: string; config: SwarmConfig }> = [];
@@ -78,7 +110,9 @@ function candidates(config: SwarmConfig, tried: string[]): Array<{ key: string; 
 function summarize(variants: readonly EvalVariant[], state: State | null): EvalFlowSummary {
   const baseline = variants.find((variant) => variant.id === "baseline");
   const best = variants.find((variant) => variant.id === state?.bestVariant);
-  return { id: HUNT_YIELD_FLOW_ID, label: HUNT_YIELD_LABEL, description: DESCRIPTION, headlineMetric: "strong_early_found", baseline: baseline?.test.strong_early_found ?? null, best: best?.test.strong_early_found ?? null, rounds: state?.currentRound ?? 0, updatedAt: state?.updatedAt ?? null, realData: false };
+  const baselineRows = state?.variants.find((variant) => variant.id === "baseline")?.cases ?? [];
+  const baselineAll = baselineRows.length ? avg(baselineRows.map((row) => row.metrics.strong_early_per_100_calls ?? 0)) : null;
+  return { id: HUNT_YIELD_FLOW_ID, label: HUNT_YIELD_LABEL, description: DESCRIPTION, headlineMetric: "strong_early_per_100_calls", baseline: baselineAll, best: best?.test.strong_early_per_100_calls ?? null, rounds: state?.currentRound ?? 0, updatedAt: state?.updatedAt ?? null, realData: false };
 }
 
 export function createHuntEval(deps: EvalDeps, options: HuntEvalOptions) {
@@ -99,20 +133,34 @@ export function createHuntEval(deps: EvalDeps, options: HuntEvalOptions) {
       // navigator turn and every variant scored zero. Real money still limits a live measurement.
       const trialBudgetUsd = brain === "sim" ? SIM_TRIAL_BUDGET_USD : budgetUsd / ids.length;
       const result = await deps.huntTrial!({ seed, days: TRIAL_DAYS, config, brain, budgetUsd: trialBudgetUsd });
-      return { id, seed, metrics: caseMetrics(result), result };
+      return { id, seed, metrics: caseMetrics(result, config), result };
     }));
   };
   const dto = (state: State | null): EvalFlowDTO => {
     const variants: EvalVariant[] = (state?.variants ?? []).map((variant) => {
       const test = variant.cases.filter((row) => Number(row.id.slice(5)) >= 929);
       const train = variant.cases.filter((row) => Number(row.id.slice(5)) < 929);
-      const testValues = test.map((row) => row.metrics.strong_early_found ?? 0);
-      const interval = testValues.length ? [Math.min(...testValues), Math.max(...testValues)] as [number, number] : null;
+      const testValues = test.map((row) => row.metrics.strong_early_per_100_calls ?? 0);
+      const interval = bootstrapInterval(testValues, hashSeed(929, variant.id));
       const previous = state!.variants.filter((item) => item.round < variant.round && item.status !== "reverted").sort((a, b) => b.round - a.round)[0];
       const changes = variant.id === "baseline" ? [] : PARAMETERS.filter((key) => previous?.config.params[key] !== variant.config.params[key]).map((key) => `${key}: ${previous?.config.params[key]} → ${variant.config.params[key]}`);
       return { id: variant.id, round: variant.round, description: variant.description, rationale: variant.rationale, status: variant.id === state!.bestVariant && variant.round > 0 ? "champion" : variant.status, train: means(train), test: means(test), testInterval: interval, costUsd: round3(avg(test.map((row) => row.result.costUsd))), config: variant.config, changes, createdAt: variant.createdAt };
     });
     const summary = summarize(variants, state);
+    const baselineCases = state?.variants.find((variant) => variant.id === "baseline")?.cases ?? [];
+    const baselineValues = baselineCases.map((row) => row.metrics.strong_early_per_100_calls ?? 0);
+    const baselineRange = bootstrapInterval(baselineValues, 17);
+    const baselineMean = avg(baselineValues);
+    const positiveWorlds = baselineValues.filter((value) => value > 0).length;
+    const metricLine = (values: Metrics) => [
+      `strong early/100=${(values.strong_early_per_100_calls ?? 0).toFixed(3)}`,
+      `late=${(values.late_found ?? 0).toFixed(3)}`,
+      `weak=${(values.weak_found ?? 0).toFixed(3)}`,
+      `planted failed=${(values.planted_failed ?? 0).toFixed(3)}`,
+      `calls=${(values.calls ?? 0).toFixed(1)}`,
+      `found=${(values.found_people ?? 0).toFixed(1)}`,
+      `fit kept=${(values.kept_people ?? 0).toFixed(1)}`,
+    ].join(", ");
     const latestVariant = state?.lastBrain === "live" ? "baseline" : state?.bestVariant ?? "baseline";
     const latest = state?.variants.find((variant) => variant.id === latestVariant)?.cases ?? [];
     const modelNames = [...new Set(latest.flatMap((row) => Object.keys(row.result.models)))].sort();
@@ -120,7 +168,13 @@ export function createHuntEval(deps: EvalDeps, options: HuntEvalOptions) {
       const samples = latest.flatMap((row) => row.result.models[model] ? [row.result.models[model]!] : []);
       return `- ${model}: ${round3(avg(samples.map((item) => item.pages)))} pages, ${round3(avg(samples.map((item) => item.peopleKept)))} kept, ${round3(avg(samples.map((item) => item.peopleRefused)))} refused, ${round3(avg(samples.map((item) => item.plantedFailed)))} planted failed, ${Math.round(avg(samples.flatMap((item) => item.medianLatencyMs === null ? [] : [item.medianLatencyMs])))} ms median latency`;
     }).join("\n")}` : "";
-    return { ...summary, metrics: METRICS, goal: { target: "strong_early_found", direction: "higher", hold: ["late_kept", "planted_failed", "calls"] }, cases: { train: 8, test: 8, reps: 1 }, noiseFloor: state?.noiseFloor ?? null, dataNote: DATA_NOTE, variants, bestVariant: state?.bestVariant ?? null, promotedVariant: null, narrative: state ? `Baseline strong early founder yield: ${variants.find((item) => item.id === "baseline")?.test.strong_early_found?.toFixed(3) ?? "not measured"}. Best measured yield: ${summary.best?.toFixed(3) ?? "not measured"}.${table}` : "", ready: true, callsModels: state?.lastBrain === "live" };
+    const baseline = variants.find((item) => item.id === "baseline");
+    const roundLines = variants.filter((item) => item.round > 0).map((item) =>
+      `Round ${item.round} proposed ${item.description}; train: ${metricLine(item.train)}; held-out: ${metricLine(item.test)}; ${item.status === "champion" ? "kept as champion" : item.status}.`);
+    const narrative = state
+      ? `Baseline strong early founders per 100 runner calls: ${baselineMean.toFixed(3)} across ${baselineValues.length} worlds; 95% bootstrap range [${baselineRange?.[0].toFixed(3) ?? "n/a"}, ${baselineRange?.[1].toFixed(3) ?? "n/a"}]; ${positiveWorlds}/${baselineValues.length} worlds above zero. Noise floor: ${(state.noiseFloor ?? 0).toFixed(3)} (bootstrap standard deviation over held-out worlds). Baseline fit-screener counts: ${metricLine(means(baselineCases))}. Best held-out yield: ${summary.best?.toFixed(3) ?? "not measured"}.${roundLines.length ? `\n\n${roundLines.join("\n")}` : ""}${table}`
+      : "";
+    return { ...summary, headlineMetric: "strong_early_per_100_calls", baseline: baselineValues.length ? baselineMean : null, metrics: METRICS, goal: { target: "strong_early_per_100_calls", direction: "higher", hold: ["late_found", "weak_found", "planted_failed", "calls"] }, cases: { train: 8, test: 8, reps: 1 }, noiseFloor: state?.noiseFloor ?? null, dataNote: DATA_NOTE, variants, bestVariant: state?.bestVariant ?? null, promotedVariant: null, narrative, ready: true, callsModels: state?.lastBrain === "live" };
   };
   const allCases = SEEDS.map((seed) => ({ id: `case-${seed}` }));
   const getState = async () => readState();
@@ -158,27 +212,25 @@ export function createHuntEval(deps: EvalDeps, options: HuntEvalOptions) {
         state.lastBrain = brain;
         for (let n = 0; n < rounds; n += 1) {
           const current = state.variants.find((variant) => variant.id === state!.bestVariant) ?? state.variants[0]!;
-          const currentTrain = means(current.cases.filter((row) => trainIds.includes(row.id)));
           const evaluateTrain = async (config: SwarmConfig) => means(await evaluate(config, trainIds, "sim", budgetUsd));
           let proposal: { key: string; description: string; config: SwarmConfig; train: Metrics } | null = null;
           if (options.propose) proposal = await options.propose({ currentConfig: current.config, trainIds, tried: state.tried, evaluate: evaluateTrain });
           else {
             for (const candidate of candidates(current.config, state.tried)) {
               const train = await evaluateTrain(candidate.config);
-              if ((train.strong_early_found ?? 0) > (proposal?.train.strong_early_found ?? currentTrain.strong_early_found ?? 0)) proposal = { ...candidate, train };
+              if (!proposal || (train.strong_early_per_100_calls ?? 0) > (proposal.train.strong_early_per_100_calls ?? 0)) proposal = { ...candidate, train };
             }
-            if ((proposal?.train.strong_early_found ?? 0) === (currentTrain.strong_early_found ?? 0)) proposal = null;
           }
           if (!proposal) break;
           const rows = await evaluate(proposal.config, allCases.map((item) => item.id), "sim", budgetUsd);
           const currentTest = means(current.cases.filter((row) => Number(row.id.slice(5)) >= 929));
           const candidateTest = means(rows.filter((row) => Number(row.id.slice(5)) >= 929));
           const baselineTest = means(baselineCases.filter((row) => Number(row.id.slice(5)) >= 929));
-          const floors = { strong_early_found: state.noiseFloor, late_kept: 0, planted_failed: 0, calls: 0 };
+          const floors = { strong_early_per_100_calls: state.noiseFloor, late_found: 0, weak_found: 0, planted_failed: 0, calls: 0 };
           const decision = options.decideCandidate(currentTest, candidateTest, floors, rows.length === 16, baselineTest, {
-            target: "strong_early_found",
-            hold: ["late_kept", "planted_failed", "calls"],
-            labels: { strong_early_found: "strong early founder yield", late_kept: "late-stage keep rate", planted_failed: "planted-page failure rate", calls: "runner calls" },
+            target: "strong_early_per_100_calls",
+            hold: ["late_found", "weak_found", "planted_failed", "calls"],
+            labels: { strong_early_per_100_calls: "strong early founders per 100 runner calls", late_found: "late-found share", weak_found: "weak-found share", planted_failed: "planted-page failure rate", calls: "runner calls" },
           });
           const kept = decision.keep;
           const round = state.currentRound + 1;

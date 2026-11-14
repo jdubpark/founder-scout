@@ -225,8 +225,8 @@ function buildSiftPrompt(input: SiftInput, ctx: JobContext): { system: string; p
 }
 
 function queryForTrail(engine: string, intent: string, sector: string, turn: number, now: Date): string {
-  const focus = intent.trim().replace(/[.!?]+$/, "");
-  const topic = [sector.trim(), focus, turn % 2 === 0 ? "first launch" : "building in public"].filter(Boolean).join(" ");
+  const focus = intent.trim().replace(/[.!?]+$/, "").slice(0, 72);
+  const topic = [sector.trim(), focus, `batch ${turn}`].filter(Boolean).join(" ");
   if (engine === "hn") return `Show HN ${topic}`.slice(0, 200);
   if (engine === "github") {
     const since = new Date(now.getTime() - 45 * 86_400_000).toISOString().slice(0, 10);
@@ -246,8 +246,14 @@ function simulateNavigate(input: NavigateInput, ctx: JobContext): NavigateOutput
   const remainingTurns = Math.max(0, input.budget.turnsLeft);
   const remainingCalls = Math.max(0, input.budget.callsLeft);
   const longQueue = Math.max(3, Math.ceil(input.brief.waveSize / Math.max(1, activeAfterClose.length)));
+  const yields = activeAfterClose
+    .map((trail) => ({ trail, perPage: trail.leads / Math.max(1, trail.pages) }))
+    .sort((left, right) => right.perPage - left.perPage || right.trail.leads - left.trail.leads);
+  const hasYieldEvidence = yields.some(({ trail }) => trail.pages > 0);
+  const best = yields[0];
+  const extendBest = best && best.perPage > 0 && best.trail.queued < longQueue * 2 ? best.trail : undefined;
   const everyOpenTrailHasLongQueue = activeAfterClose.length > 0 && activeAfterClose.every((trail) => trail.queued >= longQueue);
-  const canSchedule = remainingTurns > 0 && remainingCalls > 0 && !everyOpenTrailHasLongQueue;
+  const canSchedule = remainingTurns > 0 && remainingCalls > 0 && (!everyOpenTrailHasLongQueue || Boolean(extendBest));
   const availableSlots = canSchedule ? Math.max(0, input.brief.maxOpenTrails - activeAfterClose.length) : 0;
   const namesInUse = new Set(input.trails.filter((trail) => trail.status !== "closed").map((trail) => trail.name.toLocaleLowerCase()));
   const engines = input.brief.engines.slice(0, 3).map((engine) => engine.id);
@@ -265,25 +271,24 @@ function simulateNavigate(input: NavigateInput, ctx: JobContext): NavigateOutput
   }));
   if (ctx.sim && seeded.length) seeded[0]!.pages.push(`https://${SIM_WEB_HOST}/g/strong-early/1`);
 
-  const extend = canSchedule && remainingTurns > 1 && input.brief.engines.length > 0
-    ? activeAfterClose
-      .filter((trail) => trail.queued === 0)
-      .slice(0, 1)
-      .map((trail) => ({
-        trailId: trail.id,
-        searches: input.brief.engines.slice(0, 1).map((engine) => ({
-          engine: engine.id,
-          query: queryForTrail(engine.id, trail.intent, sector, input.turn, ctx.now),
-        })),
-        pages: [],
-      }))
+  const extendTrail = extendBest ?? activeAfterClose.find((trail) => trail.queued === 0);
+  const extendEngineName = extendTrail?.name === "First posts" ? "hn"
+    : extendTrail?.name === "New repositories" ? "github"
+      : extendTrail?.name === "Leaving to build" ? "web" : undefined;
+  const extendEngine = input.brief.engines.find((engine) => engine.id === extendEngineName) ?? input.brief.engines[0];
+  const extend = canSchedule && remainingTurns > 1 && extendTrail && extendEngine
+    ? [{
+      trailId: extendTrail.id,
+      searches: [{
+        engine: extendEngine.id,
+        query: queryForTrail(extendEngine.id, extendTrail.intent, sector, input.turn, ctx.now),
+      }],
+      pages: [],
+    }]
     : [];
-  const yields = activeAfterClose
-    .map((trail) => ({ trail, perPage: trail.leads / Math.max(1, trail.pages) }))
-    .sort((left, right) => right.perPage - left.perPage || right.trail.leads - left.trail.leads);
   const focus = yields.map(({ trail }, index) => ({
     trailId: trail.id,
-    weight: yields.length === 1 ? 5 : index === 0 ? 5 : index === yields.length - 1 ? 1 : 3,
+    weight: !hasYieldEvidence ? 3 : index === 0 ? 5 : 1,
   }));
 
   // A note is written once about a trail, when there is something to say about where founders
@@ -292,7 +297,6 @@ function simulateNavigate(input: NavigateInput, ctx: JobContext): NavigateOutput
   const noted = (name: string) => input.notes.some((note) => note.by === "navigator" && note.text.startsWith(`${name}:`));
   const dry = input.trails.find((trail) => trail.status === "open" && !trail.pinned && trail.pages >= 20 && trail.leads === 0);
   if (dry && !noted(dry.name)) notes.push(`${dry.name}: no founders were found in ${dry.pages} pages.`);
-  const best = yields[0];
   const runnerUp = yields[1];
   if (best && best.trail.pages >= 8 && best.perPage > 0 && (!runnerUp || best.perPage >= runnerUp.perPage * 1.4) && !noted(best.trail.name)) {
     notes.push(`${best.trail.name}: ${best.trail.leads} founders in ${best.trail.pages} pages, the best rate so far. Worth more starting points.`);
@@ -300,7 +304,7 @@ function simulateNavigate(input: NavigateInput, ctx: JobContext): NavigateOutput
   const late = activeAfterClose.find((trail) => trail.tooLate >= 3 && trail.tooLate > trail.leads && !noted(trail.name));
   if (late && notes.length < 2) notes.push(`${late.name}: mostly companies past the wanted stage, ${late.tooLate} against ${late.leads} kept.`);
 
-  const done = remainingTurns <= 0 || remainingCalls <= 0 || everyOpenTrailHasLongQueue
+  const done = remainingTurns <= 0 || remainingCalls <= 0 || (everyOpenTrailHasLongQueue && !extendBest)
     || (seeded.length === 0 && extend.length === 0 && activeAfterClose.length === 0);
   return { open: seeded, extend, close: closes, focus, notes, done };
 }
@@ -557,15 +561,16 @@ function simulateSift(input: SiftInput, ctx: JobContext): SiftOutput {
     const score = visibleTextMatches(hit.title + " " + hit.snippet, input) + (early ? 2 : 0);
     selected.push({ hit, score });
   }
-  return {
-    open: selected
+  const open = selected
       .sort((left, right) => right.score - left.score || left.hit.index - right.hit.index)
       .slice(0, 6)
       .map(({ hit }, index) => ({
         index: hit.index,
         label: (hit.title || hit.snippet || "Search result").replace(/\s+/g, " ").trim().slice(0, 80),
         priority: index < 2 ? 1 : index < 4 ? 2 : 3,
-      })),
+      }));
+  return {
+    open,
   };
 }
 

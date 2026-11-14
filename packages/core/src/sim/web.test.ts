@@ -39,7 +39,7 @@ describe("simulated web", () => {
     expect(listing.url).toBe(pageAt("/g/mixed/1"));
     const projectLinks = listing.links.filter((entry) => new URL(entry.url).pathname.startsWith("/p/"));
     const nobodyLinks = listing.links.filter((entry) => new URL(entry.url).pathname.startsWith("/n/"));
-    expect(projectLinks).toHaveLength(15);
+    expect(projectLinks).toHaveLength(4);
     expect(nobodyLinks).toHaveLength(3);
     expect(listing.links.some((entry) => entry.text === "Next page" && entry.url === pageAt("/g/mixed/2"))).toBe(true);
     expect(listing.links.map(({ index }) => index)).toEqual(listing.links.map((_, index) => index));
@@ -73,6 +73,7 @@ describe("simulated web", () => {
     const profileLink = project.links.find((entry) => new URL(entry.url).pathname.startsWith("/u/"))!;
     const relatedLinks = project.links.filter((entry) => new URL(entry.url).pathname.startsWith("/p/"));
     const nobodyLink = project.links.find((entry) => new URL(entry.url).pathname.startsWith("/n/"));
+    const archiveLink = project.links.find((entry) => entry.text === "Build log index");
     expect(project.links.map(({ index }) => index)).toEqual(project.links.map((_, index) => index));
     expect(new URL(profileLink.url).pathname).toBe(`/u/${founder.simId}`);
     expect(relatedLinks.length).toBeGreaterThanOrEqual(2);
@@ -82,6 +83,16 @@ describe("simulated web", () => {
       return FOUNDERS.find((candidate) => candidate.simId === relatedId)?.sector === founder.sector;
     })).toBe(true);
     expect(nobodyLink).toBeDefined();
+    expect(archiveLink).toBeDefined();
+    let archiveUrl = archiveLink!.url;
+    for (let depth = 1; depth <= 4; depth += 1) {
+      const archive = web.page(archiveUrl, LAST_DAY)!;
+      expect(archive.simFounderIds).toBeUndefined();
+      expect(archive.title).toBe("Archived build notes");
+      const next = archive.links[0];
+      if (depth < 4) expect(next?.text).toBe("Older build notes");
+      archiveUrl = next?.url ?? archiveUrl;
+    }
 
     const profile = web.page(profileLink.url, LAST_DAY)!;
     expect(profile).toMatchObject({ status: "ok", simFounderIds: [founder.simId] });
@@ -140,6 +151,25 @@ describe("simulated web", () => {
 
   it("searches sector, company-name, and one-liner words, then orders project hits newest first", () => {
     const web = makeWeb();
+    for (const [engine, query, ground] of [
+      ["hn", "Show HN Developer tools", "strong-early"],
+      ["github", "Developer tools created:>2025-01-01 stars:>25", "job-board"],
+      ["web", "I left to build a Developer tools startup", "small-team"],
+    ] as const) {
+      expect(new URL(web.search(engine, query, LAST_DAY, 10)[0]!.url).pathname).toBe(`/g/${ground}/1`);
+    }
+    const featuredStrong = web.page(web.search("hn", "Show HN Developer tools", LAST_DAY, 1)[0]!.url, LAST_DAY)!;
+    const featuredSparse = web.page(web.search("github", "Developer tools created:>2025-01-01 stars:>25", LAST_DAY, 1)[0]!.url, LAST_DAY)!;
+    const webSourceHits = web.search("web", "I left to build a Developer tools startup", LAST_DAY, 500);
+    expect(new URL(webSourceHits[0]!.url).pathname).toBe("/g/small-team/1");
+    expect(new URL(webSourceHits[1]!.url).pathname.startsWith("/p/")).toBe(true);
+    expect(WORLD.founder(webSourceHits[1]!.simFounderIds![0]!)).toBeDefined();
+    const trueStrongEarly = (page: typeof featuredStrong) => (page.simFounderIds ?? []).filter((id) => {
+      const founder = FOUNDERS.find((candidate) => candidate.simId === id)!;
+      return founder.quality >= 0.6 && (founder.stage === "pre-seed" || founder.stage === "seed");
+    }).length;
+    expect(trueStrongEarly(featuredStrong)).toBeGreaterThan(trueStrongEarly(featuredSparse));
+
     const founder = FOUNDERS.find((candidate) => candidate.appearsOnDay === LAST_DAY)!;
     const oneLinerWord = founder.companyOneLiner.split(/\s+/).find((word) => word.length > 4)!.toLowerCase();
 
@@ -165,16 +195,21 @@ describe("simulated web", () => {
     expect(web.search("missing-engine", "company", LAST_DAY, 10)).toEqual([]);
   });
 
-  it("filters HN and GitHub to their visible project pages and includes directories and nobody pages on web", () => {
+  it("filters HN and GitHub project hits by source while exposing their curated directory starts", () => {
     const web = makeWeb();
-    for (const [engine, source] of [["hn", "hackernews"], ["github", "github"]] as const) {
+    for (const [engine, source, ground] of [["hn", "hackernews", "strong-early"], ["github", "github", "job-board"]] as const) {
       const hits = web.search(engine, "teams", LAST_DAY, 500);
       expect(hits.length).toBeGreaterThan(0);
       for (const hit of hits) {
-        expect(new URL(hit.url).pathname.startsWith("/p/")).toBe(true);
-        expect(hit.simFounderIds?.length).toBe(1);
-        const founder = FOUNDERS.find((candidate) => candidate.simId === hit.simFounderIds?.[0])!;
-        expect(founder.visibleIn).toContain(source);
+        const pathname = new URL(hit.url).pathname;
+        if (pathname.startsWith("/p/")) {
+          expect(hit.simFounderIds?.length).toBe(1);
+          const founder = FOUNDERS.find((candidate) => candidate.simId === hit.simFounderIds?.[0])!;
+          expect(founder.visibleIn).toContain(source);
+        } else {
+          expect(pathname).toMatch(new RegExp(`^/g/${ground}/\\d+$`));
+          expect(hit.simFounderIds?.length).toBeGreaterThan(0);
+        }
       }
       const fallback = web.search(engine, "zzzxylophone", LAST_DAY, 1);
       const latestVisibleDay = Math.max(...FOUNDERS.filter((founder) => founder.visibleIn.includes(source)).map((founder) => founder.appearsOnDay));

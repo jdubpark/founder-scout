@@ -2,7 +2,7 @@ import { SIM_WEB_HOST, type PageLink } from "@agentswarm/shared";
 import type { PageRead, SearchHit, SimCompany, SimFounder, SimWorld } from "../contracts";
 
 const BASE_URL = `https://${SIM_WEB_HOST}`;
-const PAGE_SIZE = 15;
+const PAGE_SIZE = 4;
 const MIXED_LIMIT = 60;
 const NOBODY_LINK_COUNT = 3;
 const STOP_WORDS = new Set(["a", "an", "and", "at", "by", "for", "from", "in", "into", "of", "on", "or", "the", "to", "with"]);
@@ -46,6 +46,12 @@ const GROUND_META: ReadonlyArray<Pick<Ground, "id" | "title" | "introduction">> 
   { id: "small-team", title: "Small teams", introduction: "A sparse collection of teams with very few people listed." },
   { id: "mixed", title: "Mixed project directory", introduction: "A cross-section of teams at different stages and with different kinds of work." },
 ];
+
+const FEATURED_GROUND: Readonly<Record<string, GroundId>> = {
+  hn: "strong-early",
+  github: "job-board",
+  web: "small-team",
+};
 
 const NOBODY_PAGES: readonly NobodyPage[] = [
   {
@@ -109,6 +115,10 @@ function projectUrl(founder: SimFounder): string {
 
 function profileUrl(founder: SimFounder): string {
   return `${BASE_URL}/u/${encodeURIComponent(founder.simId)}`;
+}
+
+function archiveUrl(simId: string, depth: number): string {
+  return `${BASE_URL}/archive/${encodeURIComponent(simId)}/${depth}`;
 }
 
 function groundUrl(id: GroundId, page: number): string {
@@ -207,6 +217,7 @@ function projectPage(founder: SimFounder, company: SimCompany, founders: readonl
     links.push(link(links.length, projectUrl(candidate), `${candidate.companyName}: ${candidate.sector}`));
   }
   links.push(link(links.length, `${BASE_URL}/n/1`, "General market note"));
+  links.push(link(links.length, archiveUrl(founder.simId, 1), "Build log index"));
   const text = [
     `${company.name} was started by ${founder.name}, the founder.`,
     `Sector: ${company.sector}. ${fundingForStage(company.stage)}`,
@@ -324,6 +335,21 @@ export function createSimWeb(options: CreateSimWebOptions): SimWeb {
       return founder && company ? founderPage(founder, company) : null;
     }
 
+    const archiveMatch = /^\/archive\/([^/]+)\/(\d+)$/.exec(path);
+    if (archiveMatch) {
+      let simId: string;
+      try {
+        simId = decodeURIComponent(archiveMatch[1]!);
+      } catch {
+        return null;
+      }
+      const depth = Number(archiveMatch[2]);
+      const founder = founderById.get(simId);
+      if (!founder || !isVisible(founder, day) || !Number.isInteger(depth) || depth < 1 || depth > 5) return null;
+      const next = depth < 5 ? [link(0, archiveUrl(simId, depth + 1), "Older build notes")] : [];
+      return makeRead(`${BASE_URL}${path}`, "Archived build notes", "An older technical build log with no new person, company, or product launch.", next);
+    }
+
     const groundMatch = /^\/g\/([a-z-]+)\/(\d+)$/.exec(path);
     if (groundMatch) {
       const ground = groundById.get(groundMatch[1] as GroundId);
@@ -347,7 +373,12 @@ export function createSimWeb(options: CreateSimWebOptions): SimWeb {
     const queryWords = [...new Set(tokenize(query).filter((word) => !STOP_WORDS.has(word)))];
     if (queryWords.length === 0) return [];
     const day = safeDay(requestedDay);
+    const isSourceQuery = engine === "hn" ? /\bshow\s+hn\b/i.test(query)
+      : engine === "github" ? /\bcreated:>/i.test(query) && /\bstars:>/i.test(query)
+        : engine === "web" && /\b(?:left|quit)\b/i.test(query);
     const source = engine === "hn" ? "hackernews" : engine === "github" ? "github" : null;
+    const featuredId = FEATURED_GROUND[engine];
+    const featured = featuredId ? groundById.get(featuredId) : undefined;
     const documents: SearchDocument[] = [];
     const projectDocuments: SearchDocument[] = [];
 
@@ -359,6 +390,29 @@ export function createSimWeb(options: CreateSimWebOptions): SimWeb {
       const document = documentForPage(result, founder.appearsOnDay, founderSearchWords(founder, company));
       documents.push(document);
       projectDocuments.push(document);
+    }
+
+    const featuredUrls: string[] = [];
+    if (featured) {
+      const visible = featured.founders.filter((founder) => isVisible(founder, day));
+      const pageCount = Math.max(1, Math.ceil(visible.length / PAGE_SIZE));
+      for (let pageNumber = 1; pageNumber <= pageCount; pageNumber += 1) {
+        const result = listingPage(featured, pageNumber, day, companyFor);
+        if (!result) continue;
+        featuredUrls.push(result.url);
+        if (documents.some((document) => document.url === result.url)) continue;
+        const newestDay = (result.simFounderIds ?? []).reduce((newest, simId) =>
+          Math.max(newest, founderById.get(simId)?.appearsOnDay ?? 0), 0);
+        const segment = visible.slice((pageNumber - 1) * PAGE_SIZE, pageNumber * PAGE_SIZE);
+        const sourceLabel = engine === "hn" ? "Show HN first launches"
+          : engine === "github" ? "new repositories and small projects"
+            : "people leaving jobs to build";
+        const matchable = `${sourceLabel} ${featured.title} ${featured.introduction} ${segment.map((founder) => {
+          const company = companyFor(founder.simId);
+          return company ? founderSearchWords(founder, company) : "";
+        }).join(" ")}`;
+        documents.push(documentForPage(result, newestDay, matchable));
+      }
     }
 
     if (engine === "web") {
@@ -375,7 +429,7 @@ export function createSimWeb(options: CreateSimWebOptions): SimWeb {
             const company = companyFor(founder.simId);
             return company ? founderSearchWords(founder, company) : "";
           }).join(" ")}`;
-          documents.push(documentForPage(result, newestDay, matchable));
+          if (!documents.some((document) => document.url === result.url)) documents.push(documentForPage(result, newestDay, matchable));
         }
       }
       for (const nobody of NOBODY_PAGES) {
@@ -388,6 +442,27 @@ export function createSimWeb(options: CreateSimWebOptions): SimWeb {
     const fuzzyMatches = documents.filter((document) => queryWords.some((word) => document.searchableWords.has(word)));
     const candidates = exactMatches.length > 0 ? exactMatches : fuzzyMatches.length > 0 ? fuzzyMatches : projectDocuments;
     candidates.sort((left, right) => right.day - left.day || left.url.localeCompare(right.url));
+    const requestedPage = Number(query.match(/\bbatch\s+(\d+)\b/i)?.[1] ?? 1);
+    const featuredDocument = isSourceQuery
+      ? featuredUrls.flatMap((url, index) => {
+        if (index + 1 !== requestedPage) return [];
+        const document = documents.find((candidate) => candidate.url === url);
+        return document ? [document] : [];
+      })[0]
+      : undefined;
+    if (isSourceQuery) {
+      const directoryIds = new Set(featuredDocument?.founderIds ?? []);
+      const founderProjects = projectDocuments.filter((document) => {
+        const id = document.url.split("/p/").at(-1);
+        return id && !directoryIds.has(decodeURIComponent(id));
+      }).slice(0, 5);
+      return [featuredDocument, ...founderProjects].filter((document): document is SearchDocument => Boolean(document)).slice(0, maxResults).map((document) => ({
+        url: document.url,
+        title: document.title,
+        snippet: document.snippet,
+        ...(document.founderIds ? { simFounderIds: [...document.founderIds] } : {}),
+      }));
+    }
     return candidates.slice(0, maxResults).map((document) => ({
       url: document.url,
       title: document.title,
