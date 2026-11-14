@@ -72,7 +72,11 @@ type InvestigatorJobId = (typeof INVESTIGATOR_JOBS)[number];
 
 const NO_MODEL_PROVIDER = "sim";
 const NO_MODEL_NAME = "none";
-/** Bits a second below which recorded speech is not encoded. Bounds a recording's length from its size. */
+/**
+ * Bounds a recording's length from its size when `ffprobe` cannot measure it. Audio and video
+ * published on the web carry speech at 6 kbit/s or more (the floor of Opus; MP3's is 8). A few
+ * telephone codecs go lower (AMR at 4.75), and such a file can run about a quarter past the bound.
+ */
 const LOWEST_SPEECH_BITRATE = 6_000;
 
 function isScoutJob(jobId: JobId): jobId is ScoutJobId {

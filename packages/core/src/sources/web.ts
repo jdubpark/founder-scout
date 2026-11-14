@@ -7,7 +7,7 @@ import { createPinnedLookup, isRestrictedIp, pinnedFetch, readableAddress } from
 import { defaultFetch, type FetchFn } from "./http";
 import { cleanPlain, decodeEntities, htmlToText } from "./util";
 
-const DEFAULT_USER_AGENT = "web-reader/1.0";
+export const DEFAULT_USER_AGENT = "web-reader/1.0";
 /** The least time between two requests to one host when its robots.txt asks for none. */
 export const DEFAULT_GAP_MS = 2_000;
 const MAX_GAP_MS = 60_000;
