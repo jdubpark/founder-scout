@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { maskText, type PastCase } from "@agentswarm/shared";
-import { httpGet, type FetchFn } from "./http";
+import { type FetchFn } from "./http";
 import {
   collectLaunchPosts,
   fetchUnicornNames,
@@ -162,12 +162,6 @@ describe("past launch collection", () => {
       ? response({ hits: [hit("empty", "Launch HN: Empty (YC W18)", { story_text: "" })], nbPages: 1 })
       : response({ id: "empty", children: [{ author: "other", created_at: "2018-02-03T11:00:00.000Z", text: "not the author", children: [] }] });
     expect(await collectLaunchPosts({ from: "2018-01-01", to: "2018-12-31", fetchFn, pauseMs: 0 })).toEqual([]);
-  });
-
-  it("lets the shared HTTP boundary reject never-fetch hosts", async () => {
-    const fetchFn = vi.fn<FetchFn>(async () => response({}));
-    await expect(httpGet(fetchFn, "Hacker News", "https://www.linkedin.com/company/example")).rejects.toThrow(/never-fetch list/);
-    expect(fetchFn).not.toHaveBeenCalled();
   });
 });
 

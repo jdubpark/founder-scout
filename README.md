@@ -79,23 +79,36 @@ answer's shape, and promises not to train on what it is sent. DeepSeek's own end
 governed by Chinese law and says its servers are in China, so point `DEEPSEEK_BASE_URL` at a
 host you have approved for data about named people.
 
-**What it reads.** Public pages only. The reader obeys robots.txt, waits between requests to
-one site, reads at most three of its pages in a wave, sends no login and no cookie, and treats
-a refusal as final. A site that asks for a pause is left alone for the rest of the run. It never requests
-LinkedIn, nor the sites whose terms forbid automated reading even where robots.txt allows it
-(the list, with each site's rule, is `TERMS_BARRED_HOSTS` in `packages/shared/src/policy.ts`).
-Set `HUNT_USER_AGENT` to a name and a contact address of your own before a live hunt, so a
-site can tell who is reading and say no by name.
+**What it reads.** Public pages only. The reader obeys robots.txt — everywhere except LinkedIn,
+which the partner chose to read despite its robots.txt (decision recorded 2026-11-13 in
+`packages/shared/src/policy.ts`) — waits between requests to one site, reads at most three of its
+pages in a wave, sends no login and no cookie of its own, and treats a refusal as final. A site
+that asks for a pause is left alone for the rest of the run. LinkedIn may also be read through
+logged-in sessions you supply: put one Cookie header value per line in `LINKEDIN_COOKIES`, and the
+reader and the quote checker send one to linkedin.com only, rotate through the list, and stop using
+a session for an hour after LinkedIn refuses it. Optional lines in `LINKEDIN_PROXIES` and
+`LINKEDIN_USER_AGENTS` pin each account to its own sticky proxy and user agent, so it never jumps
+IP or browser; `HUNT_PROXY_URL` routes every other read through one proxy. Sessions you create
+or buy are added the same way. A logged-in account
+keeps a human rhythm seeded from its cookie: a workday with lunch, bursts with breaks, 60–100
+reads a weekday, lighter weekends — reads outside it are held back, not sent. Set
+`HUNT_USER_AGENT` to a name and a contact address of
+your own before a live hunt, so a site can tell who is reading and say no by name.
 
-## Professional profiles, without reading LinkedIn
+## Professional profiles
 
-Nothing here requests linkedin.com, logged in or not; the design explains why
-(section 9). The same information comes in three ways:
+Profile data arrives three ways, and LinkedIn's own public pages may be read anonymously or through
+your supplied sessions:
 
 - **A data vendor.** Put a People Data Labs key in `.env` as `PDL_API_KEY`. The talent-move scout
   then searches for people who recently became founders, and company research can list a company's
   team. Each record costs a vendor credit; `PDL_RECORDS_PER_DAY` (default 50) is the ceiling. The
   adapter has not been run against the live service: no key was available.
+- **Bright Data's LinkedIn Scraper API.** Put a `BRIGHTDATA_API_KEY` in `.env` to enrich a known
+  profile with its about, experience and education, or to search by name. It is preferred for
+  lookups when set; People Data Labs stays the discovery feed. Billed per delivered record (5,000
+  free per month) with its own daily ceiling, `BRIGHTDATA_RECORDS_PER_DAY`. Verified against the
+  live service on 2026-11-13 with one profile record delivered.
 - **Your own connections.** Export your connections from your own account settings and upload the
   file under Settings, Your network. The dashboard then shows who you know at each company, and a
   contact whose title changes to a founder's between two uploads becomes a lead. Email addresses in
@@ -223,8 +236,7 @@ Verified by running it:
   code found their names and quoted words on the page; all 4 planted pages were ignored by the
   runner; the fit screen kept 3 of the 4;
 - the page reader against real sites: Wikipedia, GitHub and Hugging Face read; a Hacker News
-  post read through its API; Devpost, Reddit, LinkedIn and a cloud-metadata address refused
-  without a request;
+  post read through its API; a cloud-metadata address refused without a request;
 - pools of agents on a running server in simulation: tasks split between two models by share,
   each member's supported items, planted claims and failures counted, share moved by code;
 - the Assumptions page on the real eval's judgments, and the Improve page on its rounds.
@@ -272,9 +284,8 @@ fake client, and "fast" is unmeasured here: on the headless login a runner call 
 of six seconds. Four live runs show the parts working together. They are far too few to say
 how many founders a hunt finds or which trails are worth their cost.
 
-Checked by running it on 2026-11-13: the rule that stops research agents opening linkedin.com
-(a rule for the bare host does not cover `www.`, so both forms are passed); headless Claude and
-Codex still sign in after unrelated keys are removed from their environment; and the quote check,
+Checked by running it on 2026-11-13: headless Claude and Codex still sign in after unrelated
+keys are removed from their environment; and the quote check,
 which found none of the first live run's nine excerpts on the pages they cited under the old
 "quote or paraphrase" prompt, and seven of eight under the exact-quote prompt (one was too short
 to check). One founder, so this shows the direction, not a rate. The quote check was run again
@@ -335,7 +346,8 @@ Known limits:
 
 ## Rules the code enforces
 
-Nothing is sent or dialled without a person approving that item. Nothing requests LinkedIn.
+Nothing is sent or dialled without a person approving that item. LinkedIn is read anonymously or
+through logged-in sessions the partner supplies; nothing in this system logs in by itself.
 Professional, public information only. Every claim has a source, and code checks that a quote is on
 the page it cites before a model is asked about it. Every fact-check carries one planted false claim;
 a checker that accepts it has that call's verdicts thrown away. A spend cap per run, a ceiling on

@@ -188,7 +188,7 @@ describe("hunt engine stage", () => {
               name: "Restricted sources",
               intent: "Find early builders.",
               searches: [],
-              pages: ["https://linkedin.com/in/example", "https://writer.substack.com/p/example"],
+              pages: ["http://10.0.0.1/admin", "https://db.internal/page"],
             }],
           };
         },
@@ -196,12 +196,11 @@ describe("hunt engine stage", () => {
     });
     const started = await controller.start({ swarmId: SWARM_ID, trigger: "manual", brain: "sim", sources: "sim", budgetUsd: 40 });
     await controller.wait(started.id);
-    const denied = ["https://linkedin.com/in/example", "https://writer.substack.com/p/example"];
+    const denied = ["http://10.0.0.1/admin", "https://db.internal/page"];
     expect(reads.some((url) => denied.includes(url))).toBe(false);
     expect(store.listFrontier(store.getHunt(SWARM_ID)!.id).some((item) => denied.includes(item.target))).toBe(false);
     expect(inputs[1]?.lastWave?.refused).toEqual(expect.arrayContaining([
-      expect.stringContaining("never requests"),
-      expect.stringContaining("substack.com"),
+      expect.stringContaining("not a public web page"),
     ]));
   });
 

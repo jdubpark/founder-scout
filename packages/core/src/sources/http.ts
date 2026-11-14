@@ -1,5 +1,3 @@
-import { isNeverFetchUrl } from "@agentswarm/shared";
-
 /**
  * One GET helper for every live adapter: identifies the client, enforces the
  * 20 second timeout, honours the caller's abort signal, and turns rate limits
@@ -49,9 +47,6 @@ export async function httpGet(
   url: string,
   options: { headers?: Record<string, string>; signal?: AbortSignal } = {},
 ): Promise<HttpResult> {
-  if (isNeverFetchUrl(url)) {
-    throw neverFetchError(source);
-  }
   const timeout = AbortSignal.timeout(REQUEST_TIMEOUT_MS);
   const signal = options.signal ? AbortSignal.any([options.signal, timeout]) : timeout;
   try {
@@ -67,7 +62,6 @@ export async function httpGet(
     let res: Response;
     while (true) {
       const current = new URL(currentUrl);
-      if (isNeverFetchUrl(currentUrl)) throw neverFetchError(source);
       const headers = { "User-Agent": USER_AGENT, ...(current.host === originalHostname ? options.headers : {}) };
       res = await fetchFn(currentUrl, { method: "GET", headers, signal, redirect: "manual" });
       if (!REDIRECT_STATUSES.has(res.status)) break;
@@ -90,7 +84,6 @@ export async function httpGet(
       // The redirect's own body is not wanted; leaving it unread would hold the connection open.
       await res.body?.cancel().catch(() => undefined);
       currentUrl = nextUrl.href;
-      if (isNeverFetchUrl(currentUrl)) throw neverFetchError(source);
       if (visited.has(currentUrl)) throw new HttpGetPolicyError(`${source} request failed: redirect loop.`);
       visited.add(currentUrl);
       redirects += 1;
@@ -108,12 +101,6 @@ export async function httpGet(
 }
 
 class HttpGetPolicyError extends Error {}
-
-function neverFetchError(source: string): HttpGetPolicyError {
-  return new HttpGetPolicyError(
-    `${source} cannot request this address because it is on the never-fetch list; nothing in this system requests it.`,
-  );
-}
 
 /** Throws SourceRateLimitError on 429 or rate-limited 403, and a plain Error on other non-2xx. */
 export function assertSuccessful(source: string, res: HttpResult, nowMs: number): void {

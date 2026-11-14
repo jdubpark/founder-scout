@@ -1,10 +1,11 @@
 import { lookup } from "node:dns/promises";
 import { isIP } from "node:net";
-import { cleanUrl, hostOf, isNeverFetchHost, isOffLimitsHost, termsBar } from "@agentswarm/shared";
+import { cleanUrl, hostOf, isProfessionalNetworkHost, robotsExceptionHost } from "@agentswarm/shared";
 import type { PageLink } from "@agentswarm/shared";
 import type { PageRead, WebReader } from "../contracts";
 import { createPinnedLookup, isRestrictedIp, pinnedFetch, readableAddress } from "./quote-check";
 import { defaultFetch, type FetchFn } from "./http";
+import { linkedInSessionPoolFor, type LinkedInAccount } from "./sessions";
 import { cleanPlain, decodeEntities, htmlToText } from "./util";
 
 const DEFAULT_USER_AGENT = "web-reader/1.0";
@@ -15,7 +16,8 @@ const MAX_ROBOTS_BYTES = 512 * 1024;
 const MAX_REDIRECTS = 5;
 const ROBOTS_TTL_MS = 60 * 60 * 1000;
 const REDIRECTS = new Set([301, 302, 303, 307, 308]);
-const REFUSALS = new Set([401, 403, 407, 429, 451]);
+// The professional network throttles with HTTP 999.
+const REFUSALS = new Set([401, 403, 407, 429, 451, 999]);
 
 export interface WebReaderOptions {
   userAgent?: string;
@@ -26,6 +28,10 @@ export interface WebReaderOptions {
   timeoutMs?: number;
   /** Allows a resolver supplied by a test to route a named host to loopback. */
   allowLoopbackForTests?: boolean;
+  /** Logged-in accounts for the professional network. No other host is sent a cookie or their agent. */
+  accounts?: readonly LinkedInAccount[];
+  /** A proxy every read may tunnel through, unless the professional network account carries its own. */
+  proxyUrl?: string | null;
 }
 
 interface RobotsRule {
@@ -47,6 +53,8 @@ interface ReadResponse {
   body?: string;
   truncated?: boolean;
   finalUrl?: string;
+  /** The pool account used on the final request, when one was, so a refusal can cool it. */
+  sessionIndex?: number;
 }
 
 interface HostTail {
@@ -64,6 +72,7 @@ export function createWebReader(options: WebReaderOptions = {}): WebReader {
   const robots = new Map<string, { expiresAt: number; promise: Promise<RobotsPolicy> }>();
   const hostTails = new Map<string, HostTail>();
   const hostStartedAt = new Map<string, number>();
+  const accountPool = options.accounts && options.accounts.length > 0 ? linkedInSessionPoolFor(options.accounts, options.now) : null;
 
   async function validate(raw: string): Promise<{ url: string; addresses: string[] } | ReadResponse> {
     let parsed: URL;
@@ -79,9 +88,6 @@ export function createWebReader(options: WebReaderOptions = {}): WebReader {
       return { kind: "blocked", detail: "This address must not include a user name or password." };
     }
     const hostname = parsed.hostname.replace(/^\[|\]$/gu, "").toLowerCase().replace(/\.$/u, "");
-    if (isNeverFetchHost(hostname)) return { kind: "blocked", detail: "This address is never requested." };
-    const barred = termsBar(hostname);
-    if (isOffLimitsHost(hostname)) return { kind: "blocked", detail: `${barred?.host ?? hostname} does not allow automated reading.` };
     const cleaned = cleanUrl(raw);
     if (!cleaned) return { kind: "blocked", detail: "This address is not a readable public web address." };
 
@@ -130,12 +136,30 @@ export function createWebReader(options: WebReaderOptions = {}): WebReader {
     let current = rawUrl;
     let redirects = 0;
     const visited = new Set<string>();
+    // One account for the whole chain, picked when it first reaches the professional network: a
+    // person following a redirect keeps one session. A robots.txt read is made anonymously,
+    // so it neither picks an account nor waits out a dwell.
+    let chainAccount: { index: number; account: LinkedInAccount } | null = null;
     while (true) {
       const checked = await validate(current);
       if ("kind" in checked) return checked;
       current = checked.url;
       if (visited.has(current)) return { kind: "unreachable", detail: "The address redirected in a loop." };
       visited.add(current);
+
+      const host = hostOf(current);
+      if (!host) return { kind: "blocked", detail: "This address is not a readable public web address." };
+      // The account is picked and the resting gate applied before robots.txt, so a resting
+      // account defers the read instead of being recorded as a robots refusal, and no host
+      // other than the network's own is ever sent a cookie.
+      const pool = followRobots && accountPool !== null && isProfessionalNetworkHost(host) ? accountPool : null;
+      if (pool && !chainAccount) {
+        chainAccount = pool.pick();
+        if (!chainAccount) {
+          return { kind: "blocked", detail: pool.restingDetail() ?? "Every account asked for a pause." };
+        }
+      }
+      const account = chainAccount && isProfessionalNetworkHost(host) ? chainAccount : null;
 
       let crawlDelayMs = DEFAULT_GAP_MS;
       if (followRobots) {
@@ -144,16 +168,21 @@ export function createWebReader(options: WebReaderOptions = {}): WebReader {
         crawlDelayMs = Math.max(crawlDelayMs, policy.crawlDelayMs);
       }
 
-      const host = hostOf(current);
-      if (!host) return { kind: "blocked", detail: "This address is not a readable public web address." };
+      const proxyUrl = account ? account.account.proxyUrl ?? options.proxyUrl : options.proxyUrl;
       try {
-        const outcome = await withHost(host, crawlDelayMs, async () => {
+        // A professional-network read waits out a human dwell first, on top of any crawl delay.
+        const gapMs = account && pool ? Math.max(crawlDelayMs, pool.dwellMs()) : crawlDelayMs;
+        const outcome = await withHost(host, gapMs, async () => {
           const timeout = AbortSignal.timeout(timeoutMs);
           const signal = callerSignal ? AbortSignal.any([timeout, callerSignal]) : timeout;
-          const request = fetchFn ?? ((url, init) => pinnedFetch(url, init, checked.addresses));
+          const request = fetchFn ?? ((url, init) => pinnedFetch(url, init, checked.addresses, proxyUrl ?? undefined));
           const response = await request(current, {
             method: "GET",
-            headers: { "User-Agent": userAgent, Accept: "text/html, text/plain;q=0.9" },
+            headers: {
+              "User-Agent": account?.account.userAgent ?? userAgent,
+              Accept: "text/html, text/plain;q=0.9",
+              ...(account ? { Cookie: account.account.cookie } : {}),
+            },
             redirect: "manual",
             signal,
           });
@@ -187,7 +216,7 @@ export function createWebReader(options: WebReaderOptions = {}): WebReader {
           redirects += 1;
           continue;
         }
-        return { kind: "response", detail: "", response: outcome.response, body: outcome.body, truncated: outcome.truncated, finalUrl: current };
+        return { kind: "response", detail: "", response: outcome.response, body: outcome.body, truncated: outcome.truncated, finalUrl: current, ...(account ? { sessionIndex: account.index } : {}) };
       } catch (error) {
         return { kind: "unreachable", detail: timeoutDetail(error) };
       }
@@ -197,6 +226,11 @@ export function createWebReader(options: WebReaderOptions = {}): WebReader {
   async function robotsPolicy(rawUrl: string, callerSignal?: AbortSignal): Promise<RobotsPolicy> {
     const url = new URL(rawUrl);
     const origin = url.origin;
+    // The one recorded exception: the professional network is read although its robots.txt
+    // bars every agent but its own, so robots.txt is not even asked for there.
+    if (robotsExceptionHost(url.hostname)) {
+      return { allowed: true, blockedDetail: "robots.txt does not allow it.", rules: [], crawlDelayMs: 0 };
+    }
     const cached = robots.get(origin);
     if (cached && cached.expiresAt > now()) return cached.promise;
     const promise = loadRobots(origin, callerSignal);
@@ -229,16 +263,7 @@ export function createWebReader(options: WebReaderOptions = {}): WebReader {
       const input = cleanUrl(rawUrl);
       const baseUrl = input ?? rawUrl;
       if (!input) {
-        let parsed: URL | null = null;
-        try { parsed = new URL(rawUrl); } catch { /* invalid address */ }
-        const hostname = parsed?.hostname ?? "";
-        const barred = termsBar(hostname);
-        const detail = isNeverFetchHost(hostname)
-          ? "This address is never requested."
-          : isOffLimitsHost(hostname)
-            ? `${barred?.host ?? hostname} does not allow automated reading.`
-            : "This address is not a readable public web address.";
-        return pageResult("blocked", detail, baseUrl);
+        return pageResult("blocked", "This address is not a readable public web address.", baseUrl);
       }
       if (readOptions?.signal?.aborted) return pageResult("unreachable", "The page request was cancelled.", baseUrl);
 
@@ -250,6 +275,12 @@ export function createWebReader(options: WebReaderOptions = {}): WebReader {
       if (!result.response) return pageResult("unreachable", "The page could not be reached.", baseUrl);
 
       const status = result.response.status;
+      // A page an account opened counts against its day. A network refusal rests the account
+      // until its next workday, so later reads rotate to another one.
+      if (result.sessionIndex !== undefined) {
+        if (REFUSALS.has(status)) accountPool?.cool(result.sessionIndex);
+        else accountPool?.noteRead(result.sessionIndex);
+      }
       if ((status === 429 || status === 503) && result.response.headers.has("retry-after")) {
         return pageResult("blocked", retryAfterDetail(result.response, now()) ?? `The site answered HTTP ${status}.`, baseUrl);
       }
@@ -262,6 +293,9 @@ export function createWebReader(options: WebReaderOptions = {}): WebReader {
       if (!isReadableContentType(contentType)) return pageResult("not_text", "The site answered with a non-text content type.", baseUrl);
 
       const finalUrl = standIn ? baseUrl : result.finalUrl ?? baseUrl;
+      // The professional network serves its login wall here, usually via redirect. The page
+      // served on it is the wall, not the page asked for.
+      if (finalUrl.includes("/authwall")) return pageResult("blocked", "The page is behind a login wall.", baseUrl);
       const body = result.body ?? "";
       const html = isHtml(contentType);
       const safeHtml = html ? stripUnsafeBlocks(body) : "";
@@ -274,6 +308,7 @@ export function createWebReader(options: WebReaderOptions = {}): WebReader {
         title: html ? extractTitle(safeHtml) : "",
         text,
         links: html ? extractLinks(safeHtml, finalUrl, input) : [],
+        html: readOptions?.html === true ? body : null,
       };
     },
   };
@@ -454,13 +489,13 @@ function robotsPatternMatches(pattern: string, target: string): boolean {
   return true;
 }
 
-function stripUnsafeBlocks(html: string): string {
+export function stripUnsafeBlocks(html: string): string {
   return html
     .replace(/<!--[\s\S]*?-->/gu, " ")
     .replace(/<(script|style|noscript|template|svg)\b[^>]*>[\s\S]*?(?:<\/\1\s*>|$)/giu, " ");
 }
 
-function extractTitle(html: string): string {
+export function extractTitle(html: string): string {
   const match = /<title\b[^>]*>([\s\S]*?)<\/title\s*>/iu.exec(html);
   return cleanPlain(decodeEntities((match?.[1] ?? "").replace(/<[^>]*>/gu, " ")), 200);
 }
@@ -476,7 +511,7 @@ const MIN_CONTENT_LINKS = 5;
  * taken first: the menu, masthead, footer and sidebars are left out unless the content has
  * almost no links of its own.
  */
-function extractLinks(html: string, baseUrl: string, inputUrl: string): PageLink[] {
+export function extractLinks(html: string, baseUrl: string, inputUrl: string): PageLink[] {
   const content = linksIn(html.replace(CHROME, " "), baseUrl, inputUrl);
   return content.length >= MIN_CONTENT_LINKS ? content : linksIn(html, baseUrl, inputUrl);
 }

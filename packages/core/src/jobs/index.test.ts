@@ -635,13 +635,13 @@ describe("job registry and prompt contracts", () => {
     "investigate.company",
     "investigate.media",
     "investigate.redflags",
-  ] as const)("requires licensed profile data for %s", (id) => {
+  ] as const)("keeps %s logged out of every site", (id) => {
     const system = createJobRegistry().get(id).buildPrompt(
       inputFor(id) as InvestigateInput,
       context(),
     ).system;
-    expect(system).toContain("Never fetch or log into linkedin.com.");
-    expect(system).toContain("Professional-profile data may come only from a licensed vendor.");
+    expect(system).toContain("Never log in to linkedin.com or any other site.");
+    expect(system).toContain("Public pages, linkedin.com included, may be read anonymously.");
     expect(system).toContain("Every evidence item must include a source URL");
   });
 

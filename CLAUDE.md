@@ -41,12 +41,23 @@ check it. `packages/core/src/rules.test.ts` enforces that, so add the test with 
 - **Outreach is only ever proposed.** Nothing in the engine sends or dials when sources are live.
   The disclosure sentence on a draft is written by code and must stay uneditable. Tests:
   `packages/core/src/engine/index.test.ts`, `packages/core/src/service/index.test.ts`.
-- **Nothing requests the professional network's own site.** No adapter, no fetching, no logged-in
-  automation, for linkedin.com and the other hosts in `packages/shared/src/policy.ts`. A link to one
-  is a pointer for a person to open. Profile data comes from a data vendor under contract, from a
-  partner's own exported contact list, or not at all. Tests: `packages/shared/src/policy.test.ts`,
-  `packages/core/src/sources/http.test.ts`, `packages/core/src/sources/quote-check.test.ts`,
-  `packages/core/src/providers/claude-cli.test.ts`.
+- **The professional network is read anonymously, or through logged-in sessions the partner
+  supplies.** linkedin.com and its related hosts in `packages/shared/src/policy.ts` are read like
+  any public page: requests spaced, a refusal final. Its robots.txt bars every agent but its own,
+  so it is the one host read despite robots.txt, a decision the partner recorded on 2026-11-13
+  (`ROBOTS_EXCEPTION_HOSTS`). Sessions come from `LINKEDIN_COOKIES` (one Cookie header value
+  per line; created or bought accounts supply theirs the same way), pinned in order to an optional
+  proxy (`LINKEDIN_PROXIES`) and user agent (`LINKEDIN_USER_AGENTS`), rotated. Each account
+  keeps a human rhythm, seeded from its cookie so it is stable: a workday with lunch, bursts
+  with breaks, a daily cap and lighter weekends; reads outside it are held back, not sent, and
+  a refusal rests the account until its next workday, three days on a repeat within a week.
+  `HUNT_PROXY_URL` routes every read through one proxy. Nothing in this system logs in by
+  itself, and a cookie is never sent to any other host. When `OCTO_PROFILE_UUIDS` names one
+  Octo Browser profile per account, the network is read through that real Chromium window —
+  one tab, a dwell between pages, scrolling as a reader does — and the fetch path carries no
+  account at all. Tests: `packages/shared/src/policy.test.ts`, `packages/core/src/sources/web.test.ts`,
+  `packages/core/src/sources/quote-check.test.ts`, `packages/core/src/sources/sessions.test.ts`,
+  `packages/core/src/sources/browser-reader.test.ts`, `packages/core/src/sources/octo.test.ts`.
 - **Never store or score personal attributes** (`PROHIBITED_ATTRIBUTES` in `rubric.ts`). Trajectory
   is judged against years of experience, never age. Tests: `packages/core/src/jobs/index.test.ts`,
   `packages/core/src/service/index.test.ts`.
@@ -66,9 +77,9 @@ check it. `packages/core/src/rules.test.ts` enforces that, so add the test with 
 - **A contact list is the uploader's own, and stays out of prompts.** Email addresses in it are
   never read. Tests: `packages/core/src/sources/connections.test.ts`,
   `packages/core/src/service/index.test.ts`.
-- **Vendor records cost money outside the run's spend cap.** The People Data Labs adapter asks only
-  for professional fields and has its own ceiling on records per day. Test:
-  `packages/core/src/sources/pdl.test.ts`.
+- **Vendor records cost money outside the run's spend cap.** The People Data Labs and Bright Data
+  adapters ask only for professional fields, and each has its own ceiling on records per day.
+  Tests: `packages/core/src/sources/pdl.test.ts`, `packages/core/src/sources/brightdata.test.ts`.
 - **Headless agents do not inherit unrelated secrets.** They read untrusted pages and repositories,
   so keys for other services are removed from their environment. Test:
   `packages/core/src/providers/env.test.ts`.
@@ -136,12 +147,17 @@ check it. `packages/core/src/rules.test.ts` enforces that, so add the test with 
   the reader to report one. The result is the task's control, counted against the pool member,
   and nobody from a planted page is ever kept. Tests: `packages/shared/src/hunt.test.ts`,
   `packages/core/src/engine/hunt.test.ts`, `packages/core/src/jobs/hunt.test.ts`.
-- **The hunt reads public pages within their rules.** robots.txt is obeyed, requests to one host
-  are spaced, there is no login and no cookie, a refusal is final, an address must be a named
-  public host, and the sites in `TERMS_BARRED_HOSTS` are not read even where robots.txt allows.
-  Add a site to that list with the sentence that bars it. Tests:
+- **The hunt reads public pages within their rules.** robots.txt is obeyed everywhere except the
+  professional network's recorded exception, requests to one host are spaced, there is no login
+  and no cookie of its own (only the partner-supplied sessions on the professional network), a
+  refusal is final, and an address must be a named public host. A site's prose terms do not bar a
+  host on their own; robots.txt is what is obeyed. Tests:
   `packages/core/src/sources/web.test.ts`, `packages/shared/src/policy.test.ts`,
   `packages/shared/src/hunt.test.ts`.
+- **The YC scout reads company pages through the web reader**, so robots.txt and per-host spacing
+  govern it like the hunt; the directory index comes from the open mirror at most once a day, and
+  a page that keeps failing is given up after three tries. Tests:
+  `packages/core/src/sources/yc.test.ts`, `packages/core/src/sources/web.test.ts`.
 - **A page is read once; a search runs again only in a later run or on a later day.** Test:
   `packages/core/src/db/store.test.ts`.
 - **A runner call names no effort, and that means answer fast.** DeepSeek is sent thinking off

@@ -154,7 +154,7 @@ describe("addresses", () => {
     expect(cleanUrl(" https://Example.org/a?utm_source=x&id=7#top ")).toBe("https://example.org/a?id=7");
   });
 
-  it("refuses anything that is not a public page the system may request", () => {
+  it("refuses anything that is not a public page", () => {
     expect(cleanUrl("ftp://example.org/file")).toBeNull();
     expect(cleanUrl("https://user:pass@example.org/")).toBeNull();
     expect(cleanUrl("http://localhost/admin")).toBeNull();
@@ -167,11 +167,9 @@ describe("addresses", () => {
     expect(cleanUrl("https://anything.example/")).toBeNull();
     // The simulated web's one host is let through. It is on a name nobody can register.
     expect(cleanUrl(`https://${SIM_WEB_HOST}/p/abc`)).toBe("https://web.sim.example/p/abc");
-    expect(cleanUrl("https://www.linkedin.com/in/someone")).toBeNull();
-    // A site whose terms bar automated reading, whatever its robots.txt says.
-    expect(cleanUrl("https://devpost.com/software/popular")).toBeNull();
-    expect(cleanUrl("https://someone.substack.com/p/why-i-quit")).toBeNull();
-    expect(cleanUrl("https://www.ycombinator.com/launches")).toBeNull();
+    // The professional network is read anonymously, like any public page.
+    expect(cleanUrl("https://www.linkedin.com/in/someone")).toBe("https://www.linkedin.com/in/someone");
+    expect(cleanUrl("https://someone.substack.com/p/why-i-quit")).toBe("https://someone.substack.com/p/why-i-quit");
     // Hacker News has a public API and is read through it.
     expect(cleanUrl("https://news.ycombinator.com/item?id=1")).toBe("https://news.ycombinator.com/item?id=1");
     expect(cleanUrl("not an address")).toBeNull();
@@ -191,18 +189,25 @@ describe("a navigator's turn is a request", () => {
     expect(plan.refused).toEqual([]);
   });
 
-  it("refuses an unknown engine, a forbidden address and a trail with nowhere to start, and says so", () => {
+  it("refuses an unknown engine and a trail with nowhere to start, and accepts professional-network pages", () => {
     const plan = checkTurn(turn({
-      open: [{ name: "Profiles", intent: "x", searches: [{ engine: "bing", query: "founder" }], pages: ["https://www.linkedin.com/in/someone", "http://10.0.0.1/", "https://www.reddit.com/r/startups"] }],
+      open: [{ name: "Profiles", intent: "x", searches: [{ engine: "bing", query: "founder" }], pages: ["https://www.linkedin.com/in/someone", "http://10.0.0.1/"] }],
     }), [], limits);
-    expect(plan.open).toEqual([]);
+    expect(plan.open).toEqual([{
+      name: "Profiles",
+      intent: "x",
+      starts: [{ kind: "page", url: "https://www.linkedin.com/in/someone" }],
+    }]);
     expect(plan.refused).toEqual([
       'No search engine called "bing".',
-      "An address on a site this system never requests.",
       "An address that is not a public web page.",
-      "An address on reddit.com, which does not allow automated reading.",
-      '"Profiles" has nowhere to start.',
     ]);
+
+    const empty = checkTurn(turn({
+      open: [{ name: "Nothing", intent: "x", searches: [], pages: ["http://10.0.0.1/"] }],
+    }), [], limits);
+    expect(empty.open).toEqual([]);
+    expect(empty.refused).toContain('"Nothing" has nowhere to start.');
   });
 
   it("keeps a pinned trail open and holds the ceiling on open trails", () => {

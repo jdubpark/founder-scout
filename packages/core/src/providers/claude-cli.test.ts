@@ -2,7 +2,6 @@ import { existsSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { ScreenOutputSchema, type ScreenOutput } from "@agentswarm/shared";
 import { ProviderError, type ProviderRequest } from "../contracts";
-import { claudeFetchDenyRules, NEVER_FETCH_HOSTS } from "@agentswarm/shared";
 import {
   ClaudeCliProvider,
   REVIEW_DENIED_TOOLS,
@@ -85,18 +84,6 @@ function argValue(args: readonly string[], flag: string): string | undefined {
   return i >= 0 ? args[i + 1] : undefined;
 }
 
-/** Every value after --disallowedTools, up to the next flag. */
-function denyListOf(args: readonly string[]): string[] {
-  const i = args.indexOf("--disallowedTools");
-  if (i < 0) return [];
-  const rules: string[] = [];
-  for (const arg of args.slice(i + 1)) {
-    if (arg.startsWith("--")) break;
-    rules.push(arg);
-  }
-  return rules;
-}
-
 describe("buildClaudeArgs", () => {
   const base = {
     model: "claude-haiku-5-5",
@@ -120,25 +107,7 @@ describe("buildClaudeArgs", () => {
     expect(argValue(args, "--allowedTools")).toBe("WebSearch,WebFetch");
     expect(args).toContain("stream-json");
     expect(args).not.toContain("--add-dir");
-  });
-
-  it("denies page fetches to every never-fetch host and their subdomains on research calls", () => {
-    const args = buildClaudeArgs({ ...base, kind: "research", streaming: true });
-    const denied = denyListOf(args);
-    expect(denied).toEqual(claudeFetchDenyRules());
-    for (const host of NEVER_FETCH_HOSTS) {
-      expect(denied).toContain(`WebFetch(domain:${host})`);
-      expect(denied).toContain(`WebFetch(domain:*.${host})`);
-    }
-    // Web search is not a request to those hosts, so it is not denied.
-    expect(denied.some((rule) => rule.startsWith("WebSearch"))).toBe(false);
-  });
-
-  it("puts the research deny list last, because --disallowedTools is variadic", () => {
-    const args = buildClaudeArgs({ ...base, kind: "research", streaming: true });
-    const at = args.indexOf("--disallowedTools");
-    expect(at).toBeGreaterThan(args.indexOf("--allowedTools"));
-    expect(args.slice(at + 1)).toEqual(claudeFetchDenyRules());
+    expect(args).not.toContain("--disallowedTools");
   });
 
   it("adds no deny rules for structured calls, which have no tools", () => {

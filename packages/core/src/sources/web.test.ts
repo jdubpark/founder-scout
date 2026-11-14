@@ -2,6 +2,7 @@ import { createServer, type Server } from "node:http";
 import { describe, expect, it, vi } from "vitest";
 import type { SimWorld } from "../contracts";
 import { createSimWebAccess } from "./index";
+import { personaFor, type LinkedInAccount } from "./sessions";
 import { createWebReader } from "./web";
 
 const PUBLIC_IP = "93.184.216.34";
@@ -11,20 +12,34 @@ function html(body: string, status = 200, contentType = "text/html; charset=utf-
   return new Response(body, { status, headers: { "content-type": contentType } });
 }
 
+/** 2026-11-10 is a Tuesday, 09:00 local. */
+const AT_WORK = new Date(2026, 10, 10, 9, 0).getTime();
+
+/** A cookie whose persona is at work at 09:00 that Tuesday, so account reads are eligible. */
+function networkCookie(label: string): string {
+  for (let index = 0; index < 500; index += 1) {
+    const cookie = `li_at=${label}-${index}`;
+    const persona = personaFor(cookie);
+    if (persona.workdayStartMinute <= 9 * 60 && persona.workdayStartMinute + persona.workdayMinutes > 9 * 60 + 30) return cookie;
+  }
+  throw new Error(`No cookie for ${label} is at work at the test time.`);
+}
+
 function makeReader(
   fetch: (url: string, init?: RequestInit) => Promise<Response>,
-  options: { resolveHost?: (hostname: string) => Promise<string[]>; now?: () => number; sleep?: (milliseconds: number) => Promise<void> } = {},
+  options: { resolveHost?: (hostname: string) => Promise<string[]>; now?: () => number; sleep?: (milliseconds: number) => Promise<void>; accounts?: readonly LinkedInAccount[] } = {},
 ) {
   return createWebReader({
     fetch,
     resolveHost: options.resolveHost ?? (async () => [PUBLIC_IP]),
     now: options.now,
     sleep: options.sleep ?? (async () => undefined),
+    accounts: options.accounts,
   });
 }
 
 describe("createWebReader", () => {
-  it("blocks never-fetch hosts and resolved private addresses before requesting them", async () => {
+  it("blocks resolved private addresses before requesting them", async () => {
     const requested: string[] = [];
     const fetch = async (url: string) => {
       requested.push(url);
@@ -32,30 +47,29 @@ describe("createWebReader", () => {
     };
     const reader = createWebReader({ fetch, resolveHost: async () => ["10.2.3.4"], sleep: async () => undefined });
 
-    await expect(reader.read("https://www.linkedin.com/in/founder")).resolves.toMatchObject({
-      status: "blocked",
-      detail: "This address is never requested.",
-    });
     await expect(reader.read("https://private.example.com/" )).resolves.toMatchObject({ status: "blocked" });
     expect(requested).toEqual([]);
   });
 
-  it("blocks terms-barred hosts with the policy detail and on redirects", async () => {
+  it("follows a redirect onto another host and asks that host for its own robots.txt", async () => {
     const requested: string[] = [];
     const reader = makeReader(async (url) => {
       requested.push(url);
       if (url.endsWith("/robots.txt")) return new Response("", { status: 404 });
-      return new Response(null, { status: 302, headers: { location: "https://x.com/account" } });
-    });
-    await expect(reader.read("https://www.devpost.com/project")).resolves.toMatchObject({
-      status: "blocked",
-      detail: "devpost.com does not allow automated reading.",
+      return url === "https://start.example.com/redirect"
+        ? new Response(null, { status: 302, headers: { location: "https://other.example.com/account" } })
+        : html(longText);
     });
     await expect(reader.read("https://start.example.com/redirect")).resolves.toMatchObject({
-      status: "blocked",
-      detail: "x.com does not allow automated reading.",
+      status: "ok",
+      url: "https://other.example.com/account",
     });
-    expect(requested).toEqual(["https://start.example.com/robots.txt", "https://start.example.com/redirect"]);
+    expect(requested).toEqual([
+      "https://start.example.com/robots.txt",
+      "https://start.example.com/redirect",
+      "https://other.example.com/robots.txt",
+      "https://other.example.com/account",
+    ]);
   });
 
   it("refuses loopback by default without a request", async () => {
@@ -63,20 +77,6 @@ describe("createWebReader", () => {
     const reader = createWebReader({ fetch: async () => { requested = true; return html(longText); } });
     await expect(reader.read("http://127.0.0.1:4317/")).resolves.toMatchObject({ status: "blocked" });
     expect(requested).toBe(false);
-  });
-
-  it("blocks a redirect to a never-fetch host before following it", async () => {
-    const requested: string[] = [];
-    const reader = makeReader(async (url) => {
-      requested.push(url);
-      if (url.endsWith("/robots.txt")) return new Response("", { status: 404 });
-      return new Response(null, { status: 302, headers: { location: "https://linkedin.com/in/founder" } });
-    });
-    await expect(reader.read("https://news.example.com/start")).resolves.toMatchObject({
-      status: "blocked",
-      detail: "This address is never requested.",
-    });
-    expect(requested).toEqual(["https://news.example.com/robots.txt", "https://news.example.com/start"]);
   });
 
   it("obeys robots.txt, caches it per origin, and applies the most specific rules with allow winning ties", async () => {
@@ -381,6 +381,145 @@ describe("createWebReader", () => {
     expect(pageHeaders.has("referer")).toBe(false);
   });
 
+  it("sends a supplied session cookie to professional-network pages only", async () => {
+    const cookie = networkCookie("session");
+    const sent: Array<{ url: string; cookie: string | null }> = [];
+    const reader = makeReader(async (url, init) => {
+      sent.push({ url, cookie: new Headers(init?.headers).get("cookie") });
+      return url.endsWith("/robots.txt") ? new Response("", { status: 404 }) : html(longText);
+    }, { accounts: [{ cookie, proxyUrl: null, userAgent: null }], now: () => AT_WORK });
+
+    await expect(reader.read("https://www.linkedin.com/in/founder")).resolves.toMatchObject({ status: "ok" });
+    await expect(reader.read("https://ordinary.example.com/profile")).resolves.toMatchObject({ status: "ok" });
+    expect(sent).toEqual([
+      { url: "https://www.linkedin.com/in/founder", cookie },
+      { url: "https://ordinary.example.com/robots.txt", cookie: null },
+      { url: "https://ordinary.example.com/profile", cookie: null },
+    ]);
+  });
+
+  it("holds a professional-network read back while every account rests, without asking the host", async () => {
+    let requested = 0;
+    const beforeWork = new Date(2026, 10, 10, 6, 30).getTime();
+    const reader = makeReader(async () => {
+      requested += 1;
+      return html(longText);
+    }, { accounts: [{ cookie: networkCookie("resting"), proxyUrl: null, userAgent: null }], now: () => beforeWork });
+
+    const result = await reader.read("https://www.linkedin.com/in/founder");
+    expect(result.status).toBe("blocked");
+    expect(result.detail).toMatch(/pause until \d{2}:\d{2}/);
+    expect(requested).toBe(0);
+  });
+
+  it("holds a shortener page back while every account rests, without asking for robots.txt", async () => {
+    let requested = 0;
+    const beforeWork = new Date(2026, 10, 10, 6, 30).getTime();
+    const reader = makeReader(async () => {
+      requested += 1;
+      return html(longText);
+    }, { accounts: [{ cookie: networkCookie("shortener-resting"), proxyUrl: null, userAgent: null }], now: () => beforeWork });
+
+    const result = await reader.read("https://lnkd.in/xyz");
+    expect(result.status).toBe("blocked");
+    expect(result.detail).toMatch(/pause until \d{2}:\d{2}/);
+    expect(requested).toBe(0);
+  });
+
+  it("reads a shortener page with the account, and its robots.txt without one", async () => {
+    const cookie = networkCookie("shortener");
+    const sent: Array<{ url: string; cookie: string | null }> = [];
+    const reader = makeReader(async (url, init) => {
+      sent.push({ url, cookie: new Headers(init?.headers).get("cookie") });
+      if (url.endsWith("/robots.txt")) return new Response("", { status: 404 });
+      return html(longText);
+    }, { accounts: [{ cookie, proxyUrl: null, userAgent: null }], now: () => AT_WORK });
+
+    await expect(reader.read("https://lnkd.in/xyz")).resolves.toMatchObject({ status: "ok" });
+    expect(sent).toEqual([
+      { url: "https://lnkd.in/robots.txt", cookie: null },
+      { url: "https://lnkd.in/xyz", cookie },
+    ]);
+  });
+
+  it("dwells like a person between professional-network reads", async () => {
+    let now = AT_WORK;
+    const starts: number[] = [];
+    const reader = makeReader(async () => {
+      starts.push(now);
+      return html(longText);
+    }, { accounts: [{ cookie: networkCookie("dwell"), proxyUrl: null, userAgent: null }], now: () => now, sleep: async (ms) => { now += ms; } });
+
+    await reader.read("https://www.linkedin.com/in/one");
+    await reader.read("https://www.linkedin.com/in/two");
+    const gap = starts[1]! - starts[0]!;
+    expect(gap).toBeGreaterThanOrEqual(20_000);
+    expect(gap).toBeLessThanOrEqual(75_000);
+  });
+
+  it("rests a session the professional network refuses and rotates to the next one", async () => {
+    const first = networkCookie("refused-one");
+    const second = networkCookie("refused-two");
+    const cookies: string[] = [];
+    const reader = makeReader(async (url, init) => {
+      cookies.push(new Headers(init?.headers).get("cookie") ?? "");
+      if (url.endsWith("/refused")) {
+        // The Response constructor refuses status 999, which the network uses to throttle.
+        return { status: 999, headers: new Headers() } as unknown as Response;
+      }
+      return html(longText);
+    }, {
+      accounts: [
+        { cookie: first, proxyUrl: null, userAgent: null },
+        { cookie: second, proxyUrl: null, userAgent: null },
+      ],
+      now: () => AT_WORK,
+    });
+
+    await expect(reader.read("https://www.linkedin.com/in/refused")).resolves.toMatchObject({
+      status: "blocked",
+      detail: "The site answered HTTP 999.",
+    });
+    await expect(reader.read("https://www.linkedin.com/in/next")).resolves.toMatchObject({ status: "ok" });
+    expect(cookies).toEqual([first, second]);
+  });
+
+  it("sends each account's own cookie and user agent in rotation to the professional network", async () => {
+    const first = networkCookie("rotate-one");
+    const second = networkCookie("rotate-two");
+    const sent: Array<{ url: string; cookie: string | null; agent: string | null }> = [];
+    const reader = makeReader(async (url, init) => {
+      const headers = new Headers(init?.headers);
+      sent.push({ url, cookie: headers.get("cookie"), agent: headers.get("user-agent") });
+      return url.endsWith("/robots.txt") ? new Response("", { status: 404 }) : html(longText);
+    }, {
+      accounts: [
+        { cookie: first, proxyUrl: "http://proxy-one.test:8080", userAgent: "agent-one/1.0" },
+        { cookie: second, proxyUrl: "http://proxy-two.test:8080", userAgent: "agent-two/1.0" },
+      ],
+      now: () => AT_WORK,
+    });
+
+    await expect(reader.read("https://www.linkedin.com/in/first")).resolves.toMatchObject({ status: "ok" });
+    await expect(reader.read("https://www.linkedin.com/in/second")).resolves.toMatchObject({ status: "ok" });
+    expect(sent).toEqual([
+      { url: "https://www.linkedin.com/in/first", cookie: first, agent: "agent-one/1.0" },
+      { url: "https://www.linkedin.com/in/second", cookie: second, agent: "agent-two/1.0" },
+    ]);
+  });
+
+  it("reports a read that lands on the login wall as blocked instead of reading the wall page", async () => {
+    const reader = makeReader(async (url) => {
+      if (url.endsWith("/in/founder")) return new Response(null, { status: 302, headers: { location: "https://www.linkedin.com/authwall?trk=gar" } });
+      return html(longText);
+    });
+
+    await expect(reader.read("https://www.linkedin.com/in/founder")).resolves.toMatchObject({
+      status: "blocked",
+      detail: "The page is behind a login wall.",
+    });
+  });
+
   it("extracts a decoded title and text, resolves and cleans links, drops duplicates and numbers them", async () => {
     const reader = makeReader(async (url) => {
       if (url.endsWith("/robots.txt")) return new Response("", { status: 404 });
@@ -388,8 +527,8 @@ describe("createWebReader", () => {
       return html(`<html><head><title>A &amp; B</title></head><body><p>${longText}</p>
         <a href="../next?utm_source=x"> <b>Next</b> page </a><a href="https://other.example.com/item">Other</a>
         <a href="https://other.example.com/item">Duplicate</a><a href="/dir/final#self">Self</a>
-        <a href="https://www.linkedin.com/in/person">Never fetch</a>
-        <a href="https://devpost.com/project">Terms barred</a></body></html>`);
+        <a href="https://www.linkedin.com/in/person">Founder profile</a>
+        <a href="https://devpost.com/project">Project page</a></body></html>`);
     });
     const result = await reader.read("https://links.example.com/start");
     expect(result.status).toBe("ok");
@@ -399,6 +538,8 @@ describe("createWebReader", () => {
     expect(result.links).toEqual([
       { index: 0, url: "https://links.example.com/next", text: "Next page" },
       { index: 1, url: "https://other.example.com/item", text: "Other" },
+      { index: 2, url: "https://www.linkedin.com/in/person", text: "Founder profile" },
+      { index: 3, url: "https://devpost.com/project", text: "Project page" },
     ]);
   });
 
@@ -422,6 +563,44 @@ describe("createWebReader", () => {
     const sparse = await reader.read("https://menus.example.com/sparse");
     expect(sparse.links.length).toBe(60);
     expect(sparse.links[0]?.text).toBe("Section 0");
+  });
+
+  it("returns the page's raw body when the caller asks for HTML, with text and links unchanged", async () => {
+    const body = `<html><head><title>Raw</title></head><body><main><p>${longText}</p>
+      <a href="/next">Next page</a><a href="/other">Other page</a></main></body></html>`;
+    const reader = makeReader(async (url) => url.endsWith("/robots.txt") ? new Response("", { status: 404 }) : html(body));
+
+    const plain = await reader.read("https://raw.example.com/page");
+    const asked = await reader.read("https://raw.example.com/page", { html: true });
+
+    expect(asked.status).toBe("ok");
+    expect(asked.html).toBe(body);
+    expect(asked.title).toBe("Raw");
+    expect(asked.text).toBe(plain.text);
+    expect(asked.links).toEqual(plain.links);
+  });
+
+  it("returns no raw body when the caller does not ask for HTML", async () => {
+    const reader = makeReader(async (url) => url.endsWith("/robots.txt") ? new Response("", { status: 404 }) : html(longText));
+
+    const result = await reader.read("https://plain.example.com/page");
+    expect(result.status).toBe("ok");
+    expect(result.html).toBeNull();
+  });
+
+  it("returns blocked for a page robots.txt refuses even when the caller asks for HTML", async () => {
+    let requested = false;
+    const reader = makeReader(async (url) => {
+      if (url.endsWith("/robots.txt")) return new Response("User-agent: *\nDisallow: /private", { headers: { "content-type": "text/plain" } });
+      requested = true;
+      return html(longText);
+    });
+
+    const result = await reader.read("https://refused.example.com/private", { html: true });
+    expect(result.status).toBe("blocked");
+    expect(result.detail).toBe("robots.txt does not allow it.");
+    expect(result.html).toBeUndefined();
+    expect(requested).toBe(false);
   });
 
   it("stops reading an oversized body at the byte limit", async () => {

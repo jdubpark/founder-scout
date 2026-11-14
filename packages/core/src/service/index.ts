@@ -2,7 +2,7 @@ import { join } from "node:path";
 import {
   AGENT_CLASSES, BASE_CONFIG, JOBS, SOURCES, STAGES, runnerPools,
   buildEffectiveSteering, coerceParam, effectiveRoute, getParamDef, isClassId, isCompanyReasonFor, isJobId,
-  isNeverFetchUrl, isReasonFor, newId, normalizeCompanyName, normalizeScope, overlayConfig, paramsFor, scopeLabel,
+  isProfessionalNetworkUrl, isReasonFor, newId, normalizeCompanyName, normalizeScope, overlayConfig, paramsFor, scopeLabel,
   scopeLevel, stableId, suggestSteering, suggestionTextKey, summarizeCalls, swarmIdentity,
   type Agent, type AgentIdentity, type ApiClient, type AddTrailInput, type UpdateTrailInput, type Pools,
   type AddFounderInput, type CallExample, type ClassId, type CoachReport, type CompanyFeedback, type CompanyQuery, type Directive, type DirectiveFilter,
@@ -17,7 +17,7 @@ import type {
 import { ServiceError } from "../contracts";
 import { openStore } from "../db";
 import { createSimRepoFinder, createSimSources, createSimWorld } from "../sim";
-import { createLivePeopleLookup, createLiveRepoFinder, createLiveSources, createQuoteChecker, createLiveWebAccess, createSimWebAccess, looksLikeFounder, parseConnectionsCsv } from "../sources";
+import { createLivePeopleLookup, createLiveRepoFinder, createLiveSources, createQuoteChecker, createLiveWebAccess, createSimWebAccess, huntProxyFromEnv, linkedinAccountsFromEnv, looksLikeFounder, parseConnectionsCsv } from "../sources";
 import { createProviderRegistry } from "../providers";
 import { createJobRegistry, createExecuteJob, findSensitive, redactSensitive } from "../jobs";
 import { createRunController } from "../engine";
@@ -789,7 +789,7 @@ export function createSwarmService(deps: ServiceDeps): SwarmService {
           if (["github.com", "gitlab.com", "codeberg.org", "bitbucket.org"].some((site) => host === site || host.endsWith(`.${site}`))) links.github = link;
           else if (host === "x.com" || host.endsWith(".x.com") || host === "twitter.com" || host.endsWith(".twitter.com")) links.x = link;
           else if (host === "scholar.google.com") links.scholar = link;
-          else if (isNeverFetchUrl(link)) links.linkedin = link;
+          else if (isProfessionalNetworkUrl(link)) links.linkedin = link;
           else links.site = link;
         }
         const id = newId("led");
@@ -1233,6 +1233,9 @@ export function createApp(options: AppOptions): App {
   const liveRepos = createLiveRepoFinder({ env: options.env, workDir: join(options.dataDir, "repos") });
   const providers = createProviderRegistry(options.env);
   const web = { sim: createSimWebAccess(world), live: createLiveWebAccess({ env: options.env }) };
+  // In browser mode the professional network is read by one reader everywhere, so its
+  // rhythm covers the hunt and the quote checks together; only the fetch mode carries accounts.
+  const networkReader = web.live.networkReader ?? null;
   let defaultPoolsPromise: Promise<Pools> | null = null;
   const defaultPools = (): Promise<Pools> => {
     defaultPoolsPromise ??= providers.statuses().then((statuses) => {
@@ -1243,7 +1246,7 @@ export function createApp(options: AppOptions): App {
   };
   const jobs = createJobRegistry();
   const executeJob = createExecuteJob({ jobs, providers });
-  const runs = createRunController({ store, jobs, executeJob, quotes: createQuoteChecker(), people: createLivePeopleLookup(options.env ?? process.env), sources: { sim: simSources, live: liveSources }, repos: { sim: simRepos, live: liveRepos }, web, defaultPools, simWorld: world, fundName: options.fundName ?? "the fund", now: options.now, logger: options.logger });
+  const runs = createRunController({ store, jobs, executeJob, quotes: createQuoteChecker({ ...(networkReader ? { networkReader } : { accounts: linkedinAccountsFromEnv(options.env ?? process.env) }), proxyUrl: huntProxyFromEnv(options.env ?? process.env) }), people: createLivePeopleLookup(options.env ?? process.env), sources: { sim: simSources, live: liveSources }, repos: { sim: simRepos, live: liveRepos }, web, defaultPools, simWorld: world, fundName: options.fundName ?? "the fund", now: options.now, logger: options.logger });
   const evals = createEvalService({
     store,
     jobs,

@@ -19,7 +19,6 @@
  */
 
 import type { Thesis } from "./domain";
-import { isNeverFetchUrl, isOffLimitsHost, termsBar } from "./policy";
 import { seededRandom, textSeed } from "./stats";
 
 /* ------------------------------------------------------------------ */
@@ -514,9 +513,8 @@ export const SIM_WEB_HOST = "web.sim.example";
 
 /**
  * An address in the one form it is stored and compared in: http or https, no fragment, no
- * tracking parameters, no login, lower-case host. null for anything else: a host the system
- * never requests, a site whose terms bar automated reading, a bare network number, or a name
- * that is not a public site.
+ * tracking parameters, no login, lower-case host. null for anything else: a bare network
+ * number, or a name that is not a public site.
  */
 export function cleanUrl(raw: string): string | null {
   let url: URL;
@@ -531,7 +529,6 @@ export function cleanUrl(raw: string): string | null {
   // would point a reader at a machine inside a network; the reader refuses those again itself.
   const host = url.hostname.toLowerCase().replace(/\.$/, "");
   if (!host.includes(".") || IP_LITERAL.test(host) || (RESERVED_HOST.test(host) && host !== SIM_WEB_HOST)) return null;
-  if (isOffLimitsHost(host)) return null;
   url.hash = "";
   for (const key of [...url.searchParams.keys()]) if (TRACKING.test(key)) url.searchParams.delete(key);
   const text = url.href;
@@ -574,13 +571,6 @@ export interface TurnPlan {
 
 const tidy = (text: string, max: number) => text.replace(/\s+/g, " ").trim().slice(0, max);
 
-/** Why an address was refused, in a line the navigator and a person can act on. */
-function whyRefused(raw: string): string {
-  if (isNeverFetchUrl(raw)) return "An address on a site this system never requests.";
-  const barred = hostOf(raw.trim()) ? termsBar(hostOf(raw.trim()) as string) : null;
-  if (barred) return `An address on ${barred.host}, which does not allow automated reading.`;
-  return "An address that is not a public web page.";
-}
 const sameName = (a: string, b: string) => normalizeForMatch(a) === normalizeForMatch(b);
 
 function checkStarts(searches: readonly StartSearch[], pages: readonly string[], limits: TurnLimits, refused: string[]): Start[] {
@@ -601,7 +591,7 @@ function checkStarts(searches: readonly StartSearch[], pages: readonly string[],
   for (const page of pages ?? []) {
     const url = cleanUrl(String(page));
     if (!url) {
-      refused.push(whyRefused(String(page)));
+      refused.push("An address that is not a public web page.");
       continue;
     }
     if (seen.has(`p:${url}`)) continue;

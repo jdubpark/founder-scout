@@ -314,7 +314,7 @@ export interface SourcedText {
 export interface CompanyLinks {
   github: string | null;
   x: string | null;
-  /** Kept as a pointer a person can open. The system never requests it. */
+  /** A pointer a person can open, and a page the hunt may read anonymously. */
   linkedin: string | null;
   docs: string | null;
   careers: string | null;
@@ -444,7 +444,7 @@ export interface NetworkContact {
   name: string;
   company: string | null;
   position: string | null;
-  /** A pointer a person can open. The system never requests it. */
+  /** A pointer a person can open, and a page the hunt may read anonymously. */
   profileUrl: string | null;
   connectedOn: string | null;
   importedAt: string;

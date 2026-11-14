@@ -25,3 +25,6 @@ evals/flows/.*.lock
 evals/datasets/
 # Judgments and outcome labels for those real companies, keyed by their public post ids.
 evals/flows/past-founders/
+brightdata.txt
+octo.txt
+brightdata-datacenter.txt

@@ -1,7 +1,7 @@
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { claudeFetchDenyRules, type TraceTurn, type Usage } from "@agentswarm/shared";
+import { type TraceTurn, type Usage } from "@agentswarm/shared";
 import { ProviderError, type ModelProvider, type ProviderRequest, type ProviderResult } from "../contracts";
 import {
   DEFAULT_TIMEOUT_MS,
@@ -88,13 +88,6 @@ export function buildClaudeArgs(inv: ClaudeInvocation): string[] {
         RESEARCH_TOOLS.join(","),
         "--allowedTools",
         RESEARCH_TOOLS.join(","),
-        // Variadic, so it stays last. Verified by running the CLI on 2026-11-13: a rule for
-        // WebFetch(domain:example.com) blocks only that host, so www.example.com still loads;
-        // WebFetch(domain:*.example.com) blocks the subdomains. A deny rule wins over
-        // --allowedTools. Web search itself stays allowed: a search engine's result snippets
-        // are not a request to those hosts.
-        "--disallowedTools",
-        ...claudeFetchDenyRules(),
       );
       break;
     case "repo_review":
